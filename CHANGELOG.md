@@ -1,0 +1,203 @@
+# CHANGELOG
+
+프로젝트 문서 생성 및 수정 이력을 기록한다.
+
+## 2026-07-16
+
+- Java 10개 문서의 반복 체크리스트·의미 없는 장애 항목을 제거하고 주제별 실행 원리, 구현 검증 기준과 운영 사례로 재작성
+- Java 면접 질문과 답변을 일대일로 교정하고 Generics Runtime Type, Raw Type, GC·JMM·Virtual Thread 답변 오류와 조사 표현 수정
+- Java 문서 전체를 1,764~2,106단어 범위로 재검증하고 반복 초안 표현과 Markdown 구조 오류가 없음을 확인
+- `Volume8_Java`를 추가하고 JVM 실행 구조부터 Java 동시성·비동기까지 학습 문서 10개 작성
+- JVM·Bytecode·JIT, Type·String, 다형성, Exception, Collection, Generics, GC, Java Memory Model, Executor·CompletableFuture·Virtual Thread와 종합면접 구성
+- OpenJDK JEP 444와 Oracle Java Type Erasure 자료를 기준으로 Version 의존 내용을 검증
+- `목차.md`와 `README.md`를 전체 98 / 98, Java 10 / 10 완료 상태로 갱신
+- 전체 88개 학습 문서의 분량, 필수 섹션, 면접 문항 수, 30초 답변, ASCII Diagram과 Markdown 구조를 최종 검수
+- 1,500단어 미달 문서 21개를 실무 판단 기준과 장애 대응 중심으로 보강하고 모든 문서를 1,506~2,690단어 범위로 정리
+- 30초 모범답변 51개를 3~5문장 구조로 보강하고 기본 질문·꼬리질문을 문서별 3~7개로 정리
+- Volume 7의 반복 체크리스트·예시·비교·장단점·오해·꼬리질문을 주제별 내용과 장애 시나리오로 교체
+- 반복되는 장문 192곳을 문서별 판단 기준으로 문맥화하고 5개 이상 문서에 반복되는 동일 장문을 제거
+- Volume 6 경로 대소문자를 실제 폴더명 `Volume6_CPP_CSharp`로 통일하고 README 오타와 작업 범위 설명을 수정
+- 목차 88/88, README 링크 88개, 필수 메타데이터와 Markdown Fence 정합성을 재검증
+
+## 2026-07-15
+
+- `Volume7_GameServer/01_Game_Server_Architecture.md`부터 `15_GameServer_종합면접.md`까지 15개 문서를 품질 기준에 맞게 전면 보강하여 Volume 7 완료
+- Architecture·권위 서버·Tick·Session·Framing·Serialization·I/O·Thread·Pool·지연 보정·재접속·Matchmaking·기능별 서버의 핵심 원리와 장애 대응 추가
+- 각 문서에 게임 서버 실무 설계 체크리스트, ASCII 흐름, Trade-off, 운영 지표, 경계 Test와 면접 답변 보강
+- `목차.md`와 `README.md`를 전체 88 / 88, Game Server 15 / 15 완료 상태로 갱신
+- `Volume6_Cpp_Csharp/09_ThreadPool_Task_async_await.md`, `10_CPP_CSharp_종합면접.md` 품질 기준에 맞게 보강하여 Volume 6 완료
+- ThreadPool·Task State Machine·Context·예외·취소·Backpressure와 C++·C# 수명·Memory·Async 종합 답변 추가
+- `Volume6_Cpp_Csharp/07_Boxing_Unboxing.md`, `08_CSharp_GC_Generation.md` 품질 기준에 맞게 보강 완료
+- Boxing Type 검사·Generic·숨은 할당, GC Root·세대·LOH·Dispose·Retention과 Allocation·Pause 진단 추가
+- `Volume6_Cpp_Csharp/05_Virtual_Function_Polymorphism.md`, `06_CSharp_Value_Reference_Type.md` 품질 기준에 맞게 보강 완료
+- Virtual Dispatch·Destructor·Slicing·Composition, C# 값 복사·ref·readonly·Equality·Struct 선택과 서버 사례 추가
+- `Volume6_Cpp_Csharp/03_RAII_Smart_Pointer.md`, `04_Copy_Move_Semantics.md` 품질 기준에 맞게 보강 완료
+- RAII·unique/shared/weak 소유권, Cycle·Control Block, Copy·Move·Rule of Zero·noexcept·Elision과 Packet 이전 사례 추가
+- `Volume6_Cpp_Csharp/02_New_Delete_Memory_Leak.md` 품질 기준에 맞게 보강 완료
+- 할당·생성·소멸·해제, Array·malloc Family, Leak·UAF·Double Free, RSS·Pool·비동기 수명 진단 추가
+- `Volume6_Cpp_Csharp/01_Pointer_Reference.md` 품질 기준에 맞게 보강 완료
+- Pointer·Reference·Const·산술·수명, Container 무효화, Entity Handle·비동기 Buffer 사례 추가
+- `목차.md`의 Volume 6 경로 대소문자를 실제 폴더명 `Volume6_Cpp_Csharp`에 맞게 수정
+- `Volume5_Algorithm/12_Algorithm_종합면접.md` 품질 기준에 맞게 보강하여 Volume 5 완료
+- 문제 해결 Frame, 정당성 도구, Pattern·Graph 선택표, 경계 Test와 실시간 Budget·사전 계산 운영 답변 추가
+- `Volume5_Algorithm/11_TwoPointer_SlidingWindow.md` 품질 기준에 맞게 보강 완료
+- 양끝·같은 방향 Pointer, 고정·가변 Window, 음수 한계·Frequency·Monotonic Deque와 Rate Window 사례 추가
+- `Volume5_Algorithm/10_MST_Kruskal_Prim.md` 품질 기준에 맞게 보강 완료
+- MST 조건·Cut Property, Kruskal·Union-Find, Prim·Heap, 불연결·동점·최단 경로 차이와 이중화 사례 추가
+- `Volume5_Algorithm/09_Topological_Sort.md` 품질 기준에 맞게 보강 완료
+- Kahn·DFS 방식, Cycle·유일성·결정성, DAG DP·Critical Path와 Component·Quest 의존성 검증 추가
+- `Volume5_Algorithm/08_BellmanFord_FloydWarshall.md` 품질 기준에 맞게 보강 완료
+- V-1 Relaxation·음수 Cycle, 중간 Vertex DP·Loop 불변식, 경로 복원·INF와 Zone Matrix Version 사례 추가
+- `Volume5_Algorithm/07_Dijkstra.md` 품질 기준에 맞게 보강 완료
+- Relaxation·확정 불변식, Lazy Heap Entry·복잡도, 음수 반례·경로 복원과 Map Version·탐색 Budget 추가
+- `Volume5_Algorithm/06_Backtracking.md` 품질 기준에 맞게 보강 완료
+- Choose·Undo 불변식, 순열·조합·중복 제거, 안전한 Pruning·Bound와 Party 탐색 Budget 사례 추가
+- `Volume5_Algorithm/05_Dynamic_Programming.md` 품질 기준에 맞게 보강 완료
+- 상태·점화식·초기값·순서, Memoization·Tabulation, Knapsack Loop·공간 최적화와 게임 사전 계산 사례 추가
+- `Volume5_Algorithm/04_Greedy.md` 품질 기준에 맞게 보강 완료
+- Greedy Choice·Optimal Substructure, 교환 논증, Activity·동전·Knapsack 반례와 Scheduling 운영 사례 추가
+- `Volume5_Algorithm/03_Binary_Search.md` 품질 기준에 맞게 보강 완료
+- 정렬·단조 전제, 구간 불변식·Overflow, Lower·Upper Bound와 경험치·MMR·수용량 Answer Search 추가
+- `Volume5_Algorithm/02_BFS_DFS.md` 품질 기준에 맞게 보강 완료
+- Queue·Stack 순회, 방문 시점·경로 복원, Grid·Multi-Source·Cycle과 Zone 탐색 Budget 사례 추가
+- `Volume5_Algorithm/01_Time_Space_Complexity.md` 품질 기준에 맞게 보강 완료
+- Big-O·Theta·Omega, 반복·재귀 분석, 평균·최악·분할 상환, 보조 공간과 Tick Budget 사례 추가
+- `Volume4_DataStructure/11_DataStructure_종합면접.md` 품질 기준에 맞게 보강하여 Volume 4 완료
+- 연산 중심 선택 Frame, 전체 구조 비교, 복합 Index 정합성·Memory·동시성과 Session·Timer·Ranking 설계 답변 추가
+- `Volume4_DataStructure/10_Union_Find.md` 품질 기준에 맞게 보강 완료
+- MakeSet·Find·Union, 경로 압축·Size 결합·분할 상환, Cycle·Kruskal·삭제 한계와 서버 사례 추가
+- `Volume4_DataStructure/09_Graph.md` 품질 기준에 맞게 보강 완료
+- 방향·가중 Graph, 인접 행렬·리스트·Edge List, BFS·DFS·Cycle·DAG와 월드·친구·의존성 사례 추가
+
+## 2026-07-14
+
+- `Volume4_DataStructure/08_Trie.md` 품질 기준에 맞게 보강 완료
+- Prefix 경로·Terminal·삭제, 자식 표현·Radix 압축·Unicode, 자동 완성·닉네임·Routing 사례 추가
+- `Volume4_DataStructure/07_Heap_PriorityQueue.md` 품질 기준에 맞게 보강 완료
+- 배열 Heap·Sift·O(n) Heapify, 임의 삭제·Lazy Deletion·안정성, Timer·Top-K·작업 Queue 사례 추가
+- `Volume4_DataStructure/06_AVL_RedBlackTree.md` 품질 기준에 맞게 보강 완료
+- 회전·AVL 4가지 불균형, Red-Black 색·Black Height·재조정, 선택 기준과 예약·MMR 사례 추가
+- `Volume4_DataStructure/05_Tree_BST.md` 품질 기준에 맞게 보강 완료
+- Tree 용어·순회, BST 탐색·삽입·삭제, 편향·중복 Key·범위 Query와 게임 계층 사례 추가
+- `Volume4_DataStructure/04_Hash_Table.md` 품질 기준에 맞게 보강 완료
+- Hash·Equality 계약, Chaining·Open Addressing·Tombstone, Load Factor·Rehash, Flooding·Mutable Key와 서버 사례 추가
+- `Volume4_DataStructure/03_Stack_Queue_Deque.md` 품질 기준에 맞게 보강 완료
+- LIFO·FIFO·Deque 구현, Circular Queue, BFS·Sliding Window, Bounded Queue·Backpressure와 게임 작업 Queue 추가
+- `Volume4_DataStructure/02_Linked_List.md` 품질 기준에 맞게 보강 완료
+- 단일·이중 연결, O(1) 변경의 위치 전제, Cache·할당 비용, Sentinel·Intrusive List와 LRU 사례 추가
+- `Volume4_DataStructure/01_Array_Dynamic_Array.md` 품질 기준에 맞게 보강 완료
+- 연속 Memory·Size·Capacity, 재할당·분할 상환, 중간 삭제·참조 무효화, Entity Handle과 측정 추가
+- `Volume3_Database/13_Database_종합면접.md` 품질 기준에 맞게 보강하여 Volume 3 완료
+- Schema·Query·Index·Transaction·동시성·Cache·Replication·Sharding 연결 흐름과 장애 진단 답변 추가
+- `Volume3_Database/12_Replication_Sharding.md` 품질 기준에 맞게 보강 완료
+- 동기·비동기 Replication·Failover·Read-Your-Writes, Shard Key·Cross-shard 연산·Resharding과 운영 추가
+- `Volume3_Database/11_Cache_전략_정합성.md` 품질 기준에 맞게 보강 완료
+- Cache-Aside·Through·Behind, 무효화 경쟁, Stampede·Penetration·Avalanche, Versioned Key와 DB 보호 추가
+- `Volume3_Database/10_Redis.md` 품질 기준에 맞게 보강 완료
+- Data Structure·원자 명령·Pipeline·TTL·Eviction, RDB·AOF·Replication·Cluster, Hot Key·분산 Lock 운영 추가
+- `Volume3_Database/09_Optimistic_Pessimistic_Lock.md` 품질 기준에 맞게 보강 완료
+- Version 조건부 갱신·충돌 Merge, Pessimistic Lock·NOWAIT·SKIP LOCKED, Hot Key 선택 기준과 운영 지표 추가
+- `Volume3_Database/08_DB_Lock_MVCC.md` 품질 기준에 맞게 보강 완료
+- Shared·Exclusive·Intent·Range Lock, Granularity·Escalation, MVCC Version·Snapshot·정리와 운영 진단 추가
+- `Volume3_Database/07_Isolation_Level.md` 품질 기준에 맞게 보강 완료
+- Dirty·Non-repeatable·Phantom, Lost Update·Write Skew, 표준 격리 수준·Snapshot·Locking Read와 선택 절차 추가
+- `Volume3_Database/06_Transaction_ACID.md` 품질 기준에 맞게 보강 완료
+- ACID별 보장, WAL·Group Commit·복구, 불확실한 Commit, 장기 Transaction·Deadlock 재시도와 Outbox 추가
+- `Volume3_Database/05_Clustered_Composite_Index.md` 품질 기준에 맞게 보강 완료
+- 제품별 Clustered 구조, Secondary Lookup, Composite Prefix·범위·정렬·INCLUDE, Key 선택과 실전 설계 절차 추가
+- `Volume3_Database/04_Index_BPlusTree.md` 품질 기준에 맞게 보강 완료
+- B+Tree 탐색·범위·Page Split, 선택도·Covering·Sargable 조건, 쓰기 비용과 실행 계획 진단 추가
+- `Volume3_Database/03_JOIN.md` 품질 기준에 맞게 보강 완료
+- 논리 Join과 물리 Algorithm, ON·WHERE와 NULL, Semi·Anti Join, Cardinality·N+1·Spill 진단 추가
+- `Volume3_Database/02_Key와_정규화.md` 품질 기준에 맞게 보강 완료
+- Key 종류·자연키·대리키, 함수 종속과 1NF~3NF, 무손실 분해, 반정규화·Schema 변경 사례 추가
+- `Volume3_Database/01_RDBMS_SQL_기초.md` 품질 기준에 맞게 보강 완료
+- Relation·NULL·Constraint, SQL 논리 처리와 실제 실행, Storage Page·Buffer Pool, 조건부 갱신과 운영 진단 추가
+- `Volume2_OperatingSystem/13_OS_종합면접.md` 품질 기준에 맞게 보강하여 Volume 2 완료
+- Process·Scheduling·동기화·Memory·Kernel I/O 연결 흐름, Tick 지연 진단 순서와 종합 면접 답변 추가
+- `Volume2_OperatingSystem/12_System_Call_Interrupt.md` 품질 기준에 맞게 보강 완료
+- System Call 권한 전환, Interrupt·Exception·Context Switch 구분, Network I/O 완료, 배치·Polling과 운영 진단 추가
+- `Volume2_OperatingSystem/11_TLB_CPU_Cache.md` 품질 기준에 맞게 보강 완료
+- TLB 변환과 CPU Cache 계층, 지역성·Coherence·False Sharing, AoS·SoA와 Hardware Counter 진단 추가
+- `Volume2_OperatingSystem/10_Virtual_Memory_Paging_PageFault.md` 품질 기준에 맞게 보강 완료
+- 주소 변환·다단계 Page Table, Fault 처리, 요구 Paging·교체·Thrashing, Copy-on-Write·Huge Page와 서버 진단 추가
+- `Volume2_OperatingSystem/09_Stack_Heap_Code_Data_BSS.md` 품질 기준에 맞게 보강 완료
+- Memory 영역별 권한·수명, Stack Frame·Overflow, Heap Allocator·단편화, 언어별 저장 위치 오해와 진단 추가
+- `Volume2_OperatingSystem/08_Deadlock_Starvation_Livelock.md` 품질 기준에 맞게 보강 완료
+- Coffman 조건, 예방·회피·탐지와 복구, Timeout 한계, Starvation·Livelock 진단과 DB 재시도 추가
+- `Volume2_OperatingSystem/07_Atomic_Memory_Visibility.md` 품질 기준에 맞게 보강 완료
+- Atomicity·Visibility·Ordering, CAS 재시도, Acquire·Release, Happens-before, ABA와 안전한 객체 게시 추가
+- `Volume2_OperatingSystem/06_Mutex_Semaphore_SpinLock.md` 품질 기준에 맞게 보강 완료
+- Mutex 소유권·대기, Semaphore Permit과 누수, SpinLock 적용 조건, Condition Variable 비교와 운영 지표 추가
+- `Volume2_OperatingSystem/05_Race_Condition_Critical_Section.md` 품질 기준에 맞게 보강 완료
+- 임계 구역 요구사항, 불변식 보호, Atomicity·Visibility·Ordering, 소유권 Queue와 분산 정합성 추가
+- `Volume2_OperatingSystem/04_동시성과_병렬성.md` 품질 기준에 맞게 보강 완료
+- Concurrency·Parallelism·Async 비교, 작업 분해와 Barrier, 병렬화 한계, Room 소유권과 결정성 추가
+- `Volume2_OperatingSystem/03_Context_Switch_CPU_Scheduling.md` 품질 기준에 맞게 보강 완료
+- Context 구성과 Cache 비용, 자발적·비자발적 전환, Scheduling 정책, CPU Affinity와 Tick 지연 진단 추가
+- `Volume2_OperatingSystem/02_Process_Memory_PCB.md` 품질 기준에 맞게 보강 완료
+- 가상 주소 공간 구성, PCB 관리 정보, Process 상태 전이, RSS·Virtual Size·Heap 지표 차이 추가
+- `Volume2_OperatingSystem/01_Program_Process_Thread.md` 품질 기준에 맞게 보강 완료
+- Process 생성·종료, Thread 공유 범위, IPC, 비동기와 병렬성, Thread Pool·장애 격리 설명 추가
+- `Volume1_Network/14_Network_종합면접.md` 품질 기준에 맞게 보강하여 Volume 1 완료
+- 장애 범위 분리와 증거 기반 진단, 면접 답변 구성법과 계층별 진단 문항 추가
+- `Volume1_Network/13_LoadBalancer_ReverseProxy.md` 품질 기준에 맞게 보강 완료
+- Proxy 재시도와 멱등성, 재시도 증폭, Health Check Flapping, 과부하 수용 정책 추가
+- `Volume1_Network/12_NAT_Subnet_MTU.md` 품질 기준에 맞게 보강 완료
+- NAT 매핑·Port 고갈, CIDR 범위와 중첩, TCP 분할과 UDP 단편화 차이 추가
+- `Volume1_Network/11_DNS_ARP_ICMP.md` 품질 기준에 맞게 보강 완료
+- DNS 재귀·반복 조회와 부정 Cache, 큰 UDP 응답, ICMP 기반 PMTU 탐색과 DNS 분산 한계 추가
+- `Volume1_Network/10_WebSocket.md` 품질 기준에 맞게 보강 완료
+- 연결별 Backpressure, 인증 수명주기, 재접속 복구, 배포 Draining과 운영 지표 설명 추가
+- `Volume1_Network/09_HTTP_HTTPS.md` 품질 기준에 맞게 보강 완료
+- HTTP Version별 다중화, 조건부 Cache, TLS 검증·종료, Timeout·Retry와 멱등성 설명 추가
+- `Volume1_Network/08_TIME_WAIT_CLOSE_WAIT.md` 품질 기준에 맞게 보강 완료
+- 2MSL 개념, 4-Tuple 재사용, EOF·비동기 종료 처리, 상태 지표 해석과 면접 문항 추가
+- `Volume1_Network/07_TCP_신뢰성_흐름제어_혼잡제어.md` 품질 기준에 맞게 보강 완료
+- 누적 ACK·SACK·RTO, 실제 송신 Window, 대역폭-지연 곱, 작은 Message 지연과 느린 Client 진단 추가
+- `Volume1_Network/06_TCP_3Way_4Way_Handshake.md` 품질 기준에 맞게 보강 완료
+- Handshake 재전송, 연결·종료 상태 전이, 동시 종료, 연결 장애 진단과 면접 문항 추가
+- `Volume1_Network/05_TCP와_UDP.md` 품질 기준에 맞게 보강 완료
+- 연결 식별, 송수신 Buffer·Backpressure, UDP 절단·NAT·증폭 공격, Protocol 선택 절차와 면접 문항 추가
+- 전체 문서 품질 감사 수행
+- 분량 기준과 주제별 설명 깊이를 충족한 4개 문서만 완료로 재분류하고 전체 진행률을 4/88로 정정
+- 보강이 필요한 84개 문서를 미완료로 변경하고 README 완료 목록을 실제 상태에 맞게 정리
+- UDP 체크섬의 IPv4 선택 사항과 IPv6 필수 조건을 명확히 수정
+- Volume 7 Game Server 15개 문서 작성 완료
+- 서버 구조·권위·Tick·Network I/O·상태 동기화·지연 보정·재접속·매치메이킹·서비스 구조와 종합면접 정리
+- 전체 88개 학습 문서 작성 완료
+- Volume 6 C++ and C# 10개 문서 작성 완료
+- C++ 소유권·RAII·Move·다형성과 C# 타입·Boxing·GC·비동기 실행·종합면접 정리
+- Volume 5 Algorithm 12개 문서 작성 완료
+- 복잡도, 탐색·DP·Greedy, 최단 경로·위상 정렬·MST·Sliding Window와 종합면접 정리
+- Volume 4 Data Structure 11개 문서 작성 완료
+- 선형 구조, Hash·Tree·Heap·Trie·Graph·Union-Find와 자료구조 종합면접 정리
+- Volume 3 Database 13개 문서 작성 완료
+- 관계형 모델, Index, Transaction·동시성 제어, Redis·Cache, Replication·Sharding과 종합면접 정리
+- Volume 2 Operating System 13개 문서 작성 완료
+- 프로세스·스레드, 스케줄링, 동기화, 메모리, System Call과 OS 종합면접 정리
+- `Volume1_Network/10_WebSocket.md`부터 `14_Network_종합면접.md`까지 작성
+- WebSocket, DNS·ARP·ICMP, NAT·Subnet·MTU, 로드 밸런서·리버스 프록시, Network 종합면접 정리
+- Volume 1 Network 14개 문서 완료
+- `Volume1_Network/05_TCP와_UDP.md`부터 `09_HTTP_HTTPS.md`까지 작성
+- 전송 프로토콜 선택, TCP 연결·종료, 신뢰성·제어, 종료 상태, HTTP·TLS 정리
+- `Volume1_Network/04_Port와_Socket.md` 작성
+- 포트 범위, TCP 4-튜플, 소켓 생명주기, 리스닝·연결 소켓과 다중 접속 처리 정리
+- `Volume1_Network/03_IP_주소와_라우팅.md` 작성
+- CIDR과 서브넷, 같은·다른 네트워크의 전달 과정, 라우팅 테이블과 최장 접두사 일치 정리
+- `Volume1_Network/02_TCP_IP_모델.md` 작성
+- TCP/IP 4계층, 캡슐화와 전달 과정, 주소별 역할, 게임 서버 전송 방식 정리
+- 권별 항목 합계에 맞춰 전체 문서 수를 84개에서 88개로 정정
+- `Volume1_Network/01_OSI_7계층.md` 작성
+- OSI 계층별 역할, 캡슐화와 역캡슐화, TCP/IP 모델 비교, 게임 서버 장애 분석 정리
+- 전체 및 Network 진행률 갱신
+
+## 초기 구성
+
+- 프로젝트 폴더 생성
+- `AGENTS.md` 생성
+- `목차.md` 생성
+- `TEMPLATE.md` 생성
+- `STYLE_GUIDE.md` 생성
+- `README.md` 생성
+- 7개 Volume 폴더 생성

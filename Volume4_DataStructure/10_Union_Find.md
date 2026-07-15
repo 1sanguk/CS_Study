@@ -1,0 +1,332 @@
+---
+difficulty: 3
+reading_time: 25분
+interview_frequency: 4
+importance: 4
+---
+
+# 10. Union-Find
+
+> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
+
+## 학습 목표
+
+- 서로소 집합과 MakeSet·Find·Union 연산을 설명할 수 있다.
+- 경로 압축과 Rank·Size 기준 결합이 Tree 높이를 줄이는 원리를 설명할 수 있다.
+- Union-Find의 분할 상환 복잡도와 지원하지 않는 연산을 설명할 수 있다.
+- 연결 요소, Cycle 판정, Kruskal과 게임 서버 사례에 적용할 수 있다.
+
+## 1. 개요
+
+Union-Find는 여러 원소를 서로 겹치지 않는 집합, 즉 서로소 집합(Disjoint Set)으로 관리하는 자료구조다. Disjoint Set Union의 약자인 DSU라고도 한다.
+
+제공하는 핵심 연산은 세 가지다.
+
+- `MakeSet(x)`: 원소 `x`만 포함하는 새 집합을 만든다.
+- `Find(x)`: `x`가 속한 집합의 대표 원소인 Root를 찾는다.
+- `Union(a, b)`: `a`와 `b`가 속한 두 집합을 하나로 합친다.
+
+두 원소가 같은 집합인지 확인하려면 `Find(a) == Find(b)`를 비교한다. 실제 연결 경로를 구하는 것이 아니라 같은 연결 요소에 속하는지만 빠르게 답한다.
+
+## 2. 왜 필요한가
+
+무방향 Graph에 Edge가 계속 추가될 때 다음 질문을 반복한다고 하자.
+
+- 두 Zone이 연결되어 있는가?
+- 새 Edge를 추가하면 Cycle이 생기는가?
+- 현재 독립된 Network Group이 몇 개인가?
+
+매 질문마다 BFS나 DFS를 수행하면 `O(V+E)`가 들 수 있다. Union-Find는 연결 요소를 대표 Root로 압축해 병합과 연결 여부 확인을 매우 빠르게 처리한다.
+
+다만 Edge 추가에 특화된 구조다. 어느 경로로 연결되는지, 두 Vertex 사이 거리는 얼마인지, Edge를 삭제한 뒤에도 연결되는지는 기본 Union-Find가 답하지 못한다.
+
+## 3. Parent Tree 표현
+
+각 원소는 부모 Index를 저장하고, 집합의 대표 Root는 자기 자신을 부모로 가리킨다.
+
+```text
+parent = [0, 0, 0, 3, 3, 5]
+
+집합 {0,1,2}        집합 {3,4}       집합 {5}
+      0                 3               5
+     / \                |
+    1   2               4
+```
+
+초기에는 모든 원소가 독립 집합이다.
+
+```text
+for x in 0..n-1:
+    parent[x] = x
+    size[x] = 1
+```
+
+`Find(x)`는 `parent[x] == x`인 Root까지 부모를 따라간다. `Union(a, b)`는 두 Root를 찾고 한 Root의 부모를 다른 Root로 바꾼다. Root가 아닌 임의 Node끼리 연결하면 대표 구조를 일관되게 관리하기 어려우므로 반드시 Root를 결합한다.
+
+## 4. 단순 구현의 문제
+
+아무 기준 없이 한 Root를 다른 Root 아래에 붙이면 긴 Chain이 생길 수 있다.
+
+```text
+0 ← 1 ← 2 ← 3 ← 4
+
+Find(4): 4 → 3 → 2 → 1 → 0
+```
+
+높이가 `n`이면 Find가 `O(n)`까지 악화된다. Union도 내부에서 Find를 호출하므로 느려진다. 이를 줄이는 두 핵심 최적화가 경로 압축과 Rank·Size 기준 결합이다.
+
+## 5. 경로 압축
+
+경로 압축(Path Compression)은 Find 과정에서 방문한 모든 Node가 Root를 직접 가리키게 만든다.
+
+```text
+압축 전: 4 → 3 → 2 → 1 → 0
+Find(4) 실행
+압축 후:
+        0
+      / | | \
+     1  2 3  4
+```
+
+C# 형태의 재귀 구현은 다음과 같다.
+
+```csharp
+int Find(int x)
+{
+    if (parent[x] == x)
+        return x;
+
+    parent[x] = Find(parent[x]);
+    return parent[x];
+}
+```
+
+단순히 Root를 반환하는 데서 끝나지 않고 `parent[x]`에 Root를 다시 저장하는 줄이 핵심이다. 이후 같은 경로의 Find가 훨씬 짧아진다.
+
+매우 깊은 입력에서 재귀 Stack이 우려되면 반복문으로 Root를 먼저 찾고, 다시 경로를 걸으며 부모를 Root로 바꿀 수 있다. Path Halving처럼 이동하면서 한 단계 건너 조부모를 가리키게 하는 변형도 있다.
+
+## 6. Union by Size와 Union by Rank
+
+두 Tree를 합칠 때 작은 Tree를 큰 Tree 아래에 붙이면 높이 증가를 억제할 수 있다.
+
+```text
+size[rootA] = 8, size[rootB] = 3
+
+rootB → rootA
+size[rootA] = 11
+```
+
+Union by Size는 원소 수가 작은 Root를 큰 Root 아래에 붙인다. Union by Rank는 높이의 상한을 나타내는 Rank가 낮은 Root를 높은 Root 아래에 붙인다. Rank가 같을 때만 새 Root의 Rank를 하나 높인다.
+
+경로 압축 후 Rank는 실제 현재 높이와 정확히 같지 않을 수 있다. Rank는 결합 결정을 위한 상한 정보이지 매번 재계산하는 실제 높이가 아니다. Size는 집합 크기 Query에도 활용할 수 있지만 Root에서만 유효하게 관리하는 것이 일반적이다.
+
+```csharp
+bool Union(int a, int b)
+{
+    int rootA = Find(a);
+    int rootB = Find(b);
+
+    if (rootA == rootB)
+        return false;
+
+    if (size[rootA] < size[rootB])
+        (rootA, rootB) = (rootB, rootA);
+
+    parent[rootB] = rootA;
+    size[rootA] += size[rootB];
+    return true;
+}
+```
+
+반환값 `false`는 이미 같은 집합이었다는 뜻으로, 무방향 Graph의 Edge 추가에서 Cycle 판정에 사용할 수 있다.
+
+## 7. 시간·공간 복잡도
+
+경로 압축과 Union by Rank 또는 Size를 함께 사용하면 `m`번 연산의 분할 상환 시간은 `O(m α(n))`이다. 한 연산당 `O(α(n))`으로 표현한다. `α`는 역 Ackermann 함수이며 현실적인 입력 크기에서는 5보다 작아 사실상 상수에 가깝다.
+
+정확한 표현은 “항상 O(1)”이 아니다. 개별 한 번의 Find는 아직 압축되지 않은 경로를 따라갈 수 있고, 이론적 상한은 역 Ackermann 함수다. 여러 연산 전체에 비용을 나눠 보는 분할 상환 분석이다.
+
+Parent와 Size·Rank 배열을 저장하므로 공간은 `O(n)`이다. 원소가 연속 정수 ID가 아니면 외부 ID를 연속 Index로 매핑하는 Hash Map이 추가로 필요할 수 있다.
+
+| 구성 | 대표 성능 |
+|---|---|
+| 최적화 없는 Parent Tree | 최악 O(n) |
+| Size·Rank 결합만 사용 | O(log n) 높이 제한 |
+| 경로 압축만 사용 | 반복 Find가 빨라짐 |
+| 두 최적화 함께 사용 | 분할 상환 O(α(n)) |
+
+## 8. Cycle 판정과 연결 요소
+
+무방향 Graph의 Edge `(u, v)`를 하나씩 처리한다.
+
+1. `Find(u) == Find(v)`이면 이미 경로가 있으므로 이 Edge를 추가하면 Cycle이 생긴다.
+2. 다르면 `Union(u, v)`로 두 연결 요소를 합친다.
+
+```text
+처리 Edge: A-B, B-C, C-A
+
+A-B: 다른 집합 → Union
+B-C: 다른 집합 → Union
+C-A: 같은 집합 → Cycle
+```
+
+방향 Graph에서는 같은 방식으로 일반적인 Cycle을 판정할 수 없다. `A → B`, `C → B`를 처리할 때 방향을 무시한 연결성과 방향 Cycle은 다른 개념이다. 방향 Cycle에는 DFS의 현재 경로 표시나 위상 정렬을 사용한다.
+
+초기 집합 수를 `n`으로 두고 서로 다른 두 집합을 Union할 때마다 1씩 줄이면 현재 연결 요소 수를 유지할 수 있다.
+
+## 9. Kruskal 알고리즘에서의 역할
+
+Kruskal 최소 신장 트리 알고리즘은 가중치가 작은 Edge부터 검사한다. 서로 다른 연결 요소를 잇는 Edge만 선택하고 같은 요소 안의 Edge는 Cycle을 만들므로 버린다. 이 연결 여부 판정을 Union-Find가 담당한다.
+
+```text
+모든 Edge를 Weight 오름차순 정렬
+          ↓
+for each (u, v, weight):
+    if Find(u) != Find(v):
+        Edge 선택
+        Union(u, v)
+```
+
+전체 복잡도는 Edge 정렬 `O(E log E)`가 지배하고 Union-Find 연산은 거의 선형에 가깝다. Union-Find가 최소 가중치를 결정하는 것은 아니며, 정렬된 Edge를 Cycle 없이 선택하도록 돕는다.
+
+## 10. 삭제가 어려운 이유
+
+Union-Find는 집합을 합칠 때 이전 경계를 잃는다. 경로 압축은 여러 Node를 Root에 직접 연결해 원래 어떤 Edge로 이어졌는지도 보존하지 않는다.
+
+```text
+A-B-C, B-C Edge를 삭제한다고 하자.
+
+다른 우회 Edge가 있는가?
+삭제 후 두 Component로 나뉘는가?
+
+Parent 배열만으로는 판단 불가
+```
+
+Edge 삭제가 드물고 Offline 처리가 가능하면 Query를 역순으로 처리해 삭제를 추가로 바꾸거나, Rollback Union-Find와 Divide-and-Conquer를 사용할 수 있다. 실시간 동적 연결은 훨씬 복잡한 Dynamic Connectivity 자료구조나 삭제 후 제한된 BFS 재계산이 필요하다.
+
+Rollback이 필요하면 일반 경로 압축은 변경 기록을 많이 만들어 되돌리기 어렵다. Rank·Size 결합만 사용하고 변경 Stack을 기록하는 변형이 흔하다. 요구에 따라 최적화 선택도 달라진다.
+
+## 11. 다른 구조와 비교
+
+| 요구 | Union-Find | BFS·DFS + Graph |
+|---|---|---|
+| 두 원소의 연결 여부 | 매우 빠름 | Query마다 탐색 가능 |
+| 집합 병합 | 매우 빠름 | Graph Edge 추가 |
+| 실제 경로 | 지원 안 함 | Parent 기록으로 가능 |
+| 거리·최단 경로 | 지원 안 함 | 알고리즘으로 가능 |
+| Edge 삭제 | 기본 지원 안 함 | Edge 삭제 후 재탐색 가능 |
+| 이웃 열거 | 지원 안 함 | 인접 구조로 가능 |
+
+Union-Find의 Parent Tree는 원래 Graph의 경로가 아니다. `parent[x]`는 집합 대표를 찾기 위한 내부 구조일 뿐 실제 Edge를 의미하지 않는다. 실제 연결 정보도 필요하다면 Graph와 Union-Find를 함께 유지해야 한다.
+
+## 12. 장점과 단점
+
+### 장점
+
+- 연결 여부와 집합 병합을 분할 상환 `O(α(n))`에 처리한다.
+- 배열 기반 구현이 단순하고 메모리 지역성이 좋다.
+- 무방향 Cycle 판정과 Kruskal에 잘 맞는다.
+- 집합 수와 Root별 Size 같은 Aggregate를 함께 유지할 수 있다.
+
+### 단점
+
+- 실제 경로, 거리, 이웃 정보를 제공하지 않는다.
+- 기본 구조는 Edge 삭제와 집합 분할을 지원하지 않는다.
+- 방향 Graph의 일반 Cycle 판정에는 바로 적용할 수 없다.
+- 경로 압축은 Rollback과 동시 갱신을 어렵게 한다.
+
+## 13. 게임 서버·백엔드 실무 예시
+
+### 길드 동맹 Group
+
+길드 동맹이 합쳐지기만 하는 이벤트 처리라면 길드 ID를 원소로 두고 Union할 수 있다. 같은 동맹인지 `Find`로 확인하고 Root에 전체 인원 수 같은 Aggregate를 둘 수 있다.
+
+그러나 동맹 탈퇴와 해체가 실시간으로 자주 발생하면 기본 Union-Find는 적합하지 않다. 탈퇴 후 남은 길드가 어떤 Component로 갈라지는지 알 수 없기 때문이다. 이 경우 실제 동맹 Graph를 보존하고 재계산 또는 다른 동적 구조를 사용한다.
+
+### 월드 연결 검증
+
+맵 생성 과정에서 통로를 하나씩 추가하며 두 방이 이미 연결되어 있는지 확인할 수 있다. 서로 다른 집합만 연결하면 Cycle 없는 Maze를 만들 수 있고, 모든 방이 하나의 집합인지 확인해 도달 가능성을 검증할 수 있다.
+
+```text
+Room 생성: 각 방 MakeSet
+통로 후보 (A, B):
+  Find(A) != Find(B) → 통로 생성 + Union
+  Find(A) == Find(B) → Cycle 생성 여부에 따라 Skip
+```
+
+### 서버 Cluster 병합
+
+Offline 장애 분석에서 서버 간 통신 성공 Edge를 합쳐 독립된 Network Component를 찾을 수 있다. 하지만 시간에 따라 Edge가 사라지는 Online 상태라면 Snapshot별로 다시 계산하거나 Offline Query 기법이 필요하다.
+
+동시 Union과 Find는 일반 배열 구현에서 자동으로 Thread-safe하지 않다. 두 Root를 찾은 뒤 다른 Thread가 Parent를 바꾸면 Size가 잘못 합산될 수 있다. Partition별 단일 Writer, Lock, Batch 처리처럼 일관된 소유 정책을 둔다. Lock-free DSU는 가능하지만 단순 CAS 몇 번으로 끝나는 문제가 아니므로 검증된 구현이 필요하다.
+
+## 14. 자주 하는 오해
+
+- **Union-Find는 실제 연결 경로를 저장한다**: Parent는 대표 검색용이며 원래 Edge 경로가 아니다.
+- **연산은 엄밀히 O(1)이다**: 두 최적화를 쓰면 분할 상환 `O(α(n))`이다.
+- **Union은 입력 Node를 바로 연결한다**: 먼저 각 Node의 Root를 찾아 Root끼리 합쳐야 한다.
+- **Rank는 항상 현재 실제 높이다**: 경로 압축 뒤에는 높이 상한을 위한 정보로 봐야 한다.
+- **방향 Graph Cycle도 Find 결과만 비교하면 된다**: 이 방법은 무방향 연결성에 해당한다.
+- **Edge 삭제는 Parent를 되돌리면 된다**: 경로 압축과 여러 Edge 때문에 단순 복원이 불가능하다.
+- **Find는 읽기 전용이다**: 경로 압축을 수행하는 Find는 Parent 배열을 수정한다.
+
+## 15. 면접 질문
+
+### Q1. Union-Find를 설명해 주세요.
+
+서로 겹치지 않는 집합을 대표 Root로 관리하는 자료구조입니다. Find는 원소의 Root를 찾고, Union은 두 Root를 합칩니다. 두 원소의 Root가 같으면 같은 집합입니다.
+
+### Q2. 경로 압축은 어떻게 동작하나요?
+
+Find로 Root까지 올라간 뒤 경로에서 방문한 Node가 Root를 직접 가리키게 합니다. 이후 같은 경로의 Find 깊이가 줄어듭니다. 재귀 구현에서는 `parent[x] = Find(parent[x])`가 핵심입니다.
+
+### Q3. Union by Rank 또는 Size가 필요한 이유는 무엇인가요?
+
+아무 기준 없이 합치면 긴 Chain이 생길 수 있습니다. 작은 Tree를 큰 Tree 아래에 붙여 높이 증가를 억제합니다. 경로 압축과 함께 쓰면 연산은 분할 상환 `O(α(n))`입니다.
+
+### Q4. 무방향 Graph의 Cycle을 어떻게 판정하나요?
+
+Edge `(u, v)`를 추가하기 전에 두 Root를 비교합니다. 이미 같으면 기존 경로가 있으므로 Edge 추가가 Cycle을 만듭니다. 다르면 Union합니다.
+
+### Q5. Union-Find가 지원하지 않는 것은 무엇인가요?
+
+실제 경로, 거리, 이웃 조회를 제공하지 않고 기본적으로 Edge 삭제나 집합 분할도 지원하지 않습니다. 이런 요구에는 Graph 탐색이나 동적 연결 구조가 필요합니다.
+
+### Q6. Kruskal에서 Union-Find의 역할은 무엇인가요?
+
+가중치순 Edge를 보면서 양 끝이 서로 다른 Component일 때만 Edge를 선택하도록 Cycle을 판정하고 Component를 병합합니다. Edge 정렬이 최소 비용 선택 순서를 만들고 Union-Find는 연결 여부를 빠르게 답합니다.
+
+## 16. 예상 꼬리질문
+
+- MakeSet은 어떻게 초기화하나요?
+- Size와 Rank 기준 결합은 어떻게 다른가요?
+- 경로 압축 없는 Size Union의 높이는 어떻게 제한되나요?
+- Find가 읽기 연산처럼 보여도 배열을 수정하는 이유는 무엇인가요?
+- 연결 요소 수와 집합 크기는 어떻게 유지하나요?
+- Rollback Union-Find에서 경로 압축을 피하는 이유는 무엇인가요?
+- 동시 Union을 처리할 때 어떤 Race가 생길 수 있나요?
+
+## 17. 30초 모범답변
+
+> Union-Find는 서로소 집합을 대표 Root로 관리하며 Find로 소속 집합을 찾고 Union으로 두 집합을 합칩니다. 경로 압축과 Size 또는 Rank 기준 결합을 함께 쓰면 연산이 분할 상환 `O(α(n))`으로 사실상 상수에 가깝습니다. 무방향 Graph의 연결 여부, Cycle 판정, Kruskal에 유용하지만 실제 경로나 Edge 삭제는 지원하지 않습니다.
+
+## 18. 1~2분 확장답변
+
+> Union-Find는 각 원소가 Parent를 따라 대표 Root에 도달하는 Forest 형태로 서로소 집합을 관리합니다. Find는 Root를 반환하고, Union은 두 원소의 Root를 찾아 하나를 다른 쪽 아래에 연결합니다. 단순하게 연결하면 Tree가 편향될 수 있으므로 Find 경로의 Node를 Root에 직접 붙이는 경로 압축과 작은 Tree를 큰 Tree 아래에 붙이는 Size·Rank 기준 결합을 사용합니다. 두 최적화를 함께 쓰면 여러 연산의 분할 상환 복잡도가 `O(α(n))`입니다.
+>
+> 무방향 Graph에서 Edge 양 끝의 Root가 이미 같으면 그 Edge는 Cycle을 만들고, Kruskal은 이 판정으로 최소 신장 트리를 구성합니다. 다만 Parent Tree는 실제 Graph 경로가 아니어서 경로 복원이나 거리 조회는 할 수 없습니다. 집합을 합치면서 이전 경계를 잃기 때문에 Edge 삭제와 Component 분할도 기본적으로 지원하지 않습니다. 게임 서버에서는 추가만 있는 월드 연결이나 Offline 동맹 Group 처리에 적합하지만 탈퇴가 빈번하면 실제 Graph나 다른 구조가 필요합니다.
+
+## 19. 핵심 요약
+
+- Union-Find는 서로소 집합을 Root가 있는 Parent Forest로 표현한다.
+- MakeSet은 독립 집합 생성, Find는 대표 검색, Union은 두 Root 병합을 수행한다.
+- 경로 압축은 Find 경로를 Root에 직접 연결한다.
+- Size·Rank 기준 결합은 작은 Tree를 큰 Tree 아래에 붙여 높이를 억제한다.
+- 두 최적화를 함께 쓰면 연산은 분할 상환 `O(α(n))`, 공간은 `O(n)`이다.
+- 무방향 연결 여부, Cycle 판정, 연결 요소 수, Kruskal에 적합하다.
+- 실제 경로·거리·이웃, 방향 Cycle, 기본 Edge 삭제는 지원하지 않는다.
+- 경로 압축 Find는 상태를 수정하며 동시성과 Rollback 요구를 별도로 고려한다.
+
+## 한 줄 정리
+
+> Union-Find는 경로 압축과 크기 기반 결합으로 “같은 집합인가”와 “두 집합을 합쳐라”를 거의 상수 시간에 처리한다.
