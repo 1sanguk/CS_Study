@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- I/O Thread와 Logic Worker를 분리해야 하는 이유와 역할 경계를 설명할 수 있다.
+- Room Owner 모델로 공유 상태 Lock을 없애는 원리를 설명할 수 있다.
+- Bounded Work Queue의 필요성과 가득 찼을 때의 Backpressure 정책을 설명할 수 있다.
+- roomId Partition으로 Packet 순서를 보장하는 방법과 오래된 작업을 폐기하는 방법을 설명할 수 있다.
 
 ## 1. 개요
 스레드 모델은 I/O와 게임 Logic을 어떤 Thread가 소유할지 정하고 Work Queue는 생산자와 소비자 사이 작업을 전달한다.
@@ -99,51 +101,145 @@ Thread Model과 Work Queue은 정상 경로만 구현해서는 운영 준비가 
 Thread Model과 Work Queue에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-I/O Thread가 같은 Room의 이동 Packet을 roomId로 Partition하면 한 Logic Worker가 순서대로 처리한다. Pathfinding 작업이 밀리면 Queue 상한에서 신규 작업을 거절해 Tick 지연 전파를 막는다.
+
+아래는 roomId Partition 기반 Work Queue와 오래된 작업 폐기 패턴이다.
+
+```cpp
+struct WorkItem {
+    uint32_t roomId;
+    uint64_t sessionGeneration;  // 오래된 콜백 폐기용
+    uint32_t packetSequence;
+    std::function<void()> handler;
+};
+
+// roomId로 Worker를 고정 — 같은 Room은 항상 같은 Worker가 처리
+class PartitionedWorkQueue {
+    static constexpr int WORKER_COUNT = 4;
+    BoundedQueue<WorkItem> queues_[WORKER_COUNT];  // 상한: 각 1000개
+
+public:
+    bool Enqueue(WorkItem item) {
+        int idx = item.roomId % WORKER_COUNT;
+        if (!queues_[idx].TryPush(item)) {
+            // Queue 가득 참 → 해당 Room 신규 작업 거부
+            metrics_.DropCount.fetch_add(1);
+            return false;
+        }
+        return true;
+    }
+
+    void WorkerLoop(int workerIdx) {
+        while (running_) {
+            WorkItem item;
+            if (!queues_[workerIdx].TryPop(item)) { YieldOrSleep(); continue; }
+
+            // Session이 이미 끊겼거나 Generation이 달라진 경우 폐기
+            auto session = SessionManager::Find(item.roomId);
+            if (!session || session->generation != item.sessionGeneration) continue;
+
+            item.handler();  // 같은 roomId는 이 Worker에서만 실행 → Lock 불필요
+        }
+    }
+};
+```
+
+- `roomId % WORKER_COUNT`로 파티션하면 같은 Room의 Packet이 항상 같은 Worker에서 순서대로 실행된다.
+- `sessionGeneration` 비교로 Disconnect 후 재접속된 새 Session에 오래된 작업이 적용되는 것을 막는다.
+- Queue 가득 찼을 때 Drop하고 메트릭에 기록하면 운영에서 병목 Room을 식별할 수 있다.
 
 ## 5. 비슷한 개념과 비교
-전역 Worker Pool은 부하 분산이 쉽고 Room Owner 모델은 공유 상태 Lock을 줄인다. Hot Room과 Queue 이동 비용을 측정해 소유 단위를 정한다.
-## 6. 장점과 단점
-Thread Model과 Work Queue을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 I/O Thread, Logic Worker와 Room Owner 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-Session Packet을 playerId나 roomId로 Partition해 같은 Room 명령 순서를 유지한다. Queue 상한, 작업 시간 예산과 Overload 거부 정책을 둔다.
 
-Thread Model과 Work Queue 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
+| 모델 | 특징 | Lock 필요 | 확장성 | 순서 보장 |
+|------|------|----------|--------|---------|
+| **Thread-per-connection** | 연결마다 Thread | 공유 상태는 필요 | 수백 연결 | 자연스럽게 보장 |
+| **Global Thread Pool** | 전역 Queue + N Worker | Room 상태에 Lock 필요 | 높음 | 보장 안 됨 |
+| **Partitioned Queue** | roomId로 Worker 고정 | Room 내 Lock 불필요 | 높음 | Room 단위 보장 |
+| **Actor Model** | 객체마다 Mailbox | Actor 내 Lock 불필요 | 높음 | Actor 단위 보장 |
+| **Single Thread Event Loop** | 모든 Logic 직렬화 | 불필요 | 낮음 (CPU 병목) | 완전 보장 |
+
+## 6. 장점과 단점
+
+**장점**
+- I/O Thread와 Logic Worker를 분리해 DB 지연이 Tick에 전파되지 않는다.
+- roomId Partition으로 Room 내 공유 상태에 Lock 없이 순서를 보장한다.
+- Bounded Queue로 부하 초과 시 빠른 거부를 통해 메모리 소진을 막는다.
+- Worker 수를 Core 수 근처로 제한해 Context Switch와 Cache 경쟁을 최소화한다.
+
+**단점**
+- 여러 Queue 경계를 넘는 작업은 디버깅과 지연 추적이 복잡하다.
+- 특정 Room에 부하가 몰리는 Hot Room 문제가 생기면 Partition을 재설계해야 한다.
+- Graceful Shutdown 시 Queue를 모두 Drain하는 절차가 필요하다.
+- Room 간 상호작용(이벤트·전투)은 Message 전달 방식이므로 지연이 추가된다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+I/O Thread가 Packet을 Framing해 `roomId % WORKER_COUNT`로 분류하고 Partitioned Queue에 넣는다. Logic Worker는 Queue를 드레인하며 Tick마다 Room 상태를 업데이트한다. DB 조회는 별도 DB Thread Pool로 오프로드하고 완료 후 결과를 Logic Queue로 다시 보낸다.
+
+Queue 상한, Worker별 처리 p99, Drop 수, Queue 대기 시간을 지표로 수집한다. 특정 Worker의 Queue가 지속적으로 차면 해당 Room을 별도 Worker로 분리(Hot Room 격리)한다.
 
 ## 8. 자주 하는 오해
-- **I/O Thread**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Logic Worker**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Room Owner**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Queue Partition**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **작업 Sequence**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **I/O Thread에서 게임 로직을 직접 처리해도 된다.** I/O Thread가 DB 조회나 경로 탐색으로 블로킹되면 같은 Thread가 담당하는 수천 연결의 I/O가 모두 지연된다.
+- **Logic Worker 수를 Core 수보다 많이 늘리면 성능이 좋아진다.** CPU-bound Worker는 Core 수를 넘으면 Context Switch 비용이 증가하고 L1/L2 Cache가 경쟁한다. Blocking DB Worker는 별도 Pool로 격리해야 한다.
+- **Room Owner Thread 하나가 전담하면 동기화가 완전히 필요 없다.** DB·Matchmaking 같은 외부 시스템의 비동기 콜백이 다른 Thread에서 오면 여전히 동기화가 필요하다.
+- **전역 단일 Queue로 관리하면 구조가 단순하다.** Multi-producer + Multi-consumer 전역 Queue는 Lock Contention 병목이 생긴다. Room별 Partition이 확장성에 유리하다.
+- **Queue에 넣은 순서대로 실행이 보장된다.** Priority Queue나 다중 Consumer 구조에서는 삽입 순서와 실행 순서가 다를 수 있다. Sequence 번호로 순서를 별도로 검증해야 한다.
+- **무제한 Queue는 부하 증가를 흡수해 좋다.** 무제한 Queue는 부하를 숨기다가 메모리를 소진하고 오래된 요청을 뒤늦게 실행한다. 상한과 빠른 거부가 안전하다.
+- **Graceful Shutdown 시 Queue를 즉시 비워도 된다.** 저장·결제·랭킹 업데이트 같은 중요 작업은 Drain이 필요하다. 반면 위치 Snapshot 같은 비핵심 작업은 버려도 된다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-스레드 모델은 I/O와 게임 Logic을 어떤 Thread가 소유할지 정하고 Work Queue는 생산자와 소비자 사이 작업을 전달한다.
-### Q2. 왜 필요한가요?
-동시 실행으로 처리량을 높이면서 공유 상태 경쟁과 느린 작업의 전파를 제어한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-Session Packet을 playerId나 roomId로 Partition해 같은 Room 명령 순서를 유지한다. Queue 상한, 작업 시간 예산과 Overload 거부 정책을 둔다.
-### Q4. 장애 시 무엇을 확인하나요?
-Thread Model과 Work Queue 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. I/O Thread와 Logic Worker를 왜 분리해야 하나요?
+I/O Thread가 DB 조회나 경로 탐색 같은 무거운 Logic을 처리하면 같은 Thread가 담당하는 수천 연결의 I/O 이벤트가 모두 지연됩니다. I/O Thread는 Byte 이동과 Framing만 담당하고 완전한 Packet을 Bounded Work Queue에 넣어 Logic Worker로 오프로드합니다.
+
+### Q2. Room Owner 모델이 Lock을 줄이는 원리를 설명해 주세요.
+`hash(roomId) % workerCount`로 같은 Room의 모든 작업을 특정 Worker에 고정합니다. 그 Worker만 Room 상태를 수정하므로 Room 내부 처리에서 Lock이 필요 없습니다. Room 간 상호작용은 Message Queue로 전달합니다.
+
+### Q3. Bounded Work Queue가 필요한 이유와 가득 찼을 때 어떻게 처리하나요?
+무제한 Queue는 부하를 숨기다가 메모리를 소진하고 오래된 요청을 뒤늦게 실행합니다. Bounded Queue는 가득 차면 빠르게 거부해 생산자에게 신호를 줍니다. 메시지 종류에 따라 신규 로그인 거부, 비핵심 상태 Drop, Producer Rate Limit 중 적절한 정책을 선택합니다.
+
+### Q4. Queue Partition으로 Packet 순서를 어떻게 보장하나요?
+`roomId % workerCount`로 같은 Room의 Packet을 같은 Worker Queue에 넣으면 단일 Consumer가 삽입 순서대로 처리합니다. 작업 항목에 `sessionGeneration`과 `packetSequence`를 포함해 Queue 대기 중 Disconnect·재접속이 발생해도 오래된 작업을 폐기합니다.
+
+### Q5. Logic Worker 수를 Core 수보다 많이 늘리면 왜 성능이 떨어지나요?
+CPU-bound 작업에서 Thread 수가 Core 수를 초과하면 Context Switch 비용이 증가하고 L1/L2 Cache가 경쟁하며 처리량이 감소합니다. Blocking DB 작업이 있으면 DB Connection 수에 맞는 별도 Pool로 격리하되 Worker 수를 DB Connection 수보다 지나치게 많이 두면 대기만 늘어납니다.
+
+### Q6. Graceful Shutdown 시 Work Queue를 어떻게 정리하나요?
+새 작업 수락을 먼저 막고 저장·결제·랭킹 업데이트 같은 필수 Queue를 Drain합니다. 위치 Snapshot·로그 같은 비핵심 Queue는 버립니다. Worker가 종료 신호를 받으면 현재 작업을 완료하고 종료합니다. 종료 Timeout 내에 Drain이 완료되지 않으면 강제 종료하고 미처리 항목을 로깅합니다.
 
 ## 10. 예상 꼬리질문
-- I/O Thread의 최종 소유자는 어디에 두나요?
-- Logic Worker 처리에서 중복과 역순은 어떻게 구분하나요?
-- Room Owner의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Queue Partition 장애를 어떻게 재현하고 복구를 검증하나요?
-- 작업 Sequence 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Hot Room이 생겼을 때 부하를 분산하는 방법은 무엇인가요?
+- Priority Queue에서 낮은 우선순위 작업이 굶는(Starvation) 문제를 어떻게 해결하나요?
+- Room 간 전투처럼 여러 Room이 관련된 작업을 어떻게 처리하나요?
+- Queue 대기 시간이 갑자기 증가했을 때 병목을 어떻게 찾나요?
+- Worker 예외가 발생했을 때 Room 상태를 어떻게 복구하나요?
+- `async/await`와 Thread Pool 기반 Work Queue의 실질적인 차이는 무엇인가요?
+- Tick-driven Logic과 Event-driven Work Queue를 어떻게 통합하나요?
+
 ## 11. 30초 모범답변
-> 스레드 모델은 상태 소유와 실행 위치를 정하고 Work Queue는 경계를 연결합니다. Queue를 제한하고 같은 게임 상태의 순서를 보장해야 합니다. Session Packet을 playerId나 roomId로 Partition해 같은 Room 명령 순서를 유지한다.
+
+> 게임 서버의 I/O Thread와 Logic Worker를 분리해야 DB 지연이 Tick에 전파되지 않습니다. `roomId % workerCount`로 파티션하면 같은 Room의 작업이 한 Worker에서 순서대로 실행되어 Lock이 불필요합니다. Bounded Queue로 부하 초과 시 빠르게 거부해 메모리 소진을 막습니다.
 
 ## 12. 1~2분 확장답변
-> 스레드 모델은 상태 소유와 실행 위치를 정하고 Work Queue는 경계를 연결합니다. Queue를 제한하고 같은 게임 상태의 순서를 보장해야 합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> I/O Thread가 DB 조회나 경로 탐색을 직접 처리하면 같은 Thread의 수천 연결이 모두 지연됩니다. I/O Thread는 Byte 이동·Framing만 담당하고 완전한 Packet을 Bounded Work Queue에 넣습니다.
+>
+> `roomId % workerCount` Partition으로 같은 Room 작업을 같은 Worker에 고정하면 Room 내 Lock이 불필요합니다. 작업 항목에 `sessionGeneration`을 담아 Disconnect 후 오래된 콜백을 폐기합니다.
+>
+> Bounded Queue는 가득 차면 빠르게 거부해 메모리 소진을 막습니다. CPU-bound Worker는 Core 수 근처로 제한하고 Blocking DB 작업은 별도 Pool로 격리합니다. Queue 대기 시간·Drop 수·Worker 이용률을 지표로 수집해 Hot Room과 병목을 감지합니다.
 
 ## 13. 핵심 요약
-- 스레드 모델은 I/O와 게임 Logic을 어떤 Thread가 소유할지 정하고 Work Queue는 생산자와 소비자 사이 작업을 전달한다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- I/O Thread는 Byte 이동·Framing만 담당하고 Logic Worker로 오프로드해야 DB 지연이 Tick에 전파되지 않는다.
+- `roomId % workerCount` Partition으로 같은 Room 작업을 한 Worker에 고정하면 Room 내 Lock이 불필요하다.
+- Bounded Queue는 부하 초과 시 빠르게 거부해 메모리 소진을 막는다.
+- 작업 항목에 `sessionGeneration`·`packetSequence`를 포함해 오래된 콜백을 폐기한다.
+- CPU-bound Worker는 Core 수 근처로, Blocking DB Worker는 별도 Pool로 관리한다.
+- Hot Room이 생기면 해당 Room을 전용 Worker로 격리한다.
+- Graceful Shutdown 시 필수 Queue를 Drain하고 비핵심 Queue는 버린다.
+- Queue 대기 시간·Drop 수·Worker p99를 지표로 수집해 병목 Room과 Worker 고갈을 감지한다.
 
 ## 한 줄 정리
-> 스레드 모델은 상태 소유와 실행 위치를 정하고 Work Queue는 경계를 연결합니다. Queue를 제한하고 같은 게임 상태의 순서를 보장해야 합니다.
+
+> I/O Thread와 Logic Worker를 분리하고, roomId Partition으로 같은 Room 작업을 한 Worker에 직렬화해 Lock을 없애며, Bounded Queue로 Backpressure를 가하고 sessionGeneration으로 오래된 콜백을 폐기한다.

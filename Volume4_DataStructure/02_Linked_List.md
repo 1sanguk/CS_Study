@@ -11,9 +11,10 @@ importance: 4
 
 ## 학습 목표
 
-- 구조와 핵심 연산을 설명할 수 있다.
-- 시간 복잡도와 메모리 특성을 비교할 수 있다.
-- 게임 서버 요구에 맞는 자료구조를 선택할 수 있다.
+- 단일·이중 연결 리스트의 Node 링크 구조, Sentinel Node, 삽입·삭제의 포인터 갱신 절차를 설명할 수 있다.
+- "O(1) 삽입·삭제"의 전제 조건(알려진 Iterator·Node)과 탐색 O(N), Cache 지역성 비용을 분리해 설명할 수 있다.
+- LRU Cache에서 HashMap과 이중 연결 리스트를 조합해 O(1) 조회·순서 갱신을 달성하는 원리를 설명할 수 있다.
+- 게임 서버 Active Session·Object Pool에서 연결 리스트와 배열 중 어떤 상황에서 각각을 선택하는지 판단할 수 있다.
 
 ## 1. 개요
 
@@ -154,11 +155,68 @@ struct Session {
 일부 이중 연결 리스트는 한 리스트의 연속 노드 범위를 복사 없이 다른 리스트로 옮길 수 있다. 경계 링크만 변경하므로 범위 크기와 무관한 O(1)이 가능한 조건이 있지만 Size 계산, Allocator 호환성과 API에 따라 복잡도가 다르다. 실제 표준 컨테이너 계약을 확인한다.
 
 ## 4. 쉬운 예시
-플레이어를 ID로 찾는 작업과 접속 순서대로 처리하는 작업은 요구가 다르다. 전자는 Key 조회 구조, 후자는 Queue가 자연스럽다. 한 구조로 모든 요구를 해결하려 하지 않는다.
 
-기차 차량이 앞뒤 연결 고리로 이어졌다고 생각할 수 있다. 특정 차량 위치를 이미 알고 있으면 주변 연결만 바꿔 차량을 빼거나 넣을 수 있다. 하지만 100번째 차량을 찾으려면 앞에서부터 연결을 따라가야 한다.
+LRU Cache는 HashMap(O(1) 조회)과 이중 연결 리스트(O(1) 순서 갱신)를 조합한 연결 리스트의 대표 활용 사례다.
 
-실제 기술에서는 각 노드가 메모리 주소 링크를 저장하고 삭제 시 이전·다음 포인터를 갱신한다. 기차와 달리 노드 메모리는 물리적으로 서로 멀리 흩어져 CPU Cache 효율이 낮을 수 있다.
+```java
+// LRU Cache: HashMap + 이중 연결 리스트 (Sentinel Node 패턴)
+class LRUCache {
+    private static class Node {
+        int key, val;
+        Node prev, next;
+        Node(int key, int val) { this.key = key; this.val = val; }
+    }
+
+    private final int capacity;
+    private final Map<Integer, Node> map = new HashMap<>();
+    private final Node head = new Node(0, 0); // sentinel head
+    private final Node tail = new Node(0, 0); // sentinel tail
+
+    LRUCache(int capacity) {
+        this.capacity = capacity;
+        head.next = tail;
+        tail.prev = head;
+    }
+
+    int get(int key) {
+        Node node = map.get(key);
+        if (node == null) return -1;
+        moveToHead(node); // 가장 최근 사용으로 갱신: O(1)
+        return node.val;
+    }
+
+    void put(int key, int val) {
+        Node node = map.get(key);
+        if (node != null) {
+            node.val = val;
+            moveToHead(node);
+        } else {
+            Node newNode = new Node(key, val);
+            map.put(key, newNode);
+            addToHead(newNode);
+            if (map.size() > capacity) {
+                Node lru = removeTail(); // 가장 오래된 항목 제거: O(1)
+                map.remove(lru.key);
+            }
+        }
+    }
+
+    private void addToHead(Node node) {
+        node.prev = head; node.next = head.next;
+        head.next.prev = node; head.next = node;
+    }
+
+    private void removeNode(Node node) {
+        node.prev.next = node.next;
+        node.next.prev = node.prev;
+    }
+
+    private void moveToHead(Node node) { removeNode(node); addToHead(node); }
+    private Node removeTail() { Node n = tail.prev; removeNode(n); return n; }
+}
+```
+
+Sentinel Node(head·tail)를 두면 빈 리스트와 경계 삽입·삭제를 일반 노드와 동일한 코드로 처리할 수 있다. HashMap 없이 리스트만 쓰면 조회가 O(N), 리스트 없이 Map만 쓰면 순서 갱신이 O(1)이 아니다.
 
 ## 5. 비슷한 개념과 비교
 | 요구 | 유리한 구조 | 핵심 비용 |
@@ -179,9 +237,18 @@ struct Session {
 `std::deque`나 Chunked Sequence는 여러 고정 Block을 사용해 양끝 삽입과 어느 정도의 임의 접근을 제공한다. 연속 배열과 노드 리스트 사이의 절충이다. 특정 언어 컨테이너의 실제 보장과 Iterator 무효화 규칙을 확인한다.
 
 ## 6. 장점과 단점
-적합한 자료구조는 코드를 단순하게 하고 예상 복잡도를 제공한다. 부적합한 구조는 불필요한 탐색·할당·메모리 이동을 만든다. 작은 데이터에서는 단순한 배열이 복잡한 구조보다 빠를 수 있다.
 
-연결 리스트는 알려진 위치의 삽입·삭제에서 다른 원소를 이동하지 않고 노드 주소를 안정적으로 유지한다. Splice와 LRU 순서 변경에 유용하다. 단점은 O(N) 탐색, Pointer·할당 Overhead, 낮은 Cache 지역성과 구현 오류 위험이다.
+**장점**
+- 위치(Node·Iterator)를 알고 있을 때 삽입·삭제에서 다른 원소를 이동하지 않는다.
+- 삭제된 노드 외 다른 노드의 주소가 안정적으로 유지된다.
+- Splice로 연속 노드 범위를 복사 없이 O(1)에 다른 리스트로 이동할 수 있다.
+- LRU 순서 갱신처럼 특정 노드를 Head로 이동하는 패턴에 유리하다.
+
+**단점**
+- 값·Index 탐색이 O(N)이다. O(1) 삽입·삭제의 전제가 "위치를 이미 안다"는 것이다.
+- 노드마다 포인터(8바이트 × 1~2개)와 할당자 메타데이터 오버헤드가 있다.
+- 노드가 메모리에 흩어져 Cache Miss가 빈번하고 Hardware Prefetch가 어렵다.
+- 포인터 갱신 순서 오류, Use-after-free, 이중 삭제 등 구현 오류 위험이 높다.
 
 ## 7. 게임 서버·백엔드 실무 예시
 LRU Cache는 Hash Map과 이중 연결 리스트를 조합해 O(1) 조회·순서 갱신을 만든다. 단순 순회 데이터에는 Dynamic Array가 더 빠를 수 있다.
@@ -218,61 +285,73 @@ Network Buffer·Session 객체를 Pool에서 할당하고 Free·Active 목록을
 원소 수, 순회 대 삽입·삭제 비율, 위치를 찾는 방법, 노드 할당률·Byte Overhead, Cache Miss와 p99를 본다. 리스트 선택의 이점인 “알려진 Iterator에서 변경”이 실제 코드에서 유지되는지 확인한다.
 
 ## 8. 자주 하는 오해
-- Big-O가 같으면 실제 성능도 같다고 본다.
-- 평균 O(1)을 최악 O(1)로 생각한다.
-- 컨테이너가 모든 참조를 영구히 유지한다고 본다.
-- 동시성 안전이 자동 제공된다고 본다.
-- 원소 수가 작아도 복잡한 구조를 먼저 선택한다.
-- Linked List의 모든 중간 삽입·삭제가 탐색까지 포함해 O(1)이라고 본다.
-- 단일 리스트에서 삭제할 Node만 알면 일반적으로 O(1) 삭제가 된다고 생각한다.
-- Node가 작으면 Pointer·Allocator Overhead를 무시해도 된다고 본다.
-- 참조가 안정적이면 삭제된 Node 참조도 안전하다고 생각한다.
+
+- **"Linked List의 모든 중간 삽입·삭제는 탐색 없이 O(1)이다"**: 삽입·삭제 자체는 링크 변경만이므로 O(1)이지만, 위치를 값이나 Index로 찾는 탐색은 O(N)이다. O(1)은 "유효한 Node·Iterator를 이미 보유한" 경우에만 성립한다.
+- **"단일 연결 리스트에서 삭제할 노드만 알면 O(1) 삭제가 된다"**: 단일 리스트에서 노드 B를 삭제하려면 이전 노드 A의 next를 바꿔야 한다. B만 알고 A를 모르면 Head부터 탐색해 O(N)이다. 이중 리스트는 prev가 있어 B만으로 O(1) 삭제가 가능하다.
+- **"참조가 안정적이면 삭제된 노드 참조도 안전하다"**: 삭제되지 않은 노드는 주소가 안정적이지만, 삭제 후 메모리를 해제한 노드에 접근하면 Use-after-free가 된다. 관리형 언어에서도 논리적으로 리스트 멤버십이 끝난 노드를 참조하면 잘못된 상태를 사용할 수 있다.
+- **"노드가 작으면 Pointer·Allocator Overhead를 무시해도 된다"**: 노드 크기가 작을수록 포인터(8바이트 × 1~2개)와 할당자 메타데이터의 비율이 커진다. 정수 4바이트를 연결 리스트로 저장하면 오버헤드가 값보다 수 배 크다.
+- **"삽입·삭제가 많으면 Linked List가 Active Session 관리에 항상 유리하다"**: 세션 삭제가 O(1)이 필요해도 전체 Broadcast 순회가 더 잦다면 Cache 친화적 배열의 Swap-and-pop이 더 빠를 수 있다. 삭제 빈도만 보고 선택하지 않는다.
+- **"Pool Allocator를 쓰면 연결 리스트의 Cache Miss 문제가 해결된다"**: Pool은 할당 비용을 줄이고 초기에 노드를 가까이 배치할 수 있지만, 실제 사용 패턴에 따라 비연속 접근이 여전히 발생한다. 연속성이 필요하면 Index 배열이 더 단순하다.
+- **"LRU Cache를 HashMap만으로 O(1) 순서 관리가 가능하다"**: HashMap은 Key 조회가 O(1) 평균이지만 가장 오래된 항목을 O(1)로 찾거나 순서를 갱신하기 어렵다. 이중 연결 리스트를 조합해야 순서 갱신과 Eviction이 O(1)이 된다.
+- **"이중 연결 리스트의 Splice는 항상 O(1)이다"**: 경계 링크만 바꾸면 이동 범위 크기와 무관하게 O(1)인 구현도 있지만, Size 추적이나 Allocator 호환성에 따라 O(N)이 될 수 있다. 사용하는 표준 컨테이너의 계약을 확인해야 한다.
 
 ## 9. 면접 질문
-### Q1. 구조와 핵심 연산을 설명해 주세요.
-연결 리스트는 각 Node가 값과 다음 또는 이전 Node 링크를 저장하는 비연속 구조다.
-### Q2. 시간 복잡도와 Trade-off는 무엇인가요?
-단일 리스트는 다음 방향, 이중 리스트는 양방향 이동과 O(1) 제거를 위해 prev도 저장한다. 위치 탐색은 O(n)이고 포인터·할당 비용과 낮은 Cache 지역성이 있다.
-### Q3. 게임 서버 사용 사례는 무엇인가요?
-LRU Cache는 Hash Map과 이중 연결 리스트를 조합해 O(1) 조회·순서 갱신을 만든다. 단순 순회 데이터에는 Dynamic Array가 더 빠를 수 있다.
-### Q4. 실제 성능은 무엇으로 달라지나요?
-원소 수, 접근 지역성, 할당과 Resize, 충돌·균형, 동시 접근 방식으로 달라진다.
 
-### Q5. Linked List의 삽입·삭제가 O(1)이라는 조건은 무엇인가요?
+### Q1. 게임 서버에서 세션 객체를 Intrusive List로 관리하다 연결 종료 직후 해당 세션 노드에 Broadcast 패킷을 쓰려 했을 때 어떤 문제가 생기고, 어떻게 방지하나요?
 
-삽입 위치의 노드·Iterator를 이미 알고 있어야 한다. 이중 리스트 삭제는 대상 노드를 알면 prev·next를 바꿔 O(1)이지만 위치를 값이나 Index로 찾는 과정은 O(N)이다. 단일 리스트 삭제는 일반적으로 이전 노드도 필요하다.
+세션 삭제 시 리스트에서 분리한 뒤 메모리를 해제하면 아직 I/O 스레드가 그 포인터를 참조하고 있을 경우 Use-after-free가 발생한다. Intrusive List는 객체 수명과 링크 필드가 분리되지 않아 이중 삭제·ABA 문제도 위험하다. Generation 카운터나 shared_ptr 기반 소유권을 명시해 I/O 완료 콜백 전까지 객체가 해제되지 않게 보장한다.
 
-### Q6. Linked List가 Array보다 순회에서 느릴 수 있는 이유는 무엇인가요?
+### Q2. 게임 서버에서 세션 자동 로그아웃을 위해 Timeout 리스트를 이중 연결 리스트로 관리했는데, 특정 서버에서 p99 지연이 크게 튀었습니다. 원인으로 무엇을 먼저 의심하고 어떻게 확인하나요?
 
-노드가 메모리에 흩어져 Pointer를 따라가야 하고 다음 주소를 현재 노드를 읽은 뒤에 알 수 있다. Cache Line과 Hardware Prefetch를 활용하기 어렵고 Node별 할당·Pointer Overhead도 있다.
+Timeout이 균일하지 않아 중간 삽입 위치 탐색에 O(N)이 발생하거나, 노드가 메모리에 흩어져 순회 시 Cache Miss가 연쇄될 수 있다. 먼저 삽입 경로의 탐색 횟수와 Cache Miss 지표를 확인한다. 만료 순서가 대략 정렬된 경우라도 임의 Timeout 추가가 잦다면 Timing Wheel이나 Heap이 더 적합하다.
 
-### Q7. Singly와 Doubly Linked List는 어떻게 선택하나요?
+### Q3. LRU Cache를 게임 서버 아이템 데이터 캐싱에 사용할 때, Cache Hit 시 HashMap O(1) 조회 외에 이중 연결 리스트 Head 이동이 반드시 필요한 이유는 무엇인가요? HashMap만으로는 무엇이 불가능한가요?
 
-한 방향 순회와 Head 중심 삽입만 필요하면 단일 리스트가 Pointer 하나로 단순하다. 임의 노드의 O(1) 삭제, 양방향 순회와 LRU처럼 순서 이동이 필요하면 이중 리스트가 적합하지만 메모리와 링크 갱신 비용이 늘어난다.
+HashMap은 Key 조회가 O(1)이지만 접근 순서를 추적하지 않아 Capacity 초과 시 가장 오래된 항목을 O(1)로 찾을 수 없다. 이중 연결 리스트의 Head 이동으로 최근 접근을 O(1)에 반영하고 Tail 제거로 Eviction 대상을 O(1)에 확정한다. Map과 List의 불변식이 깨지면 Map에 Key는 있는데 List에 노드가 없거나 이중 연결 상태가 생기므로 동시 캐시에서는 Lock이나 Owner Thread로 두 연산을 원자적으로 처리해야 한다.
+
+### Q4. 게임 Active Session 관리에서 연결 리스트 대신 배열 Swap-and-pop을 선택하는 이유는 무엇인가요?
+
+연결 리스트의 O(1) 삭제는 매력적이지만 매 틱 전체 세션을 Broadcast하는 순회가 더 빈번하다면 Cache Miss가 많은 연결 리스트보다 연속 배열이 빠르다. Swap-and-pop도 O(1) 삭제가 가능하고 순회에서 Hardware Prefetch를 활용할 수 있다.
+
+### Q5. 동접 5만 규모 게임 서버에서 세션 Broadcast 처리 시 Intrusive List와 연속 배열 Snapshot 중 어떤 것을 선택하겠습니까? 그 판단 근거는 무엇인가요?
+
+Broadcast 순회가 연결 종료 삭제보다 압도적으로 빈번하다면 연속 배열 Snapshot이 유리하다. Intrusive List는 O(1) 삭제가 장점이지만 노드가 메모리에 흩어져 5만 세션 순회 시 Cache Miss가 연쇄된다. 연속 배열은 Hardware Prefetch를 활용하고 SIMD 최적화가 가능하다. 단 Snapshot 생성 시점과 전송 완료 시점 사이 세션 상태 변화를 어떻게 처리할지 소유권 설계가 필요하다. 실제 선택은 순회 대 삭제 비율과 p99 측정으로 결정한다.
+
+### Q6. Object Pool에서 Intrusive List로 Free 목록을 관리할 때, 반환 직후 다른 스레드가 같은 객체를 재할당해 사용하기 시작하는 ABA 문제가 발생했습니다. 어떻게 탐지하고 방지하나요?
+
+ABA 문제는 CAS 기반 Lock-free 구조에서 주로 발생하며, 객체가 반환·재할당된 후 이전 포인터가 유효해 보이는 상태를 가리킨다. 탐지는 객체에 Generation 카운터를 두고 포인터와 함께 비교한다. 방지는 Tagged Pointer(포인터 하위 비트에 Generation 인코딩)나 Hazard Pointer를 사용하거나, 반환 시 I/O·참조 카운트가 0인지 확인한 뒤 Free 목록에 넣는 소유권 프로토콜을 적용한다.
 
 ## 10. 예상 꼬리질문
-- 평균과 최악 복잡도는 어떻게 다른가요?
-- 메모리 지역성이 왜 중요한가요?
-- 삽입·삭제가 참조에 어떤 영향을 주나요?
-- 동시 접근은 어떻게 보호하나요?
-- 다른 자료구조와 조합할 수 있나요?
-- Sentinel Node는 어떤 장점이 있나요?
-- Intrusive List의 장단점은 무엇인가요?
+- LRU Cache의 Map과 List 불변식이 깨지면 어떤 증상이 나타나고, 어떻게 디버깅하나요?
+- Object Pool의 Free 목록을 Intrusive List로 관리할 때 Pool 크기를 초과하는 요청이 폭발적으로 들어오면 어떻게 처리하나요?
+- Active Session 배열에서 Swap-and-pop으로 삭제하면 순서가 바뀌는데, 순서 의존성이 있는 Broadcast에서는 어떻게 처리하나요?
+- Sentinel Node를 사용하는 LRU Cache 구현에서 Head·Tail 경계 조건 버그가 발생했을 때 어떻게 재현하고 수정하나요?
+- 게임 서버에서 연결 리스트 기반 자료구조의 p99 지연이 갑자기 올라갔을 때 가장 먼저 확인하는 지표는 무엇인가요?
+- Intrusive List에서 같은 객체를 두 리스트에 동시에 넣어야 할 때 링크 세트를 어떻게 설계하나요?
+- LRU Cache Eviction 대상을 Tail에서 꺼냈는데 해당 Key가 Map에 없는 불일치가 발생했습니다. 원인은 무엇인가요?
 
 ## 11. 30초 모범답변
-> Linked List는 Node 링크로 순서를 표현해 위치를 알고 있을 때 삽입·삭제가 O(1)이지만 탐색은 O(n)이고 Cache 지역성이 낮습니다. Linked List을 선택하거나 적용할 때는 정확성, 성능과 구현 복잡도의 균형을 함께 봐야 합니다. LRU Cache는 Hash Map과 이중 연결 리스트를 조합해 O(1) 조회·순서 갱신을 만든다.
+> Linked List는 유효한 Node를 이미 알고 있을 때 삽입·삭제가 O(1)이지만 탐색은 O(N)이고 노드가 흩어져 Cache Miss가 빈번합니다. 게임 서버에서는 LRU Cache처럼 순서 갱신이 핵심인 구조에는 이중 연결 리스트와 HashMap을 조합하고, Active Session Broadcast처럼 순회가 압도적으로 많은 경우는 배열 Swap-and-pop을 선택합니다. 삭제 빈도만 보고 결정하지 않고 순회 대 삽입·삭제 비율과 p99를 먼저 측정합니다.
 
 ## 12. 1~2분 확장답변
-> Linked List는 Node 링크로 순서를 표현해 위치를 알고 있을 때 삽입·삭제가 O(1)이지만 탐색은 O(n)이고 Cache 지역성이 낮습니다. 선택할 때는 조회, 삽입, 삭제, 순회 비율과 원소 수를 먼저 봅니다. Big-O 외에도 메모리 지역성, 할당, Resize와 최악 지연을 고려합니다. 게임 서버에서는 ID 조회, 작업 순서, 랭킹처럼 요구별로 구조를 분리하고 실제 부하로 검증합니다.
+> Linked List는 유효한 Node를 이미 알고 있을 때 삽입·삭제가 O(1)이지만, 탐색은 O(N)이고 노드가 메모리에 흩어져 Cache Miss가 연쇄됩니다.
+>
+> 게임 서버에서 선택 기준은 삭제 빈도만 보지 않고 순회 대 삽입·삭제 비율을 먼저 봅니다. 예를 들어 아이템 캐시에서 LRU Eviction이 필요하다면 HashMap과 이중 연결 리스트를 조합해 조회는 O(1), 순서 갱신·Eviction도 O(1)로 만듭니다. 이때 Map과 List의 불변식이 깨지지 않도록 동시 접근 시 같은 Lock으로 두 자료구조를 원자적으로 갱신합니다.
+>
+> Active Session 관리는 반대 판단입니다. 연결 종료 O(1) 삭제가 필요하더라도 매 틱 5만 세션을 Broadcast하는 순회가 더 빈번하다면 배열 Swap-and-pop이 Cache 친화적이어서 p99가 낮습니다. Object Pool의 Free 목록은 Intrusive List로 할당 비용을 줄이지만 반환 시 I/O가 아직 객체를 참조 중인지 확인하지 않으면 재사용 후 Use-after-free가 발생합니다. Generation 카운터로 이 문제를 방지합니다.
+>
+> 실제 선택은 원소 수, 순회·삽입·삭제 비율, p99 지연을 측정한 뒤 결정합니다.
 
 ## 13. 핵심 요약
-- 연결 리스트는 각 Node가 값과 다음 또는 이전 Node 링크를 저장하는 비연속 구조다.
-- 접근 패턴이 선택 기준이다.
-- 평균과 최악 복잡도를 구분한다.
-- 메모리 배치와 할당 비용을 고려한다.
-- 동시성은 별도 설계가 필요하다.
-- 연결 리스트의 O(1) 변경은 위치를 이미 안다는 전제가 있고 탐색·할당·Cache 비용은 남는다.
-- 순회가 많은 게임 서버에서는 배열·Handle 구조와 실제 p99를 비교한다.
+
+- 연결 리스트는 각 Node가 값과 다음(또는 이전) Node 링크를 저장하는 비연속 구조다. 단일 리스트는 한 방향, 이중 리스트는 양방향 이동이 가능하다.
+- O(1) 삽입·삭제는 "유효한 Node·Iterator를 이미 보유"한 전제가 있다. 위치 탐색은 O(N)이다.
+- 이중 리스트는 prev 링크로 노드 자신만으로 O(1) 삭제가 가능하다. 단일 리스트는 이전 노드를 알아야 한다.
+- Sentinel Node를 두면 경계(빈 리스트·첫/마지막 원소) 처리를 일반 노드와 동일한 코드로 단순화할 수 있다.
+- LRU Cache는 HashMap(O(1) 조회)과 이중 연결 리스트(O(1) 순서 갱신·Eviction)의 조합으로 두 연산을 모두 O(1)로 만든다.
+- 노드가 메모리에 흩어져 Cache Miss가 빈번하다. 순회가 잦은 서버에서는 배열·Handle 구조의 p99를 비교한다.
+- 삭제된 노드의 주소는 해제되므로 참조가 안정적인 것은 살아있는 노드에만 적용된다.
+- Intrusive List와 Object Pool 조합에서는 이중 반환·ABA 문제를 Generation과 명시적 소유권으로 방지해야 한다.
 
 ## 한 줄 정리
 > Linked List는 Node 링크로 순서를 표현해 위치를 알고 있을 때 삽입·삭제가 O(1)이지만 탐색은 O(n)이고 Cache 지역성이 낮습니다.

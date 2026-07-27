@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- Game Loop의 입력·Simulation·전파 단계 분리 원리를 설명할 수 있다.
+- Fixed Tick과 Tick Budget이 일관성에 미치는 영향을 설명할 수 있다.
+- Tick Overrun 발생 시 처리 전략과 모니터링 지표를 설명할 수 있다.
+- Simulation Tick Rate와 Snapshot 전송 주파수를 분리하는 이유를 설명할 수 있다.
 
 ## 1. 개요
 게임 루프는 입력 처리, Simulation, 상태 전파를 반복하며 Tick은 서버가 논리 상태를 갱신하는 한 주기다.
@@ -155,39 +157,63 @@ Game Loop와 Tick을 올바르게 적용하면 상태와 처리 책임이 명확
 Game Loop와 Tick 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- **Tick Rate**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Fixed Delta**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **입력 수집**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Simulation Phase**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Timer**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+- Tick Rate를 높이면 항상 게임 품질이 좋아진다고 생각한다. 네트워크 트래픽, CPU 사용량, 서버 비용이 비례해서 증가하므로 장르와 요구에 맞게 선택해야 한다.
+- Fixed Delta를 쓰면 실시간성이 항상 보장된다고 생각한다. Tick 처리 시간이 Delta를 초과하면 지연이 누적되어 틱이 밀린다.
+- Tick 중 예외가 발생하면 해당 Tick을 스킵하면 된다고 생각한다. State 불일치와 누적 오류가 발생할 수 있으므로 안전한 복구 전략이 필요하다.
+- Timer는 시스템 시계를 그대로 사용하면 된다고 생각한다. NTP 조정, DST, 모노토닉 클럭 보장이 없으면 시간이 역행하거나 불연속해질 수 있다.
+- 서버와 클라이언트 Tick이 다르면 동기화가 불가능하다고 생각한다. 서버 Tick과 클라이언트 렌더링 프레임은 분리 운영하며 Snapshot 전송으로 동기화한다.
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-게임 루프는 입력 처리, Simulation, 상태 전파를 반복하며 Tick은 서버가 논리 상태를 갱신하는 한 주기다.
-### Q2. 왜 필요한가요?
-동시 입력을 일관된 순서와 시간 기준으로 처리하고 부하와 네트워크 전송률을 제어한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-30Hz Simulation에서 입력을 sequence 순으로 처리하고 Snapshot은 10~20Hz로 보낼 수 있다. Tick Overrun 시 무제한 따라잡기보다 작업 예산, 품질 저하와 경고를 둔다.
-### Q4. 장애 시 무엇을 확인하나요?
-Game Loop와 Tick 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. Game Loop와 Tick을 설명해 주세요.
+Game Loop는 입력 처리·Simulation·상태 전파를 반복하는 서버의 주 실행 구조입니다. Tick은 서버가 논리 상태를 한 번 갱신하는 주기이며, Fixed Tick Rate를 사용하면 결정론적 시뮬레이션과 일관된 처리가 가능합니다.
+
+### Q2. Fixed Tick을 쓰는 이유는 무엇인가요?
+Tick마다 경과 시간이 고정되면 같은 입력 Sequence를 Replay할 때 같은 결과를 얻을 수 있습니다. Variable Delta는 구현이 단순하지만 부동소수점 오차 누적과 결정론 보장이 어렵습니다.
+
+### Q3. Tick Overrun이 발생하면 어떻게 처리하나요?
+처리 시간이 Tick Budget을 초과하면 밀린 Tick을 무제한으로 따라잡으면 연쇄 지연이 됩니다. 최대 따라잡기 횟수를 제한하고 초과분은 Drop·Slow·경고로 처리하며, Tick p99와 Overrun 발생 횟수를 모니터링합니다.
+
+### Q4. Simulation Tick Rate와 Snapshot 전송 주파수를 왜 분리하나요?
+Simulation은 30~64Hz로 내부 논리 일관성을 유지하고, Snapshot 전송은 10~20Hz로 네트워크 트래픽을 제어합니다. 두 주파수가 같으면 트래픽과 CPU 부하가 커지고 수신 측도 Delta 보간이 어렵습니다.
+
+### Q5. Tick 중 예외가 발생하면 어떻게 처리해야 하나요?
+Tick 전체를 스킵하면 상태 불일치와 누적 오류가 생깁니다. 예외를 유발한 개별 Command를 격리·Drop하고 Room State를 안전한 마지막 Snapshot으로 복원하거나 Room을 종료합니다.
+
+### Q6. 서버 Tick Time과 Client Time 불일치를 어떻게 다루나요?
+Client Timestamp를 그대로 신뢰하지 않습니다. Server Time 기준으로 허용 Window를 설정하고 범위를 벗어난 입력을 Drop·Clamp합니다. NTP 대신 단조 증가 Clock(steady_clock, Environment.TickCount64)을 써서 역행을 방지합니다.
 
 ## 10. 예상 꼬리질문
-- Tick Rate의 최종 소유자는 어디에 두나요?
-- Fixed Delta 처리에서 중복과 역순은 어떻게 구분하나요?
-- 입력 수집의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Simulation Phase 장애를 어떻게 재현하고 복구를 검증하나요?
-- Timer 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Variable Delta와 Fixed Delta의 결정론 보장 차이는 무엇인가요?
+- Tick Budget을 초과하는 무거운 AI 계산은 어떻게 분리하나요?
+- Snapshot 주파수가 낮을 때 Client 보간을 어떻게 구현하나요?
+- Tick Thread와 I/O Thread를 분리하는 이유는 무엇인가요?
+- Game Loop를 멀티코어로 확장할 때 어떤 문제가 있나요?
+- Tick p99가 급등하면 어떤 지표를 먼저 확인하나요?
+- Deterministic Simulation이 필요한 게임 장르는 어떤 경우인가요?
+
 ## 11. 30초 모범답변
-> 게임 루프는 입력·Simulation·전파를 반복하고 Tick은 논리 시간 단위입니다. 고정 Tick과 작업 예산으로 일관성을 만들고 Overrun과 p99를 관찰합니다. 30Hz Simulation에서 입력을 sequence 순으로 처리하고 Snapshot은 10~20Hz로 보낼 수 있다.
+
+> Game Loop는 입력·Simulation·전파를 반복하고, Tick은 논리 시간 단위입니다. Fixed Tick Rate로 결정론적 시뮬레이션을 보장하고, Tick Budget을 설정해 Overrun 시 무제한 따라잡기를 막습니다. Simulation은 30Hz 내외, Snapshot 전송은 10~20Hz로 분리해 트래픽을 제어합니다.
 
 ## 12. 1~2분 확장답변
-> 게임 루프는 입력·Simulation·전파를 반복하고 Tick은 논리 시간 단위입니다. 고정 Tick과 작업 예산으로 일관성을 만들고 Overrun과 p99를 관찰합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> Game Loop는 입력 처리·Simulation·Snapshot 전파를 고정 주기(Tick)로 반복합니다. Fixed Tick Rate를 쓰면 같은 입력을 Replay했을 때 같은 결과를 얻을 수 있어 결정론적 시뮬레이션과 버그 재현이 쉬워집니다.
+>
+> Tick 처리 시간이 Budget을 초과하는 Overrun이 생기면 밀린 Tick을 무제한으로 따라잡으면 연쇄 지연이 됩니다. 따라잡기 횟수를 제한하고 초과분은 Drop·Slow·경고로 처리합니다. Tick p99와 Overrun 횟수를 Traffic과 함께 봐야 Spike 원인을 찾을 수 있습니다.
+>
+> Simulation Tick Rate(30~64Hz)와 Snapshot 전송 주파수(10~20Hz)를 분리하면 내부 논리 일관성을 유지하면서 네트워크 트래픽을 제어할 수 있습니다. Client는 Snapshot 사이 구간을 보간해 부드럽게 표시합니다.
 
 ## 13. 핵심 요약
-- 게임 루프는 입력 처리, Simulation, 상태 전파를 반복하며 Tick은 서버가 논리 상태를 갱신하는 한 주기다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- Game Loop는 입력·Simulation·전파를 고정 Tick Rate로 반복하는 서버의 주 실행 구조다.
+- Fixed Delta는 결정론적 시뮬레이션과 Replay를 가능하게 한다.
+- Tick Budget을 설정하고 Overrun 시 무제한 따라잡기를 방지한다.
+- Simulation Tick Rate(30~64Hz)와 Snapshot 전송(10~20Hz)을 분리해 트래픽을 제어한다.
+- Client Timestamp를 신뢰하지 않으며 단조 증가 Server Clock으로 허용 Window를 설정한다.
+- Tick Thread는 I/O Thread와 분리해 Blocking이 Simulation에 영향을 주지 않게 한다.
+- Tick p99, Overrun 횟수, Queue 깊이를 Traffic과 같은 시간축으로 모니터링한다.
 
 ## 한 줄 정리
-> 게임 루프는 입력·Simulation·전파를 반복하고 Tick은 논리 시간 단위입니다. 고정 Tick과 작업 예산으로 일관성을 만들고 Overrun과 p99를 관찰합니다.
+
+> Game Loop는 입력·Simulation·전파를 Fixed Tick으로 반복하며, Tick Budget과 Tick/Snapshot Rate 분리로 일관성·지연·트래픽을 제어한다.

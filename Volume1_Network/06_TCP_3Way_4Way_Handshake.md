@@ -11,9 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- TCP 연결 설정에 세 단계가 필요한 이유를 설명할 수 있다.
-- TCP 종료가 일반적으로 네 단계인 이유를 설명할 수 있다.
-- SYN, ACK, FIN과 시퀀스 번호의 의미를 설명할 수 있다.
+- TCP 연결 설정에 세 단계가 필요한 이유(양방향 확인·초기 시퀀스 번호 교환)를 설명할 수 있다.
+- TCP 종료가 일반적으로 네 단계인 이유(전이중 방향별 독립 종료)를 설명할 수 있다.
+- SYN, ACK, FIN, RST와 시퀀스 번호의 의미를 설명할 수 있다.
+- CLOSE_WAIT, TIME_WAIT 상태가 발생하는 원인과 해결 방법을 설명할 수 있다.
 
 ## 1. 개요
 
@@ -95,6 +96,54 @@ Passive: ESTABLISHED → CLOSE_WAIT → LAST_ACK → CLOSED
 
 게임 클라이언트의 TCP `connect()`는 3-Way Handshake가 끝나야 성공한다. 하지만 이것은 로그인 성공이 아니다. 이후 프로토콜 버전과 토큰을 검증한다. 종료 시 클라이언트가 먼저 FIN을 보내도 서버는 버퍼에 남은 마지막 응답을 전송한 후 FIN을 보낼 수 있다.
 
+### 코드로 보는 연결 설정과 종료
+
+```java
+// 클라이언트: connect()가 반환 = 3-Way Handshake 완료
+SocketChannel channel = SocketChannel.open();
+channel.connect(new InetSocketAddress("203.0.113.10", 7777));
+// → SYN 전송, SYN+ACK 수신, ACK 전송 완료 → ESTABLISHED
+// 이 시점은 TCP 연결 성공, 로그인은 아님
+
+// 이후 응용 계층 인증 별도 수행
+channel.write(ByteBuffer.wrap(loginRequest));
+ByteBuffer response = ByteBuffer.allocate(1024);
+channel.read(response);
+// response에서 로그인 성공 여부 확인
+
+// 정상 종료: close() → FIN 전송
+channel.close();
+// → FIN_WAIT_1 → (ACK 수신) → FIN_WAIT_2 → (FIN 수신) → TIME_WAIT → CLOSED
+```
+
+```java
+// 서버: CLOSE_WAIT 누수 방지 — 소켓 종료 누락 체크
+// BAD: 예외 경로에서 close() 누락 → CLOSE_WAIT 유지
+public void handleClient(SocketChannel client) {
+    try {
+        processLogin(client);
+    } catch (Exception e) {
+        log.error("Error", e);
+        // close() 없음 → 클라이언트가 FIN을 보내도 CLOSE_WAIT에서 멈춤
+    }
+}
+
+// GOOD: try-with-resources로 항상 close 보장
+public void handleClient(SocketChannel client) {
+    try (SocketChannel ch = client) {
+        processLogin(ch);
+    } catch (Exception e) {
+        log.error("Error", e);
+    }
+}
+```
+
+```text
+상태 진행 요약:
+Client: CLOSED → SYN_SENT → ESTABLISHED → FIN_WAIT_1 → FIN_WAIT_2 → TIME_WAIT → CLOSED
+Server: LISTEN → SYN_RECEIVED → ESTABLISHED → CLOSE_WAIT → LAST_ACK → CLOSED
+```
+
 ## 5. 비슷한 개념과 비교
 
 | 구분 | 연결 설정 | 연결 종료 |
@@ -108,7 +157,21 @@ RST는 즉시 연결을 중단한다. FIN은 이전에 보낸 바이트를 정�
 
 ## 6. 장점과 단점
 
-핸드셰이크는 오래된 연결과 새 연결을 구분하고 양방향 통신 준비를 확인한다. 정상 종료는 남은 데이터를 보존한다. 반면 연결 설정에는 최소 한 번의 왕복 지연이 들고, 연결 상태와 종료 상태가 서버 자원을 사용한다.
+**3-Way Handshake 장점**
+- 오래된 연결의 지연 세그먼트와 새 연결을 구분한다.
+- 양쪽의 초기 시퀀스 번호를 교환해 순서 추적이 가능하다.
+- 양방향 송수신 가능 여부를 검증한다.
+
+**3-Way Handshake 단점**
+- 연결 설정마다 최소 1 RTT 지연이 발생한다.
+- SYN Flood 공격에 취약하다(SYN cookie로 완화 가능).
+
+**4-Way Handshake(정상 종료) 장점**
+- 전이중의 각 방향을 독립적으로 닫아 남은 데이터를 보존한다.
+
+**4-Way Handshake 단점**
+- CLOSE_WAIT: 애플리케이션이 소켓 종료를 누락하면 누수 발생.
+- TIME_WAIT: 능동 종료 측에 2MSL 동안 포트가 점유된다. 대량 단기 연결에서 임시 포트 고갈 가능.
 
 ## 7. 게임 서버·백엔드 실무 예시
 
@@ -126,21 +189,14 @@ RST는 즉시 연결을 중단한다. FIN은 이전에 보낸 바이트를 정�
 
 ## 8. 자주 하는 오해
 
-- “3-Way가 로그인까지 확인한다”: TCP 연결만 확인한다.
-- “종료는 반드시 네 패킷이다”: FIN과 ACK가 합쳐질 수 있다.
-- “FIN을 보내면 양방향이 즉시 닫힌다”: 한 방향 송신 종료다.
-- “TIME_WAIT는 서버에만 생긴다”: 일반적으로 능동 종료 측에 생긴다.
-- “RST와 FIN은 같다”: RST는 비정상적·즉시 중단 성격이다.
+- **”3-Way가 로그인까지 확인한다”**: 3-Way Handshake는 TCP 전송 경로만 확인한다. 계정 인증·프로토콜 버전 검증은 응용 계층에서 별도로 수행해야 한다.
+- **”종료는 반드시 네 패킷이다”**: FIN을 받은 쪽이 즉시 종료할 수 있으면 ACK와 FIN이 한 세그먼트에 담겨 3단계처럼 보일 수 있다.
+- **”FIN을 보내면 양방향이 즉시 닫힌다”**: FIN은 한 방향(송신) 종료만 의미한다. FIN을 받은 쪽은 ACK 후에도 반대 방향으로 데이터를 계속 보낼 수 있다.
+- **”TIME_WAIT는 서버에만 생긴다”**: TIME_WAIT는 능동적으로 FIN을 먼저 보낸 쪽에 생긴다. 클라이언트가 먼저 종료하면 클라이언트에 TIME_WAIT가 생긴다.
+- **”RST와 FIN은 같다”**: FIN은 남은 데이터를 정상 처리하며 한 방향을 닫는다. RST는 즉시 중단이라 미처리 데이터가 손실될 수 있다.
+- **”CLOSE_WAIT는 운영체제가 자동으로 정리한다”**: CLOSE_WAIT는 애플리케이션이 `close()`를 호출해야 해제된다. TIME_WAIT는 타이머(2MSL) 후 자동 정리되지만, CLOSE_WAIT는 코드 수정 없이는 누수가 지속된다.
+- **”SYN Flood는 서비스를 완전 차단한다”**: SYN cookie를 활성화하면 반쪽 열린 큐 없이 연결을 검증할 수 있어 정상 연결이 계속 처리된다. 다만 CPU 비용이 증가한다.
 
-### 최종 실무 판단 기준
-
-- **요구 확인**: 3-Way Handshake는 양방향 통신과 초기 시퀀스 번호를 확인한다. 이 내용을 적용하기 전에 데이터 규모, 호출 빈도와 허용 지연을 수치로 확인한다. 같은 기술도 요청량과 정확성 요구가 달라지면 적합한 선택이 달라질 수 있다.
-- **정확성 경계**: 종료는 각 송신 방향을 독립적으로 닫아 일반적으로 4단계다. 정상 흐름만 설명하지 않고 중복, 역순, 동시 실행과 부분 실패에서 어떤 불변식을 지켜야 하는지 함께 명시한다.
-- **비용 비교**: FIN은 정상적인 한 방향 종료이고 RST는 즉시 연결을 중단한다. 평균 복잡도나 처리량 하나만 보지 않고 Memory, CPU, I/O, Lock 대기와 구현 복잡도까지 비교한다.
-- **장애 대응**: TCP 3-Way·4-Way Handshake 관련 구성 요소가 느려지거나 중단됐을 때 Timeout, Retry 상한, Backpressure와 복구 순서를 정한다. Retry가 중복 부작용이나 연쇄 부하를 만들지 검증한다.
-- **운영 검증**: TCP 3-Way·4-Way Handshake에서는 기능 Test와 함께 경계값, Peak 부하와 장애 주입 Test를 수행한다. 처리 시간 p95·p99, 오류율, Queue와 Resource 사용량을 관찰하고 변경 전후 결과를 비교한다.
-
-TCP 3-Way·4-Way Handshake 답변에서는 이 기준으로 답하면 개념 정의에 그치지 않고 선택 조건, Trade-off와 실무 검증 방법까지 논리적으로 연결할 수 있다.
 
 ## 9. 면접 질문
 
@@ -176,6 +232,7 @@ FIN은 기존 데이터를 정상 처리하며 한 방향 송신을 종료한다
 - 마지막 ACK가 유실되면 어떻게 되나요?
 - 연결 재사용은 어떤 비용을 줄이나요?
 - 양쪽이 동시에 FIN을 보내면 종료 과정은 어떻게 달라지나요?
+- 게임 서버에서 FIN 수신 후 게임 세션을 즉시 삭제하지 않는 이유는 무엇인가요?
 
 ## 11. 30초 모범답변
 
@@ -187,11 +244,14 @@ FIN은 기존 데이터를 정상 처리하며 한 방향 송신을 종료한다
 
 ## 13. 핵심 요약
 
-- 3-Way Handshake는 양방향 통신과 초기 시퀀스 번호를 확인한다.
-- 종료는 각 송신 방향을 독립적으로 닫아 일반적으로 4단계다.
-- FIN은 정상적인 한 방향 종료이고 RST는 즉시 연결을 중단한다.
-- TCP 연결 성공은 게임 로그인 성공과 다르다.
-- 능동 종료 측은 일반적으로 TIME_WAIT를 거친다.
+- 3-Way Handshake는 양방향 송수신 가능 여부와 초기 시퀀스 번호를 교환해 연결을 성립시킨다.
+- 3-Way가 필요한 이유: 2번으로는 서버가 자신의 SYN+ACK가 클라이언트에게 도달했는지 확인할 수 없다.
+- 종료는 전이중의 두 방향을 독립적으로 닫아 일반적으로 4단계(FIN, ACK, FIN, ACK)다. ACK+FIN이 합쳐지면 3단계로 보일 수 있다.
+- FIN은 한 방향 송신 종료(나머지 방향은 계속 수신 가능), RST는 즉시 중단(미처리 데이터 손실).
+- CLOSE_WAIT: 상대 FIN 수신 후 애플리케이션 `close()` 미호출 → 누수. try-with-resources로 방지.
+- TIME_WAIT: 능동 종료 측에 2MSL 유지. 마지막 ACK 유실 대비 + 오래된 세그먼트 구분. 임시 포트 고갈 주의.
+- TCP 연결 성공(`connect()` 반환)은 3-Way Handshake 완료다. 게임 로그인 성공이 아니다.
+- 게임 서버: FIN 수신 후 세션 즉시 삭제 대신 재접속 유예 시간 운영. 소켓 생명주기와 세션 생명주기를 분리한다.
 
 ## 한 줄 정리
 

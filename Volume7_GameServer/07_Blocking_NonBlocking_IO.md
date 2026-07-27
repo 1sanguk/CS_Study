@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- Blocking과 Non-blocking I/O의 차이와 대규모 연결에서 Non-blocking이 필요한 이유를 설명할 수 있다.
+- epoll Level-triggered vs Edge-triggered 차이와 Partial Read/Write 처리 방법을 설명할 수 있다.
+- I/O Thread와 Logic Thread를 분리해야 하는 이유와 Send Queue Backpressure 설계를 설명할 수 있다.
+- Readiness 모델(epoll)과 Completion 모델(IOCP)의 Buffer 소유권 차이를 설명할 수 있다.
 
 ## 1. 개요
 Blocking I/O는 작업 완료까지 호출 Thread가 기다리고 Non-blocking I/O는 즉시 가능한 결과나 미완료를 반환한다.
@@ -105,51 +107,146 @@ Blocking과 Non-blocking I/O은 정상 경로만 구현해서는 운영 준비�
 Blocking과 Non-blocking I/O에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-한 Event Loop가 1만 Socket을 감시하다 Readable Event를 받으면 would-block까지 읽고 즉시 돌아간다. DB 조회는 별도 제한 Queue로 보내 다른 Socket 처리를 막지 않는다.
+
+아래는 Linux epoll Edge-triggered 기반 Non-blocking I/O 핵심 루프다.
+
+```cpp
+// Edge-triggered이므로 EAGAIN까지 모두 읽어야 Event를 놓치지 않는다
+void OnReadable(Session& session) {
+    while (true) {
+        ssize_t n = recv(session.fd, session.recvBuf.WriteHead(),
+                         session.recvBuf.Writable(), 0);
+        if (n > 0) {
+            session.recvBuf.CommitWrite(n);
+            ParseAndDispatch(session);  // Packet Framing 후 Logic Queue로
+        } else if (n == 0) {
+            session.Close(CloseReason::EOF_);  // 정상 종료
+            break;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;  // 다음 이벤트까지 대기
+            session.Close(CloseReason::Error);
+            break;
+        }
+    }
+}
+
+// Send — Partial Write 대응
+void FlushSendQueue(Session& session) {
+    while (!session.sendQueue.Empty()) {
+        auto& chunk = session.sendQueue.Front();
+        ssize_t n = send(session.fd, chunk.data + chunk.offset,
+                         chunk.size - chunk.offset, MSG_NOSIGNAL);
+        if (n > 0) {
+            chunk.offset += n;
+            if (chunk.offset == chunk.size) session.sendQueue.Pop();
+        } else {
+            if (errno == EAGAIN) {
+                epoll_mod(session.fd, EPOLLIN | EPOLLOUT | EPOLLET);  // Writable Event 등록
+            }
+            break;
+        }
+    }
+    if (session.sendQueue.Empty())
+        epoll_mod(session.fd, EPOLLIN | EPOLLET);  // EPOLLOUT 해제
+}
+```
+
+- `ParseAndDispatch`에서 DB Query나 Pathfinding을 직접 호출하면 다른 Socket 처리가 모두 지연된다. Logic Queue로 넘겨야 한다.
+- Send Queue가 상한을 넘으면 오래된 위치 Snapshot을 덮어쓰거나 Drop한다.
 
 ## 5. 비슷한 개념과 비교
-Blocking은 흐름이 단순하지만 대기 Thread 비용이 있고 Non-blocking은 연결 확장성이 좋지만 부분 I/O와 Buffer 수명이 복잡하다.
-## 6. 장점과 단점
-Blocking과 Non-blocking I/O을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Blocking 범위, Event Loop와 Readiness 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-I/O Thread는 Socket Event만 처리하고 Packet을 Work Queue로 넘긴다. 느린 Client 송신 Queue에 상한을 두고 중요하지 않은 Snapshot을 합친다.
 
-Blocking과 Non-blocking I/O 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
+| 방식 | 동작 | Thread 비용 | 확장성 | 복잡도 |
+|------|------|------------|--------|--------|
+| **Thread-per-connection (Blocking)** | recv가 데이터 올 때까지 대기 | 연결당 1 Thread | 수백 연결 | 코드 단순 |
+| **Select/Poll (Readiness)** | 준비된 FD 중 하나를 알림 | 공유 Thread | 수천 연결 | FD Set 복사 O(n) |
+| **epoll (Readiness)** | Kernel이 준비된 FD만 반환 | 공유 Thread | 수만 연결 | ET/LT 구분 필요 |
+| **IOCP (Completion)** | 작업 완료 후 Buffer와 함께 통지 | Thread Pool | 수만 연결 | Buffer Lifetime 관리 |
+| **io_uring (Completion)** | Ring Buffer로 시스템 콜 배치 | Thread Pool | 수만 연결 | 비교적 최신 API |
+
+## 6. 장점과 단점
+
+**장점**
+- 소수의 Thread로 수만 개의 연결을 처리할 수 있어 메모리와 Context Switch 비용을 줄인다.
+- I/O Thread가 Byte 이동과 Framing만 담당해 책임이 명확하다.
+- Send Queue + Backpressure 설계로 느린 클라이언트가 서버 전체에 영향을 주지 않는다.
+- Event 기반 아키텍처는 연결 수 증가에 비례해 스케일이 가능하다.
+
+**단점**
+- Partial Read/Write, EAGAIN 처리, Buffer 수명 관리가 Blocking보다 복잡하다.
+- Edge-triggered epoll에서 EAGAIN까지 모두 읽지 않으면 다음 Event를 놓칠 수 있다.
+- IOCP에서 Overlapped Buffer를 Completion 전에 해제하면 메모리 오염이 발생한다.
+- I/O Thread에서 무거운 작업을 하면 Non-blocking의 장점이 사라진다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+I/O Thread는 epoll Event Loop만 돌리고 완전한 Packet이 파싱되면 Session ID와 함께 Logic Queue에 넣는다. Logic Thread는 Tick마다 Queue를 드레인해 게임 상태를 업데이트한다.
+
+Send Queue 상한(예: 64KB)을 넘으면 위치 Snapshot 같은 상태 메시지는 덮어쓰고, 인벤토리 변경 같은 중요 메시지는 대기시키거나 연결을 끊는다. 연결 수·Event Loop 지연·EAGAIN 비율·Send Queue 크기를 지표로 수집한다.
 
 ## 8. 자주 하는 오해
-- **Blocking 범위**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Event Loop**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Readiness**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Completion**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Partial Read**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **Non-blocking I/O를 쓰면 항상 처리량이 높아진다.** Event Loop 안에서 DB 조회나 파일 I/O를 동기로 호출하면 Single Thread 병목이 생겨 오히려 Blocking보다 나빠진다.
+- **Single Thread Event Loop는 동시성 문제가 없다.** 외부 콜백, Signal Handler, 공유 전역 변수 접근에서 Race가 여전히 발생한다. 특히 Timer 콜백이 다른 Thread에서 호출되는 경우가 있다.
+- **Readiness Event가 오면 완전한 Packet이 도착했다.** Readiness는 "지금 읽을 바이트가 있다"는 신호이며 완전한 Frame이 왔다는 보장이 아니다. Accumulation Buffer와 Framing이 여전히 필요하다.
+- **Non-blocking recv가 -1이면 항상 오류다.** `errno == EAGAIN || errno == EWOULDBLOCK`은 오류가 아니라 "지금 읽을 데이터 없음"이다. 정상적으로 루프를 탈출하고 다음 Event를 기다려야 한다.
+- **IOCP Completion Event가 오면 Buffer가 안전하다.** Completion이 오기 전에 Buffer를 해제하면 메모리 오염이 발생한다. Overlapped 구조체와 Buffer는 Completion까지 살아 있어야 한다.
+- **epoll Edge-triggered에서 한 번만 읽어도 된다.** ET에서는 상태 변화 시 한 번만 알린다. EAGAIN까지 반복해서 읽지 않으면 다음 데이터가 올 때까지 Event를 받지 못한다.
+- **Partial Write는 잘 발생하지 않는다.** 커널 Send Buffer가 가득 찼을 때 `send`는 일부만 전송하고 반환한다. 반환값을 확인해 남은 데이터를 Send Queue에 유지해야 한다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Blocking I/O는 작업 완료까지 호출 Thread가 기다리고 Non-blocking I/O는 즉시 가능한 결과나 미완료를 반환한다.
-### Q2. 왜 필요한가요?
-많은 연결의 대기 시간에 Thread를 하나씩 점유하지 않고 제한된 Thread로 I/O를 처리한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-I/O Thread는 Socket Event만 처리하고 Packet을 Work Queue로 넘긴다. 느린 Client 송신 Queue에 상한을 두고 중요하지 않은 Snapshot을 합친다.
-### Q4. 장애 시 무엇을 확인하나요?
-Blocking과 Non-blocking I/O 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. Blocking과 Non-blocking I/O의 차이와 대규모 연결에서 Non-blocking이 필요한 이유는?
+Blocking `recv`는 데이터가 없으면 호출 Thread를 기다리게 합니다. 연결마다 Thread를 배치하면 수만 연결 시 Stack 메모리와 Context Switch 비용이 증가합니다. Non-blocking은 데이터 없으면 `EAGAIN`을 반환해 Thread가 다른 연결의 Event를 처리할 수 있습니다.
+
+### Q2. epoll Level-triggered와 Edge-triggered의 차이는 무엇인가요?
+Level-triggered(LT)는 FD가 준비 상태인 동안 계속 Event를 알립니다. Edge-triggered(ET)는 상태 변화 시 한 번만 알립니다. ET에서는 EAGAIN까지 모두 읽어야 다음 데이터 도착 시 Event를 받을 수 있습니다. ET는 불필요한 wakeup이 적지만 구현이 더 복잡합니다.
+
+### Q3. Partial Read/Write 상황을 어떻게 처리하나요?
+`recv`는 요청한 것보다 적은 바이트를 반환할 수 있습니다. Accumulation Buffer에 쌓고 완전한 Frame이 모일 때까지 대기합니다. `send`도 마찬가지로 일부만 전송하면 남은 offset을 Session의 Send Queue에 저장하고, 다음 EPOLLOUT Event에서 이어서 전송합니다.
+
+### Q4. I/O Thread에서 무거운 로직을 수행하면 어떤 문제가 생기나요?
+I/O Thread가 DB 조회나 경로 탐색을 동기로 수행하면 그 시간 동안 다른 모든 연결의 Event 처리가 지연됩니다. Single Thread Event Loop이 10ms 동안 블로킹되면 1만 연결 모두에 10ms 지연이 전파됩니다. 무거운 작업은 제한된 Logic Queue로 오프로드해야 합니다.
+
+### Q5. Send Queue Backpressure를 어떻게 설계하나요?
+Session별 Send Queue에 Byte 상한(예: 64KB)을 두고, 초과 시 메시지 종류에 따라 다른 정책을 적용합니다. 위치 Snapshot처럼 최신 값만 의미 있는 메시지는 오래된 것을 덮어씁니다. 인벤토리 변경처럼 모든 이벤트가 중요한 메시지는 대기열에 유지하거나 상한 초과 시 연결을 끊습니다.
+
+### Q6. Readiness 모델(epoll)과 Completion 모델(IOCP)의 Buffer 소유권 차이는?
+epoll Readiness는 "이제 읽을 수 있다"고 알리고 앱이 직접 `recv`를 호출합니다. Buffer는 앱이 소유하고 `recv` 호출 시점에만 필요합니다. IOCP Completion은 `WSARecv`에 Buffer를 등록하고 I/O 완료 후 Buffer와 함께 통지합니다. Overlapped Buffer는 Completion Event가 올 때까지 해제하면 안 됩니다.
 
 ## 10. 예상 꼬리질문
-- Blocking 범위의 최종 소유자는 어디에 두나요?
-- Event Loop 처리에서 중복과 역순은 어떻게 구분하나요?
-- Readiness의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Completion 장애를 어떻게 재현하고 복구를 검증하나요?
-- Partial Read 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- `epoll_wait` 반환 후 여러 Event를 처리하는 순서가 성능에 영향을 주나요?
+- Reactor 패턴과 Proactor 패턴의 차이는 무엇인가요?
+- `io_uring`이 epoll 대비 유리한 상황은 언제인가요?
+- Session별 Send Queue에서 Head-of-Line Blocking을 어떻게 줄이나요?
+- Non-blocking I/O에서 Timeout을 어떻게 구현하나요?
+- Event Loop이 CPU 100%일 때 병목을 어떻게 찾나요?
+- 연결이 끊겼을 때 진행 중인 비동기 I/O Callback을 어떻게 안전하게 취소하나요?
+
 ## 11. 30초 모범답변
-> Blocking은 완료까지 Thread를 기다리게 하고 Non-blocking은 즉시 제어를 돌려줍니다. 대규모 연결에서는 Event 기반 I/O와 Buffer·Backpressure를 함께 설계합니다. I/O Thread는 Socket Event만 처리하고 Packet을 Work Queue로 넘긴다.
+
+> Blocking recv는 데이터가 없으면 Thread를 기다리게 해 대규모 연결에서 Thread 비용이 큽니다. Non-blocking과 epoll을 조합하면 소수의 Thread로 수만 연결을 처리할 수 있습니다. I/O Thread는 Byte 이동과 Framing만 담당하고 무거운 Logic은 별도 Queue로 오프로드해야 합니다.
 
 ## 12. 1~2분 확장답변
-> Blocking은 완료까지 Thread를 기다리게 하고 Non-blocking은 즉시 제어를 돌려줍니다. 대규모 연결에서는 Event 기반 I/O와 Buffer·Backpressure를 함께 설계합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> Blocking recv는 데이터가 없으면 Thread가 기다려 연결마다 Thread를 배치해야 합니다. 수만 연결에서는 Stack 메모리와 Context Switch 비용이 감당하기 어렵습니다. epoll 같은 Non-blocking I/O는 소수의 Thread로 수만 FD를 감시하며 준비된 것만 처리합니다.
+>
+> Edge-triggered epoll은 EAGAIN까지 모두 읽어야 다음 Event를 받을 수 있습니다. Partial Read는 Accumulation Buffer, Partial Write는 Send Queue와 EPOLLOUT 재등록으로 처리합니다.
+>
+> I/O Thread에서 DB Query나 Pathfinding을 직접 실행하면 Single Thread 병목이 생깁니다. 완전한 Packet이 Framing되면 Logic Queue로 넘기고, Send Queue에 Byte 상한을 두어 느린 클라이언트가 서버 전체를 늦추지 않도록 합니다.
 
 ## 13. 핵심 요약
-- Blocking I/O는 작업 완료까지 호출 Thread가 기다리고 Non-blocking I/O는 즉시 가능한 결과나 미완료를 반환한다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- Blocking recv는 Thread를 기다리게 해 대규모 연결에서 Thread 비용이 문제가 된다.
+- epoll+Non-blocking으로 소수의 Thread가 수만 연결의 I/O를 처리할 수 있다.
+- Edge-triggered epoll은 EAGAIN까지 반복해서 읽어야 다음 Event를 놓치지 않는다.
+- Partial Read는 Accumulation Buffer, Partial Write는 Send Queue + EPOLLOUT 재등록으로 처리한다.
+- I/O Thread는 Byte 이동·Framing만 담당하고 무거운 Logic은 Logic Queue로 오프로드한다.
+- Send Queue에 Byte 상한을 두고 중요도에 따라 Drop·덮어쓰기·연결 종료를 적용한다.
+- Readiness(epoll)는 앱이 recv 시점에 Buffer를 소유하고, Completion(IOCP)은 등록 Buffer를 Completion까지 유지해야 한다.
+- Event Loop 지연·EAGAIN 비율·Send Queue 크기를 지표로 수집해 병목을 감시한다.
 
 ## 한 줄 정리
-> Blocking은 완료까지 Thread를 기다리게 하고 Non-blocking은 즉시 제어를 돌려줍니다. 대규모 연결에서는 Event 기반 I/O와 Buffer·Backpressure를 함께 설계합니다.
+
+> Blocking은 Thread를 기다리게 하고 Non-blocking + epoll은 소수의 Thread로 수만 연결을 처리하며, I/O Thread는 Byte 이동·Framing만 담당하고 무거운 Logic은 Queue로 오프로드해야 한다.

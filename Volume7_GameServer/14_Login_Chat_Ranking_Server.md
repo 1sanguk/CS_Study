@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 원리와 등장 이유를 설명할 수 있다.
-- 정확성·지연·운영 Trade-off를 설명할 수 있다.
-- 게임 서버 설계와 장애 대응에 적용할 수 있다.
+
+- Login Server의 Token 발급 흐름과 Game Server에서의 검증 방법을 설명할 수 있다.
+- Chat Server의 Channel Fan-out과 순서·중복·Backpressure 처리를 설명할 수 있다.
+- Ranking Server에서 점수 원본 권위를 지키고 Redis Sorted Set과 영속 원본을 분리하는 이유를 설명할 수 있다.
+- 세 서비스의 장애 격리 기준과 독립 확장이 필요한 시점을 설명할 수 있다.
 
 ## 1. 개요
 Login은 신원·Session 발급, Chat은 실시간 Message Fan-out과 정책, Ranking은 점수 갱신과 정렬 조회를 담당하는 서비스다.
@@ -101,51 +103,134 @@ Login, Chat, Ranking Server은 정상 경로만 구현해서는 운영 준비가
 Login, Chat, Ranking Server에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-Login은 짧은 수명의 Ticket을 발급하고 Chat은 Channel별 Sequence로 Fan-out한다. Match Result Event는 중복 ID를 검증한 뒤 Ranking 원본 점수에 한 번만 반영한다.
+
+세 서비스의 핵심 흐름을 간략히 정리한 코드다.
+
+```
+// Login: 짧은 수명 Ticket 발급
+func Login(credential) -> Ticket:
+    user = DB.VerifyPassword(credential)       // bcrypt 검증
+    if rate_limit.Exceeded(credential.ip, user.id): return TooManyRequests
+    ticket = JWT.Sign({sub: user.id, exp: now+300, aud: "gameserver"})
+    return ticket   // 5분 수명, 서버 서명
+
+// Game Server: Ticket 검증
+func ValidateTicket(ticket) -> UserId:
+    claims = JWT.Verify(ticket, publicKey)     // 서명·만료·Audience 확인
+    if claims.aud != "gameserver": raise Unauthorized
+    return claims.sub
+
+// Chat: Channel Fan-out (Channel별 순서 보장)
+func SendChat(session, channelId, text):
+    sender = session.UserId                    // Client가 Sender 주장 불가
+    if spam_filter.Block(sender, text): return
+    seq = channel.NextSequence(channelId)      // 원자적 Sequence 발급
+    msg = {seq, sender, text, ts: now()}
+    channel.Broadcast(channelId, msg)          // 구독 Connection에 Fan-out
+    if offline_storage.Required(channelId):
+        db.SaveMessage(msg)
+
+// Ranking: Result Event → 점수 반영 (클라이언트 제출 불가)
+func OnMatchResult(event: MatchResult):
+    if db.IsDuplicate(event.matchId): return   // 중복 방지 (Idempotency)
+    db.SaveResult(event)                       // 영속 원본
+    redis.ZIncrBy("ranking:"+event.season, event.delta, event.playerId)
+```
+
+- Chat에서 `sender = session.UserId`로 서버가 Sender를 결정한다. Client가 Sender를 주장하면 위장이 된다.
+- Ranking의 점수는 반드시 서버의 Match Result Event에서 온다. 클라이언트가 점수를 직접 제출하면 안 된다.
 
 ## 5. 비슷한 개념과 비교
-세 기능은 보안, Fan-out과 정렬이라는 부하 특성이 다르다. 별도 서비스는 독립 확장에 유리하지만 작은 규모에서는 Module 경계가 더 단순하다.
-## 6. 장점과 단점
-Login, Chat, Ranking Server을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Credential 검증, Access Token와 Ticket 만료 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-Ranking은 Redis Sorted Set으로 빠르게 조회하고 DB·Event Log를 복구 원본으로 둘 수 있다. 시즌 전환은 versioned key와 원자적 노출로 처리한다.
 
-Login, Chat, Ranking Server 관점에서는 평균보다 p95·p99, 지역·Network별 분포, Queue·Buffer 상한, Drop·Retry와 복구 성공률을 관찰한다.
+| 서비스 | 핵심 부하 | 상태 특성 | 주요 위험 | 독립 확장 필요 시점 |
+|--------|---------|---------|---------|----------------|
+| **Login** | 인증 Burst (피크 시 집중) | Stateless (Token 서명) | Credential 탈취, Brute Force | 로그인 피크가 Game 서버에 영향 줄 때 |
+| **Chat** | Fan-out (1→N) | Channel 구독 목록 | Spam, 메시지 순서, 느린 Client | 채팅 트래픽이 게임 Logic에 영향 줄 때 |
+| **Ranking** | 정렬 조회 (Top N) | Score + 동점 규칙 | 점수 조작, 중복 갱신 | 조회 부하가 높거나 시즌 초기 Burst |
+
+## 6. 장점과 단점
+
+**장점**
+- 기능별 보안·Fan-out·정렬 부하가 달라 독립 확장과 장애 격리가 쉬워진다.
+- Login이 짧은 수명 Token을 발급하면 탈취 피해 범위가 Token 수명으로 제한된다.
+- Chat은 Channel별 Partition으로 전역 순서 없이 채널 내 순서를 효율적으로 유지한다.
+- Ranking은 Redis로 빠르게 조회하고 DB를 영속 원본으로 분리해 Crash 후 복구가 가능하다.
+
+**단점**
+- 세 서비스가 별도 Process이면 Timeout·Retry·Service Discovery·Schema 호환성 관리 비용이 증가한다.
+- Login → Game Server 간 Token 검증 트래픽이 늘면 검증 서비스가 병목이 된다.
+- Chat Fan-out은 구독자가 많을수록 지연이 증가하고 느린 Client 처리 정책이 필요하다.
+- Ranking Redis와 DB 간 일시적 불일치가 보상 확정 시 문제가 될 수 있다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+Login Token은 5분 수명으로 짧게 설정하고 Game Server 연결 수립 시 한 번만 검증한다. Token Key Rotation 시 이전 Key와 새 Key를 겹쳐 검증 기간을 두어 무중단 전환한다.
+
+Ranking은 Redis Sorted Set으로 실시간 조회하고 DB·Event Log를 복구 원본으로 둔다. 시즌 전환은 Versioned Key(`ranking:season2`)로 전환해 이전 시즌 데이터를 보존한다. Match Result 중복 반영을 `matchId`로 방지한다.
 
 ## 8. 자주 하는 오해
-- **Credential 검증**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Access Token**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Ticket 만료**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Key Rotation**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Login Rate Limit**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **Credential 검증은 로그인 시 한 번만 하면 된다.** 장기 Session 중 계정 도용·정지 상태 변경을 감지하려면 Token 갱신 시 재검증이 필요하다.
+- **Access Token이 있으면 모든 리소스에 접근할 수 있다.** Authentication(신원 확인)과 Authorization(권한 확인)은 별개다. Ranking 수정 API는 Admin 권한만 허용해야 한다.
+- **Token이 만료되면 즉시 로그아웃해야 한다.** 게임 중 Silent Refresh(백그라운드 갱신)로 중단 없이 Token을 교체할 수 있다.
+- **Key Rotation하면 모든 기존 Token이 즉시 무효가 된다.** 이전 Key의 Token 유효기간 동안 구 Key도 검증하는 Overlap 기간을 두어야 한다.
+- **Login Rate Limit은 IP 기준으로만 설정하면 된다.** CDN·NAT 환경에서 IP 기반 제한은 정상 사용자도 차단한다. IP + 계정 단위 제한을 함께 사용한다.
+- **Chat에서 Client가 Sender를 지정하면 편하다.** Client가 Sender ID를 조작하면 다른 사람 명의로 메시지를 보낼 수 있다. 서버가 인증 Session에서 Sender를 결정한다.
+- **Ranking은 Redis에만 저장하면 된다.** Redis는 영속성이 보장되지 않는다. Crash 복구와 시즌 집계를 위해 DB를 권위 원본으로 유지한다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Login은 신원·Session 발급, Chat은 실시간 Message Fan-out과 정책, Ranking은 점수 갱신과 정렬 조회를 담당하는 서비스다.
-### Q2. 어떤 Trade-off가 있나요?
-Login은 보안과 Rate Limit, Chat은 순서·중복·금칙어·Backpressure, Ranking은 동점 규칙·시즌과 최종 원본이 핵심이다. 반드시 별도 Microservice일 필요는 없다.
-### Q3. 실무 적용 사례는 무엇인가요?
-Ranking은 Redis Sorted Set으로 빠르게 조회하고 DB·Event Log를 복구 원본으로 둘 수 있다. 시즌 전환은 versioned key와 원자적 노출로 처리한다.
-### Q4. 장애와 악용을 어떻게 제한하나요?
-Login, Chat, Ranking Server 관점에서는 서버 검증, 시간·크기 상한, Version과 Idempotency, Backpressure와 지표를 적용한다.
+
+### Q1. Login Server의 Token 발급 흐름을 설명해 주세요.
+클라이언트가 Credential을 Login Server에 전송합니다. Login Server는 Password Hash를 검증하고 Rate Limit을 확인한 뒤 짧은 수명(5분)의 JWT를 서명해 반환합니다. 클라이언트는 이 Token으로 Game Server나 Gateway에 접속하고, Game Server는 서명·만료·Audience를 검증합니다.
+
+### Q2. Chat Channel의 순서 보장과 Fan-out은 어떻게 처리하나요?
+Channel을 한 Partition Owner에 배치해 Channel 내 Message Sequence를 원자적으로 발급합니다. 전역 순서는 비용이 크고 대개 불필요합니다. Fan-out은 Channel 구독자에게 브로드캐스트하되, 느린 클라이언트의 Send Queue에 상한을 두고 오래된 일반 Chat을 Drop합니다.
+
+### Q3. Ranking에서 클라이언트가 점수를 제출하면 안 되는 이유와 설계는?
+클라이언트 코드는 조작 가능하므로 점수를 직접 제출하면 치팅이 됩니다. 점수는 Game Server의 권위 Match Result Event에서 생성하고 `matchId`로 중복 반영을 막습니다. Redis Sorted Set으로 빠른 조회를 지원하고 DB를 영속 원본으로 분리합니다.
+
+### Q4. Token Key Rotation 시 기존 Token이 무효가 되지 않으려면 어떻게 하나요?
+새 Key로 서명하기 시작해도 이전 Key로 서명된 Token이 만료될 때까지 구 Key도 검증합니다. Key ID(kid)를 Token Header에 포함해 어떤 Key로 서명됐는지 구분합니다. Overlap 기간 동안 구/신 Key를 모두 검증합니다.
+
+### Q5. 세 서비스를 분리해야 하는 기준은 무엇인가요?
+Login은 Credential 처리 보안과 Burst 부하, Chat은 Fan-out 연결 수, Ranking은 정렬 조회 부하가 각각 다른 특성입니다. 한 기능의 부하·장애가 다른 기능에 영향을 주기 시작할 때 서비스를 분리합니다. 작은 규모에서는 Module 경계로 시작하고 측정 결과를 보며 분리합니다.
+
+### Q6. Ranking 시즌 전환을 어떻게 처리하나요?
+이전 시즌 Key(`ranking:season1`)를 보관하고 새 시즌 Key(`ranking:season2`)로 전환합니다. 전환 순간 읽기 Traffic을 새 Key로 원자적으로 전환합니다. 이전 시즌 Top N은 DB에서 집계해 별도로 저장하고 보상 지급 기준 Snapshot을 영속화합니다.
 
 ## 10. 예상 꼬리질문
-- Credential 검증의 최종 소유자는 어디에 두나요?
-- Access Token 처리에서 중복과 역순은 어떻게 구분하나요?
-- Ticket 만료의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Key Rotation 장애를 어떻게 재현하고 복구를 검증하나요?
-- Login Rate Limit 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Login Server 장애 시 기존 Game Session까지 끊을지, 신규 Login만 막을지 어떻게 구분하나요?
+- Chat에서 귓속말(DM)과 채널 Chat의 저장 정책을 어떻게 다르게 설계하나요?
+- Ranking에서 Top N과 "내 주변 순위" 조회의 구현 방법 차이는?
+- 동점 처리를 위한 Secondary Sort Key를 Redis Sorted Set에서 어떻게 인코딩하나요?
+- Chat 금칙어 필터를 실시간으로 업데이트할 때 Service 재시작 없이 어떻게 적용하나요?
+- Login 실패 횟수 제한을 분산 환경에서 어떻게 정확하게 집계하나요?
+- Ranking DB와 Redis 간 불일치가 발생했을 때 복구 절차는?
+
 ## 11. 30초 모범답변
-> Login·Chat·Ranking은 서로 다른 보안, Fan-out, 정렬 요구를 가집니다. 상태 원본과 장애 복구 기준을 정하고 독립 확장이 필요할 때 경계를 분리합니다. Ranking은 Redis Sorted Set으로 빠르게 조회하고 DB·Event Log를 복구 원본으로 둘 수 있다.
+
+> Login은 짧은 수명 Token으로 인증을 격리하고, Chat은 Channel별 Partition으로 순서를 유지하며 Fan-out합니다. Ranking 점수는 서버의 권위 Match Result에서만 반영하고 Redis로 빠른 조회를, DB로 영속 원본을 분리합니다. 기능별 부하 특성이 다르므로 독립 확장이 필요할 때 서비스를 분리합니다.
 
 ## 12. 1~2분 확장답변
-> Login·Chat·Ranking은 서로 다른 보안, Fan-out, 정렬 요구를 가집니다. 상태 원본과 장애 복구 기준을 정하고 독립 확장이 필요할 때 경계를 분리합니다. 설계에서는 서버가 최종 상태를 소유하고 Client 입력, Sequence와 시간을 검증합니다. 지연은 Prediction·Interpolation과 제한된 Rewind로 보정합니다. Queue, Pool과 Cache에는 상한을 두고 재접속·배포·중복 처리까지 정상 흐름으로 설계합니다.
+
+> Login Server는 Credential 검증 후 짧은 수명(5분) JWT를 서명해 반환합니다. Game Server는 서명·만료·Audience를 검증합니다. Rate Limit은 IP와 계정 단위를 함께 적용하고, Key Rotation 시 Overlap 기간으로 무중단 전환합니다.
+>
+> Chat은 Channel별 Partition Owner가 Sequence를 발급해 채널 내 순서를 보장합니다. 서버가 인증 Session에서 Sender를 결정하고 금칙어·Spam·길이를 검증합니다. 느린 클라이언트의 Queue에 상한을 두고 오래된 Chat을 Drop합니다.
+>
+> Ranking 점수는 서버의 권위 Match Result Event에서 생성합니다. Redis Sorted Set으로 실시간 순위를 조회하고 DB를 복구 원본으로 유지합니다. `matchId`로 중복 반영을 막고, 시즌 전환은 Versioned Key로 이전 시즌을 보존합니다.
 
 ## 13. 핵심 요약
-- Login은 신원·Session 발급, Chat은 실시간 Message Fan-out과 정책, Ranking은 점수 갱신과 정렬 조회를 담당하는 서비스다.
-- 서버 권위와 입력 검증을 유지한다.
-- Version·Sequence로 중복과 순서를 관리한다.
-- 성능 구조에는 크기와 시간 상한이 필요하다.
-- 복구와 p99를 운영 기준으로 둔다.
+
+- Login은 Credential 검증 후 짧은 수명 Token을 서명 발급하고 Game Server가 서명·만료·Audience를 검증한다.
+- Key Rotation 시 Overlap 기간 동안 구/신 Key를 모두 검증해 무중단 전환한다.
+- Chat Sender는 서버의 인증 Session이 결정하고 클라이언트가 주장하지 못한다.
+- Channel별 Partition으로 채널 내 순서를 보장하고 전역 순서는 사용하지 않는다.
+- Ranking 점수는 서버의 권위 Match Result에서만 생성하고 `matchId`로 중복 반영을 막는다.
+- Redis Sorted Set으로 빠른 순위 조회를, DB로 영속 원본과 복구를 분리한다.
+- 시즌 전환은 Versioned Key로 이전 시즌을 보존하고 보상 기준 Snapshot을 영속화한다.
+- 기능별 부하·장애 특성이 다르므로 한 기능이 다른 기능에 영향을 줄 때 서비스를 분리한다.
 
 ## 한 줄 정리
-> Login·Chat·Ranking은 서로 다른 보안, Fan-out, 정렬 요구를 가집니다. 상태 원본과 장애 복구 기준을 정하고 독립 확장이 필요할 때 경계를 분리합니다.
+
+> Login은 짧은 수명 Token으로 인증을 격리하고, Chat은 Channel별 Sequence로 Fan-out하며 서버가 Sender를 결정하고, Ranking은 서버 권위 Result에서만 점수를 반영하며 Redis 조회와 DB 원본을 분리한다.

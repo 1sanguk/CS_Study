@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- Connection과 Session의 수명 분리 원칙과 필요성을 설명할 수 있다.
+- Grace Period를 이용한 재접속 허용 설계를 설명할 수 있다.
+- Generation Counter로 오래된 Connection 콜백을 폐기하는 방법을 설명할 수 있다.
+- 중복 로그인 처리와 Session 인수인계 설계를 설명할 수 있다.
 
 ## 1. 개요
 Connection은 Socket 기반 전송 경로이고 Session은 인증 사용자, Protocol 상태와 재접속 정보를 담는 응용 계층 대화 상태다.
@@ -156,39 +158,63 @@ Session과 Connection을 올바르게 적용하면 상태와 처리 책임이 �
 Session과 Connection 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- **Connection 수명**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Session 수명**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **인증 상태**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Session ID**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Generation**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+- TCP Connection이 살아 있으면 Session도 유효하다고 생각한다. 연결과 게임 Session의 수명 주기는 독립적으로 관리해야 하며 연결이 끊겨도 Session을 일정 시간 유지할 수 있다.
+- Session이 끊기면 즉시 정리해야 한다고 생각한다. Grace Period 동안 재연결을 허용하는 설계로 일시적 네트워크 불안정에 대응할 수 있다.
+- 인증 상태를 한 번 확인하면 세션 내내 신뢰할 수 있다고 생각한다. Token 만료, Revoke, 권한 변경을 주기적으로 확인해야 한다.
+- Session ID만 있으면 플레이어를 신뢰할 수 있다고 생각한다. Session ID 도용 방지를 위해 IP 검증, 재발급 등 추가 방어가 필요하다.
+- Generation 카운터가 있으면 오래된 Handle 문제가 완전히 없어진다고 생각한다. Generation은 재사용 충돌을 줄이지만 올바른 폐기 순서와 재사용 정책도 함께 설계해야 한다.
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Connection은 Socket 기반 전송 경로이고 Session은 인증 사용자, Protocol 상태와 재접속 정보를 담는 응용 계층 대화 상태다.
-### Q2. 왜 필요한가요?
-네트워크 단절과 사용자 상태 수명을 분리해 인증, 중복 로그인과 재접속을 안전하게 처리한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-모바일 전환으로 연결이 끊겨도 캐릭터를 즉시 삭제하지 않고 유예 시간 동안 보관한다. 새 연결 인증 후 generation을 올려 이전 Socket의 늦은 Packet을 폐기한다.
-### Q4. 장애 시 무엇을 확인하나요?
-Session과 Connection 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. Connection과 Session의 차이를 설명해 주세요.
+Connection은 Socket 기반 전송 경로로 수시로 바뀔 수 있습니다. Session은 인증된 사용자, Protocol 상태, 재접속 정보를 담는 응용 계층 대화 상태입니다. 둘의 수명을 분리하면 Connection이 끊겨도 Session을 유지해 재접속을 지원할 수 있습니다.
+
+### Q2. 모바일 환경의 재접속을 어떻게 지원하나요?
+Connection이 끊겨도 Session을 Grace Period(예: 30초) 동안 보관합니다. 새 Connection에서 인증 후 Resume Token을 검증해 기존 Session에 연결합니다. Generation을 증가시켜 이전 Connection의 늦은 콜백을 폐기합니다.
+
+### Q3. Generation Counter는 어떤 문제를 해결하나요?
+Connection 교체 후 이전 Socket의 비동기 콜백이 늦게 도착해 새 Session 상태를 덮어쓰는 문제를 방지합니다. 콜백이 도착하면 현재 Generation과 비교해 오래된 것을 폐기합니다.
+
+### Q4. 중복 로그인을 어떻게 처리하나요?
+새 Connection 인증 시 기존 Session을 확인합니다. 정책에 따라 기존을 만료하고 새 Connection을 붙이거나, 기존이 유지되면 새 연결을 거부합니다. 두 Session이 같은 캐릭터를 동시에 제어하면 안 됩니다.
+
+### Q5. Session 생성·유지·종료 각 단계에서 무엇을 확인하나요?
+생성 시 인증 Token 검증·중복 확인, 유지 중 Token 만료·Revoke 주기 확인, 종료 시 Outstanding I/O 완료 대기·캐릭터 상태 저장·Grace Period 타이머 설정이 필요합니다.
+
+### Q6. Session 리소스 한도 초과 시 어떻게 처리하나요?
+최대 Session 수에 도달하면 신규 연결을 거부하고 클라이언트에 재시도 안내를 보냅니다. 기존 Session 중 Grace Period 만료된 것을 우선 정리합니다. Session 수·Memory·연결 수를 함께 모니터링합니다.
 
 ## 10. 예상 꼬리질문
-- Connection 수명의 최종 소유자는 어디에 두나요?
-- Session 수명 처리에서 중복과 역순은 어떻게 구분하나요?
-- 인증 상태의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Session ID 장애를 어떻게 재현하고 복구를 검증하나요?
-- Generation 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Session과 Connection을 같은 객체로 관리하면 어떤 문제가 생기나요?
+- Token 기반 인증과 Session 기반 인증의 차이는 무엇인가요?
+- Session Affinity(Sticky Session)가 필요한 상황은 언제인가요?
+- Session을 분산 서버에 공유할 때 어떤 문제가 있나요?
+- Heartbeat와 Grace Period는 어떻게 연동하나요?
+- 동시 접속 피크에서 Session 생성 병목을 어떻게 완화하나요?
+- 배포 중 기존 Session을 Drain하는 절차는 어떻게 설계하나요?
+
 ## 11. 30초 모범답변
-> Connection은 네트워크 경로이고 Session은 인증된 논리 상태입니다. 둘의 수명을 분리하고 재접속 시 소유권과 중복 연결을 원자적으로 전환해야 합니다. 모바일 전환으로 연결이 끊겨도 캐릭터를 즉시 삭제하지 않고 유예 시간 동안 보관한다.
+
+> Connection은 네트워크 경로이고 Session은 인증된 논리 상태입니다. 둘의 수명을 분리하면 모바일 Wi-Fi 전환처럼 Connection이 끊겨도 Session을 Grace Period 동안 유지해 재접속을 지원할 수 있습니다. 새 연결 인증 후 Generation을 올려 이전 Connection의 늦은 콜백을 폐기합니다.
 
 ## 12. 1~2분 확장답변
-> Connection은 네트워크 경로이고 Session은 인증된 논리 상태입니다. 둘의 수명을 분리하고 재접속 시 소유권과 중복 연결을 원자적으로 전환해야 합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> Connection은 Socket 기반 전송 경로이고 Session은 인증·게임 상태를 담는 응용 계층 상태입니다. Connection이 끊겨도 Session을 Grace Period 동안 보관하면 재접속이 가능합니다. 새 Connection에서 Resume Token 검증 후 Generation을 증가시켜 이전 콜백을 폐기합니다.
+>
+> 중복 로그인은 기존 Session 만료 후 교체하거나 새 연결 거부로 처리하며, 두 Session이 같은 캐릭터를 동시에 제어하면 안 됩니다. Token 만료·Revoke를 주기적으로 확인해 인증 상태를 유효하게 유지합니다.
+>
+> Session 수·Memory·연결 수를 함께 모니터링하고, 최대 Session 한도 도달 시 Grace Period 만료 세션을 우선 정리합니다. 배포 중에는 기존 Session을 Drain하고 신규 Session 생성을 막은 뒤 배포합니다.
 
 ## 13. 핵심 요약
-- Connection은 Socket 기반 전송 경로이고 Session은 인증 사용자, Protocol 상태와 재접속 정보를 담는 응용 계층 대화 상태다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- Connection은 Socket 전송 경로, Session은 인증·게임 상태를 담는 응용 계층 대화 상태다.
+- 수명 분리로 Connection 단절 후 Grace Period 동안 Session을 유지해 재접속을 지원한다.
+- Resume Token과 Generation Counter로 재접속 인증과 오래된 콜백 폐기를 처리한다.
+- 중복 로그인은 기존 만료 또는 새 연결 거부로 처리하며 두 Session이 같은 캐릭터를 제어하면 안 된다.
+- Token 만료·Revoke를 주기적으로 확인해 인증 상태를 유지한다.
+- Session 수·Memory·연결 수를 모니터링하고 한도 초과 시 만료 Session을 정리한다.
+- 배포 중 Drain 절차로 기존 Session 완료 후 새 버전으로 전환한다.
 
 ## 한 줄 정리
-> Connection은 네트워크 경로이고 Session은 인증된 논리 상태입니다. 둘의 수명을 분리하고 재접속 시 소유권과 중복 연결을 원자적으로 전환해야 합니다.
+
+> Connection은 네트워크 경로이고 Session은 인증된 논리 상태이며, 수명 분리와 Generation Counter·Grace Period로 재접속·중복 로그인·오래된 콜백을 안전하게 처리한다.

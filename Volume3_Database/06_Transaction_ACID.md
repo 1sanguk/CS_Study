@@ -11,77 +11,43 @@ importance: 5
 
 ## 학습 목표
 
-- 한 줄 정의와 등장 이유를 설명할 수 있다.
-- 핵심 동작과 비교 개념을 설명할 수 있다.
-- 게임 백엔드의 정합성과 성능 설계에 적용할 수 있다.
+- ACID 각 속성이 보장하는 범위와 보장하지 않는 것을 구분해 설명할 수 있다.
+- WAL이 지속성을 제공하는 원리와 긴 트랜잭션의 비용을 설명할 수 있다.
+- COMMIT 결과 불확실 시 멱등성 설계가 필요한 이유를 설명할 수 있다.
+- 게임 아이템 구매 트랜잭션에서 외부 HTTP 호출과 Outbox 패턴을 올바르게 배치할 수 있다.
 
 ## 1. 개요
 
 트랜잭션은 여러 DB 연산을 하나의 논리 작업으로 묶으며 ACID는 원자성, 일관성, 격리성, 지속성의 성질이다.
 
-트랜잭션(Transaction)은 데이터베이스 상태를 하나의 유효한 상태에서 다른 유효한 상태로 바꾸는 논리 작업 단위다. 여러 SQL 문이 포함될 수 있고, 일부만 반영되어서는 안 되는 비즈니스 경계를 표현한다. ACID는 트랜잭션이 제공하려는 원자성(Atomicity), 일관성(Consistency), 격리성(Isolation), 지속성(Durability)을 요약한다.
+트랜잭션(Transaction)은 데이터베이스 상태를 하나의 유효한 상태에서 다른 유효한 상태로 바꾸는 논리 작업 단위다. 여러 SQL 문이 포함될 수 있고, 일부만 반영되어서는 안 되는 비즈니스 경계를 표현한다.
 
-ACID라는 단어만으로 모든 동시성 문제와 외부 시스템 정합성이 자동 해결되지는 않는다. 실제 보장은 DBMS, 저장 엔진, 격리 수준, Commit 설정과 트랜잭션 경계에 따라 달라진다. 애플리케이션은 어떤 불변식을 어느 DB 트랜잭션에서 지킬지 정의해야 한다.
+ACID라는 단어만으로 모든 동시성 문제와 외부 시스템 정합성이 자동 해결되지는 않는다. 실제 보장은 DBMS, 저장 엔진, 격리 수준, Commit 설정과 트랜잭션 경계에 따라 달라진다.
 
 ## 2. 왜 필요한가
-재화 차감과 아이템 지급 중 일부만 성공하면 비즈니스 불변식이 깨지므로 모두 반영하거나 모두 취소해야 한다. 데이터베이스 선택은 편의가 아니라 불변식, 조회 패턴, 장애 복구 요구에서 출발한다.
 
-플레이어가 100 골드로 아이템을 구매할 때 골드만 차감되고 아이템 생성이 실패하면 데이터는 기술적으로 저장되었어도 업무적으로 잘못된 상태다. 반대로 아이템만 지급되면 무상 획득이 된다. 두 변경을 같은 트랜잭션으로 묶으면 둘 다 Commit되거나 둘 다 Rollback되도록 할 수 있다.
+재화 차감과 아이템 지급 중 일부만 성공하면 비즈니스 불변식이 깨지므로 모두 반영하거나 모두 취소해야 한다.
 
-동시에 두 구매 요청이 들어오면 둘 다 같은 잔액을 읽을 수 있다. 원자성만으로는 동시 트랜잭션 사이의 관찰을 모두 직렬화하지 않는다. 조건부 UPDATE, Lock·MVCC와 적절한 격리 수준으로 잔액 음수라는 불변식을 지켜야 한다. ACID의 각 글자를 독립 기능처럼 외우지 않고 함께 적용한다.
+플레이어가 100 골드로 아이템을 구매할 때 골드만 차감되고 아이템 생성이 실패하면 데이터는 기술적으로 저장되었어도 업무적으로 잘못된 상태다. 두 변경을 같은 트랜잭션으로 묶으면 둘 다 Commit되거나 둘 다 Rollback된다.
+
+동시에 두 구매 요청이 들어오면 둘 다 같은 잔액을 읽을 수 있다. 원자성만으로는 동시 트랜잭션의 관찰을 직렬화하지 않는다. 조건부 UPDATE, Lock·MVCC와 적절한 격리 수준으로 잔액 음수라는 불변식을 지켜야 한다.
 
 ## 3. 핵심 동작 원리
+
 ```text
-BEGIN→read/check→update money→insert item→COMMIT or ROLLBACK
-```
-원자성은 전부 또는 전무, 일관성은 유효 상태 전이, 격리성은 동시 트랜잭션 영향 제어, 지속성은 커밋 결과의 장애 후 보존이다. 로그와 복구가 핵심 역할을 한다.
-
-Transaction과 ACID에서는 논리 모델과 물리 실행을 구분한다. 같은 SQL도 통계, 데이터 분포, 인덱스와 동시 부하에 따라 실행 비용이 달라진다.
-
-### 트랜잭션 기본 흐름
-
-```sql
-BEGIN;
-
-UPDATE player_wallet
-SET balance = balance - 100
-WHERE player_id = 101
-  AND balance >= 100;
-
--- 영향받은 행이 1개인지 확인
-INSERT INTO inventory_item(player_id, item_id, quantity)
-VALUES (101, 5001, 1);
-
-COMMIT;
+BEGIN → read/check → update money → insert item → COMMIT or ROLLBACK
 ```
 
-잔액 UPDATE가 0행이면 Rollback하고 부족 결과를 반환한다. 예외가 발생해도 연결을 풀에 반환하기 전에 Rollback되도록 범위 기반 트랜잭션 API를 사용한다. Auto-commit 모드에서는 각 문장이 독립 트랜잭션이 될 수 있으므로 두 문장을 묶으려면 명시적 경계가 필요하다.
+### ACID 각 속성
 
-### Atomicity: 원자성
+- **Atomicity(원자성)**: 전체 반영 또는 전체 취소. 실행 중 오류가 나면 아직 Commit하지 않은 변경을 Rollback한다.
+- **Consistency(일관성)**: 트랜잭션 전후 불변식을 만족하는 상태 전이. DB 제약과 애플리케이션 로직이 함께 표현한다.
+- **Isolation(격리성)**: 동시에 실행되는 트랜잭션이 서로의 중간 상태와 변경에 어떤 영향을 받는지 제어한다.
+- **Durability(지속성)**: Commit 성공을 받은 결과가 프로세스나 시스템 장애 후에도 복구될 수 있는 성질이다.
 
-트랜잭션의 변경이 모두 반영되거나 아무것도 반영되지 않는 성질이다. 실행 중 오류가 나면 아직 Commit하지 않은 변경을 Rollback한다. 시스템이 Commit 도중 중단되더라도 복구 시 로그를 이용해 Commit된 작업은 재실행하고 미완료 작업은 취소할 수 있다.
+원자성은 DB 트랜잭션 밖의 이메일, HTTP 결제, 메시지 전송까지 자동으로 되돌리지 못한다. Consistency는 분산 시스템의 Replica 즉시 일치와 문맥이 다르다.
 
-원자성은 “SQL 한 문장은 어떤 비즈니스 의미로도 안전하다”는 뜻이 아니다. 하나의 UPDATE라도 잘못된 WHERE로 많은 행을 바꿀 수 있다. 또한 DB 트랜잭션 밖의 이메일, HTTP 결제, 메시지 전송까지 자동으로 되돌리지 못한다.
-
-### Consistency: 일관성
-
-트랜잭션 전후 데이터가 정의된 무결성 규칙을 만족하는 성질이다. PK·FK·UNIQUE·CHECK 같은 DB 제약과 애플리케이션 로직이 함께 불변식을 표현한다. DBMS는 선언된 제약을 검사하지만 “길드원 총 전투력이 특정 공식과 같다” 같은 모든 도메인 규칙을 스스로 알지는 못한다.
-
-Consistency는 복제본이 즉시 같은 값을 보인다는 의미의 분산 시스템 일관성과 문맥이 다르다. ACID에서는 유효한 상태 전이를 뜻한다. 격리 수준이 약하면 개별 트랜잭션이 규칙을 지키는 것처럼 보여도 동시 실행 조합이 불변식을 깨뜨릴 수 있어 조건부 갱신과 제약이 필요하다.
-
-### Isolation: 격리성
-
-동시에 실행되는 트랜잭션이 서로의 중간 상태와 변경에 어떤 영향을 받는지 제어한다. 가장 강한 직렬화 가능(Serializable) 수준은 결과가 어떤 직렬 실행 순서와 동등하도록 만들려 하지만 Lock 대기나 재시도 비용이 커질 수 있다.
-
-낮은 격리 수준은 동시 처리량을 높이는 대신 Dirty Read, Non-repeatable Read, Phantom, Write Skew 같은 현상을 허용할 수 있다. DBMS가 Lock과 MVCC를 어떻게 결합하는지에 따라 같은 격리 수준 이름의 세부 동작도 다를 수 있다. 다음 문서에서 격리 수준을 자세히 다룬다.
-
-### Durability: 지속성
-
-Commit 성공을 받은 결과가 프로세스나 시스템 장애 후에도 복구될 수 있는 성질이다. 일반적으로 데이터 페이지 자체보다 먼저 변경 로그를 안정적인 저장소에 기록하는 WAL(Write-Ahead Logging) 원리를 사용한다. 장애 복구 시 로그를 재생해 아직 데이터 파일에 반영되지 않은 Commit 변경을 복원한다.
-
-지속성의 정확한 강도는 로그 Flush 정책, 저장장치의 쓰기 보장, 복제 Commit 설정에 따라 달라질 수 있다. 성능을 위해 `fsync` 성격의 Flush를 묶거나 지연하면 장애 시 최근 Commit 손실 가능성이 바뀔 수 있다. 제품 기본값과 SLA를 확인한다.
-
-### WAL과 데이터 Page
+### WAL과 데이터 페이지
 
 ```text
 Transaction이 Buffer Pool의 Page 변경
@@ -95,13 +61,11 @@ COMMIT → 필요한 Log를 Durable Storage에 Flush
 Data Page는 나중에 Background Flush 가능
 ```
 
-데이터 페이지를 매 Commit마다 모두 저장장치에 쓰면 무작위 I/O가 많다. WAL은 순차적인 로그를 먼저 기록하고 더티 데이터 페이지를 나중에 묶어 내보낼 수 있게 한다. 장애 시 Checkpoint와 로그를 이용해 복구 범위를 줄인다.
+WAL(Write-Ahead Logging)은 변경된 데이터 페이지보다 로그를 먼저 안정적으로 기록한다. Commit 시 모든 페이지를 즉시 저장하지 않아도 지속성과 복구를 제공한다. 장애 후 로그를 재생해 Commit 변경을 복원하고 미완료 작업을 정리한다.
 
-Group Commit은 여러 트랜잭션의 로그 Flush를 한 번에 묶어 저장장치 동기화 비용을 나눈다. Commit 처리량은 좋아지지만 Queue와 Flush 주기에 따라 지연 분포가 달라질 수 있다.
+### COMMIT 결과 불확실 시
 
-### COMMIT 결과가 불확실한 경우
-
-서버가 DB에 COMMIT을 보낸 뒤 응답을 받기 전에 네트워크가 끊기면 DB가 Commit했는지 Rollback했는지 애플리케이션이 모를 수 있다. 타임아웃을 Rollback 증거로 간주해 같은 구매를 다시 실행하면 중복 지급이 생길 수 있다.
+서버가 COMMIT을 보낸 뒤 응답을 받기 전에 네트워크가 끊기면 DB가 Commit했는지 Rollback했는지 모른다.
 
 ```text
 App ── COMMIT ──> DB
@@ -110,33 +74,17 @@ App <── 응답 X ── Network 단절
 App 관점: 결과 불명
 ```
 
-비즈니스 요청 ID를 UNIQUE로 저장하고 같은 ID 재시도에는 기존 결과를 반환한다. 예를 들어 `purchase_request(request_id UNIQUE, player_id, status, result)`를 트랜잭션 안에서 생성한다. 정확히 한 번 전달을 기대하기보다 중복 요청이 와도 효과가 한 번인 멱등 처리를 설계한다.
-
-### SAVEPOINT
-
-Savepoint는 트랜잭션 전체가 아니라 중간 지점 이후의 일부 작업을 되돌리는 기능이다. 복잡한 Batch에서 특정 선택 작업을 취소하는 데 쓸 수 있다. 하지만 긴 트랜잭션의 Lock·Version 보존 비용을 없애지는 않으며 코드 흐름을 복잡하게 할 수 있다. 일반적인 비즈니스 요청은 짧고 명확한 트랜잭션 여러 개가 더 이해하기 쉽다.
+타임아웃을 Rollback 증거로 간주해 같은 구매를 재시도하면 중복 지급이 생길 수 있다. 요청 ID를 UNIQUE로 저장하고 같은 ID 재시도에 기존 결과를 반환하는 멱등 처리가 필요하다.
 
 ### 긴 트랜잭션의 문제
 
-트랜잭션을 오래 열어 두면 Lock을 오래 보유하고 다른 쓰기를 막을 수 있다. MVCC 엔진에서도 오래된 Snapshot 때문에 이전 Row Version 정리가 지연되고 저장 공간이 늘 수 있다. Connection Pool의 연결도 점유해 요청 대기가 확산된다.
+트랜잭션을 오래 열면 Lock을 오래 보유해 다른 쓰기를 막는다. MVCC 엔진에서도 오래된 Snapshot 때문에 이전 Row Version 정리가 지연되어 저장 공간이 늘 수 있다. Connection Pool 연결도 점유해 요청 대기가 확산된다.
 
-사용자 입력, 외부 HTTP, 긴 CPU 계산을 트랜잭션 안에서 기다리지 않는다. 필요한 외부 데이터를 먼저 가져오고 짧은 DB 변경에서 현재 Version이나 조건을 다시 검증한다. 트랜잭션 내부 SQL 수도 최소화하되 불변식 경계를 쪼개지는 않는다.
+사용자 입력, 외부 HTTP, 긴 CPU 계산을 트랜잭션 안에서 기다리지 않는다.
 
-### Deadlock과 재시도
-
-두 트랜잭션이 서로 다른 순서로 Row를 잠그면 Deadlock이 생길 수 있다. DBMS는 대기 그래프에서 하나를 희생자로 선택해 Rollback할 수 있다. 애플리케이션은 전체 트랜잭션을 처음부터 제한적으로 재시도한다.
-
-같은 자원을 정해진 순서로 변경하고 트랜잭션을 짧게 유지해 빈도를 줄인다. 재시도에는 지수 Backoff와 무작위 지연, 최대 횟수와 전체 요청 기한을 둔다. 트랜잭션 안에 외부 부작용이 있다면 재시도 때 중복될 수 있으므로 분리해야 한다.
-
-### DB 밖의 부작용
+### Transactional Outbox
 
 DB 트랜잭션과 메시지 브로커 Publish를 원자적으로 한 번에 Commit할 수 없는 구성이 흔하다.
-
-```text
-DB Commit 성공 → Process Crash → Message Publish 실패
-```
-
-Transactional Outbox는 비즈니스 변경과 발행할 이벤트를 같은 DB 트랜잭션에 저장한다. 별도 Publisher가 Outbox를 읽어 브로커로 보내고 발행 상태를 기록한다. Publisher 재시도로 이벤트가 중복될 수 있으므로 Consumer도 Event ID로 멱등 처리한다.
 
 ```text
 BEGIN
@@ -147,107 +95,185 @@ COMMIT
 Outbox Publisher → Message Broker → Idempotent Consumer
 ```
 
-분산 트랜잭션이나 Saga 같은 대안도 있지만 실패 모델과 운영 복잡도가 다르다. 단일 DB 트랜잭션 범위 밖을 자동 ACID로 가정하지 않는다.
+Transactional Outbox는 비즈니스 변경과 발행할 이벤트를 같은 DB 트랜잭션에 저장한다. Publisher 재시도로 이벤트가 중복될 수 있으므로 Consumer도 Event ID로 멱등 처리한다.
 
 ## 4. 쉬운 예시
-Transaction과 ACID에서는 플레이어가 아이템을 구매하면 재화 확인, 차감, 아이템 생성이 연결된다. 일부만 반영되거나 동시에 두 번 처리되지 않도록 제약 조건과 트랜잭션 경계를 설계한다.
 
-은행 계좌 이체에서 A 계좌 차감과 B 계좌 증가는 하나의 논리 작업이다. A만 차감된 순간 시스템이 멈추면 총액 불변식이 깨진다. 같은 DB 안에서는 한 트랜잭션으로 묶는다. 실제 게임 구매에서는 잔액과 인벤토리뿐 아니라 구매 요청 ID도 함께 저장해 재시도 중복을 막는다.
+```java
+// 트랜잭션 경계 + 멱등성 키 예시
+public PurchaseResult purchaseItem(Connection conn, String requestId,
+        long playerId, int price, String itemCode) throws SQLException {
+    conn.setAutoCommit(false);
+    try {
+        // 1. 요청 ID 중복 확인 (멱등성: 같은 requestId 재시도 시 기존 결과 반환)
+        PreparedStatement checkDup = conn.prepareStatement(
+            "SELECT result FROM purchase_request WHERE request_id = ?");
+        checkDup.setString(1, requestId);
+        ResultSet rs = checkDup.executeQuery();
+        if (rs.next()) return PurchaseResult.from(rs.getString("result"));
 
-트랜잭션은 편집 중인 문서를 임시 상태로 보이지 않게 하고 저장 버튼에서 한 번에 반영하는 것과 비슷하지만, 실제로는 DB가 WAL, Lock·MVCC와 복구 절차로 동시성과 장애를 다룬다.
+        // 2. 잔액 조건부 차감
+        PreparedStatement deduct = conn.prepareStatement(
+            "UPDATE player SET balance = balance - ? " +
+            "WHERE player_id = ? AND balance >= ?");
+        deduct.setInt(1, price);
+        deduct.setLong(2, playerId);
+        deduct.setInt(3, price);
+        if (deduct.executeUpdate() == 0) {
+            conn.rollback();
+            return PurchaseResult.INSUFFICIENT;
+        }
+
+        // 3. 아이템 생성 + 요청 ID 기록 (한 트랜잭션)
+        PreparedStatement addItem = conn.prepareStatement(
+            "INSERT INTO inventory (player_id, item_code) VALUES (?, ?)");
+        addItem.setLong(1, playerId);
+        addItem.setString(2, itemCode);
+        addItem.executeUpdate();
+
+        PreparedStatement logReq = conn.prepareStatement(
+            "INSERT INTO purchase_request (request_id, player_id, result) " +
+            "VALUES (?, ?, 'SUCCESS')");
+        logReq.setString(1, requestId);
+        logReq.setLong(2, playerId);
+        logReq.executeUpdate();
+
+        conn.commit();
+        return PurchaseResult.SUCCESS;
+        // 외부 HTTP(알림, PG)는 commit() 성공 후에만 실행
+    } catch (SQLException e) {
+        conn.rollback(); // 반드시 Rollback
+        throw e;
+    }
+}
+```
+
+```sql
+-- 트랜잭션 흐름 SQL
+BEGIN;
+
+UPDATE player SET balance = balance - 100
+WHERE player_id = 101 AND balance >= 100;  -- 조건부: 잔액 확인 + 차감 원자화
+
+-- 영향받은 행 0이면 ROLLBACK
+INSERT INTO inventory_item(player_id, item_code) VALUES (101, 'SWORD_001');
+
+COMMIT;
+-- 두 변경이 모두 반영되거나 모두 취소됨
+```
 
 ## 5. 비슷한 개념과 비교
-| 관점 | 질문 | 점검 항목 |
-|---|---|---|
-| 논리 모델 | 어떤 불변식인가 | Key·Constraint |
-| 물리 실행 | 몇 Page를 읽는가 | Index·Plan |
-| 동시성 | 무엇을 함께 허용하는가 | Transaction·Lock |
 
 | 개념 | 해결 범위 | 해결하지 않는 것 |
 |---|---|---|
 | DB Transaction | 한 DB 경계의 원자 변경·격리·복구 | 외부 HTTP·Broker 자동 Rollback |
 | Lock | 충돌 접근 순서 제어 | 장애 후 지속성 전체 |
-| Constraint | 저장 Data 불변식 검사 | 모든 Domain Workflow |
-| Idempotency | 같은 요청 반복의 중복 효과 방지 | 서로 다른 동시 요청의 모든 경쟁 |
-| Outbox | DB 변경과 Event 기록을 함께 Commit | Consumer 중복 자동 제거 |
+| Constraint | 저장 데이터 불변식 검사 | 모든 도메인 Workflow |
+| Idempotency | 같은 요청 반복의 중복 효과 방지 | 서로 다른 동시 요청의 경쟁 |
+| Outbox | DB 변경과 이벤트를 함께 Commit | Consumer 중복 자동 제거 |
 
-트랜잭션과 세션도 구분한다. 하나의 DB 연결에서 여러 트랜잭션을 순차 실행할 수 있고, 한 트랜잭션은 일반적으로 한 연결 문맥에 묶인다. 연결 풀에 반환할 때 미완료 트랜잭션과 세션 설정이 남지 않도록 한다.
+| ACID 속성 | 보장하는 것 | 보장하지 않는 것 |
+|---|---|---|
+| Atomicity | DB 변경의 전부 또는 전무 | 외부 HTTP·메시지 롤백 |
+| Consistency | 선언된 제약·불변식 만족 | 모든 도메인 규칙 |
+| Isolation | 동시 트랜잭션 상호 영향 제어 | 격리 수준에 따라 허용 현상 다름 |
+| Durability | Commit 결과의 장애 후 복구 | 복제 Lag, 미러링 장애 등 |
 
 ## 6. 장점과 단점
-Transaction과 ACID에서는 RDBMS는 제약과 트랜잭션, 유연한 조회가 강점이다. 인덱스 유지, Lock 경쟁, Schema 변경과 수평 확장 비용이 있다. 읽기 최적화가 쓰기 비용을 만들 수 있음을 고려한다.
 
-트랜잭션은 부분 실패와 동시 변경을 명확한 경계에서 제어하고 복구 가능한 상태를 만든다. 반면 Lock·Version 관리, 로그 Flush, Deadlock과 재시도 비용이 생긴다. 격리를 강하게 하고 범위를 넓힐수록 추론은 쉬울 수 있지만 동시 처리량과 가용성이 낮아질 수 있다.
+**트랜잭션의 장점**
+
+- 부분 실패와 동시 변경을 명확한 경계에서 제어한다.
+- WAL로 장애 후 복구 가능한 상태를 만든다.
+- Lock·MVCC로 동시 트랜잭션의 불변식을 보호한다.
+
+**트랜잭션의 단점**
+
+- Lock 대기, Deadlock, Rollback 비용이 생긴다.
+- MVCC에서도 오래된 Snapshot은 Version 정리를 지연시킨다.
+- Connection Pool 연결을 점유해 긴 트랜잭션은 요청 대기를 확산시킨다.
+
+**트랜잭션 설계 시 주의 사항**
+
+- 외부 HTTP, 사용자 입력, 긴 CPU 계산을 트랜잭션 안에 두지 않는다.
+- Commit 후 응답 불확실 시 멱등성이 없으면 중복 처리가 생긴다.
+- 격리를 강하게 하고 범위를 넓힐수록 동시 처리량과 가용성이 낮아질 수 있다.
 
 ## 7. 게임 서버·백엔드 실무 예시
-아이템 구매를 짧은 트랜잭션으로 묶고 외부 HTTP 호출은 내부에 오래 두지 않는다. 커밋 결과를 못 받은 재시도에는 요청 ID와 멱등성이 필요하다.
 
-Transaction과 ACID에서는 운영에서는 처리량만 보지 않고 쿼리 p95·p99, 실행 계획, 읽은 행·Page, Lock 대기, Deadlock과 Connection Pool을 함께 관찰한다.
+아이템 구매를 짧은 트랜잭션으로 묶고 외부 HTTP 호출은 Commit 성공 후에 실행한다. COMMIT 결과를 못 받은 재시도에는 요청 ID와 멱등성이 필요하다.
 
-구매 흐름에서는 요청 ID, 플레이어 ID, 가격 버전과 결과를 함께 기록한다. 클라이언트 가격을 신뢰하지 않고 서버가 상품 가격과 판매 가능 여부를 트랜잭션 직전에 다시 확인한다. 조건부 잔액 UPDATE가 성공한 경우에만 아이템과 거래 원장을 생성한다.
+클라이언트 가격을 신뢰하지 않고 서버가 상품 가격과 판매 가능 여부를 트랜잭션 직전에 다시 확인한다. 거래 원장은 현재 잔액뿐 아니라 감사와 복구 근거를 제공하고 원장 행의 중복을 요청 ID UNIQUE로 막는다.
 
-거래 원장은 현재 잔액만 저장하는 것보다 감사와 복구 근거를 제공한다. 원장 행의 중복을 요청 ID UNIQUE로 막고 잔액 Snapshot과 원장 합계의 일치 검증 작업을 운영한다. 원장 자체 설계는 금액 규모와 규제 요구에 따라 더 엄격할 수 있다.
+운영 지표에는 초당 Commit·Rollback, Transaction p95·p99, 활성·장기 트랜잭션 수, Lock Wait, Deadlock, Log Flush 지연, Connection Pool 대기를 포함한다.
 
-운영 지표에는 초당 Commit·Rollback, Transaction p95·p99, 활성·장기 트랜잭션 수, Lock Wait, Deadlock, Log Flush 지연, Buffer Dirty Page와 Connection Pool 대기를 포함한다. 느린 SQL 하나뿐 아니라 트랜잭션이 열려 있는 전체 시간을 측정한다.
-
-배포 코드가 예외를 잡고 오류만 반환하면서 Rollback을 빠뜨리면 연결이 Pool에서 계속 Transaction 상태일 수 있다. 언어의 `using`·RAII·Scope API로 Commit하지 않은 경로의 Rollback을 보장하고 통합 테스트에서 오류 지점을 주입한다.
+배포 코드가 예외를 잡으면서 Rollback을 빠뜨리면 연결이 Pool에서 계속 Transaction 상태일 수 있다. 언어의 `try-with-resources`·RAII로 Commit하지 않은 경로의 Rollback을 보장한다.
 
 ## 8. 자주 하는 오해
-- 제약 조건을 애플리케이션 검사만으로 대체한다.
-- 인덱스가 많을수록 모든 쿼리가 빨라진다고 본다.
-- 트랜잭션이 외부 API까지 자동 원자화한다고 생각한다.
-- 격리 수준 이름만으로 구현 동작을 단정한다.
-- 평균 쿼리 시간만 보고 꼬리 지연을 무시한다.
-- ACID Consistency를 Replica 간 즉시 일치와 같은 의미로 본다.
-- COMMIT Timeout이면 반드시 Rollback됐다고 생각한다.
-- Auto-commit에서도 여러 SQL이 자동으로 한 Transaction이라고 본다.
-- Transaction 안에서 HTTP를 호출하면 함께 Rollback된다고 생각한다.
-- MVCC를 쓰면 긴 Transaction 비용이 없다고 본다.
+
+- **"ACID Consistency는 Replica 간 즉시 일치다"**: ACID의 C는 트랜잭션 전후 불변식을 만족하는 상태 전이다. 분산 시스템의 Strong Consistency(Replica 즉시 일치)와 문맥이 다르다.
+- **"COMMIT Timeout이면 반드시 Rollback됐다"**: 네트워크가 끊기면 DB가 Commit했는지 Rollback했는지 모른다. 타임아웃을 Rollback 증거로 간주해 재시도하면 중복이 생길 수 있다.
+- **"Auto-commit에서도 여러 SQL이 자동으로 한 Transaction이다"**: Auto-commit에서는 각 문장이 독립 트랜잭션이 될 수 있다. 여러 문장을 묶으려면 명시적 BEGIN/COMMIT 경계가 필요하다.
+- **"Transaction 안에서 HTTP를 호출하면 함께 Rollback된다"**: DB 트랜잭션은 DB 상태만 관리한다. 외부 HTTP, 이메일, 메시지 전송은 트랜잭션과 별개이므로 Outbox 패턴이나 Saga가 필요하다.
+- **"MVCC를 쓰면 긴 Transaction 비용이 없다"**: MVCC도 오래된 Snapshot이 있으면 이전 Row Version 정리가 지연되어 저장 공간이 늘 수 있다. Lock은 줄지만 Connection Pool 점유와 Version 비용은 남는다.
+- **"Deadlock은 재시도하면 자동으로 해결된다"**: 재시도가 같은 락 순서로 같은 경쟁을 반복하면 계속 Deadlock이 생길 수 있다. 자원 획득 순서를 고정하고 트랜잭션을 짧게 유지해야 한다.
+- **"Savepoint로 트랜잭션을 쪼개면 비용이 없다"**: Savepoint는 중간 지점 이후를 되돌리는 기능이지 Lock과 Version 보존 비용을 없애지는 않는다. 긴 트랜잭션의 근본 비용은 해결하지 못한다.
 
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-트랜잭션은 여러 DB 연산을 하나의 논리 작업으로 묶으며 ACID는 원자성, 일관성, 격리성, 지속성의 성질이다.
-### Q2. 왜 필요한가요?
-재화 차감과 아이템 지급 중 일부만 성공하면 비즈니스 불변식이 깨지므로 모두 반영하거나 모두 취소해야 한다.
-### Q3. 게임 백엔드에서는 어떻게 적용하나요?
-아이템 구매를 짧은 트랜잭션으로 묶고 외부 HTTP 호출은 내부에 오래 두지 않는다. 커밋 결과를 못 받은 재시도에는 요청 ID와 멱등성이 필요하다.
-### Q4. 성능 문제는 무엇을 확인하나요?
-실행 계획과 실제 행 수, Index 사용, Lock 대기와 꼬리 지연을 확인한다.
 
-### Q5. ACID를 각각 설명해 주세요.
+### Q1. ACID를 각각 설명해 주세요.
 
-원자성은 전체 반영 또는 전체 취소, 일관성은 선언된 불변식을 만족하는 상태 전이, 격리성은 동시 트랜잭션의 상호 관찰 제어, 지속성은 Commit 결과가 장애 후에도 복구되는 성질이다.
+원자성은 전체 반영 또는 전체 취소, 일관성은 선언된 불변식을 만족하는 상태 전이, 격리성은 동시 트랜잭션의 상호 관찰 제어, 지속성은 Commit 결과가 장애 후에도 복구되는 성질이다. 원자성은 DB 트랜잭션 밖의 외부 API를 자동으로 되돌리지 않고, Consistency는 분산 시스템의 Replica 즉시 일치와 다르다.
 
-### Q6. WAL은 왜 필요한가요?
+### Q2. WAL은 왜 필요한가요?
 
-변경된 데이터 페이지보다 로그를 먼저 안정적으로 기록해 Commit 시 모든 페이지를 즉시 저장하지 않아도 지속성과 복구를 제공하기 위해서다. 장애 후 로그로 Commit 변경을 재실행하고 미완료 작업을 정리한다.
+변경된 데이터 페이지보다 로그를 먼저 안정적으로 기록해 Commit 시 모든 페이지를 즉시 저장하지 않아도 지속성과 복구를 제공하기 위해서다. 장애 후 로그로 Commit 변경을 재실행하고 미완료 작업을 정리한다. 순차 로그 기록으로 무작위 데이터 페이지 I/O를 줄인다.
 
-### Q7. COMMIT 응답을 받지 못하면 어떻게 하나요?
+### Q3. COMMIT 응답을 받지 못하면 어떻게 하나요?
 
-Commit 여부가 불확실하므로 무조건 같은 부작용을 다시 실행하지 않는다. 요청 ID를 DB에 UNIQUE하게 저장하고 재조회하거나 같은 ID 재시도에 기존 결과를 반환하는 멱등 설계를 사용한다.
+Commit 여부가 불확실하므로 타임아웃을 Rollback 증거로 간주해 재시도하면 중복이 생길 수 있다. 요청 ID를 DB에 UNIQUE하게 저장하고 같은 ID 재시도에 기존 결과를 반환하는 멱등 처리를 설계한다.
+
+### Q4. 긴 트랜잭션이 왜 문제가 되나요?
+
+Lock을 오래 보유해 다른 쓰기를 막고 Deadlock 가능성을 높인다. MVCC에서도 오래된 Snapshot이 이전 Row Version 정리를 지연시켜 저장 공간이 늘어난다. Connection Pool 연결을 오래 점유해 요청 대기가 확산된다. 외부 HTTP나 사용자 입력 대기를 트랜잭션 안에 두면 이 문제가 심화된다.
+
+### Q5. Transactional Outbox 패턴이 필요한 이유는 무엇인가요?
+
+DB Commit과 메시지 브로커 Publish를 원자적으로 한 번에 처리할 수 없는 구성에서 이벤트 누락을 막기 위해서다. 비즈니스 변경과 발행할 이벤트를 같은 DB 트랜잭션에 저장하고 별도 Publisher가 Outbox를 읽어 발행한다. Publisher 재시도로 중복이 생길 수 있으므로 Consumer도 Event ID로 멱등 처리한다.
+
+### Q6. 게임 아이템 구매에서 트랜잭션 경계를 어떻게 설계하나요?
+
+요청 ID 중복 확인, 조건부 잔액 차감, 아이템 생성, 요청 ID 기록을 한 트랜잭션으로 묶는다. 클라이언트 가격을 신뢰하지 않고 서버가 상품 가격을 직전에 확인한다. 외부 HTTP(알림, 결제 PG)는 Commit 성공 후에만 실행한다. 이벤트 발행이 필요하면 Outbox를 트랜잭션 안에 기록한다.
 
 ## 10. 예상 꼬리질문
-- 논리 구조와 물리 구조는 어떻게 다른가요?
-- 쓰기 성능에는 어떤 비용이 생기나요?
-- 동시 요청에서 불변식을 어떻게 지키나요?
-- 실행 계획이 예상과 달라지는 이유는 무엇인가요?
-- 재시도 시 중복 처리를 어떻게 막나요?
+
 - Atomicity와 Isolation은 어떻게 다른가요?
 - Group Commit의 장단점은 무엇인가요?
+- Deadlock이 발생했을 때 어떻게 감지하나요?
+- 롤백은 데이터 페이지를 어떻게 되돌리나요?
+- Savepoint와 Nested Transaction의 차이는 무엇인가요?
+- 거래 원장을 설계할 때 무엇을 고려하나요?
+- 분산 트랜잭션과 Saga의 차이는 무엇인가요?
 
 ## 11. 30초 모범답변
-> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. 비즈니스 요청 중복은 별도 멱등성이 필요합니다. 아이템 구매를 짧은 트랜잭션으로 묶고 외부 HTTP 호출은 내부에 오래 두지 않는다.
+
+> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. 단 원자성은 DB 밖의 HTTP와 메시지를 자동으로 되돌리지 않으며, COMMIT 응답을 못 받으면 재시도 중복이 생길 수 있습니다. 요청 ID로 멱등 처리하고 외부 부작용은 Outbox 패턴으로 분리합니다.
 
 ## 12. 1~2분 확장답변
-> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. 비즈니스 요청 중복은 별도 멱등성이 필요합니다. 설계에서는 Schema와 제약으로 불변식을 표현하고, Query와 Index는 실제 접근 패턴으로 검증합니다. 동시 변경은 짧은 Transaction과 적절한 격리·Lock으로 보호하며, 타임아웃 재시도에는 멱등성 키를 적용합니다.
+
+> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. WAL은 변경 로그를 데이터 페이지보다 먼저 기록해 지속성과 빠른 복구를 제공합니다. 긴 트랜잭션은 Lock을 오래 보유하고 MVCC에서도 이전 Version 정리를 지연시키므로 외부 HTTP나 사용자 입력 대기를 안에 두지 않습니다. COMMIT 응답을 못 받으면 결과가 불확실하므로 요청 ID UNIQUE로 멱등 처리합니다. DB Commit과 이벤트 발행을 같이 원자화할 수 없을 때는 Transactional Outbox로 같은 트랜잭션에 이벤트를 기록하고 별도 Publisher가 발행합니다.
 
 ## 13. 핵심 요약
+
 - 트랜잭션은 여러 DB 연산을 하나의 논리 작업으로 묶으며 ACID는 원자성, 일관성, 격리성, 지속성의 성질이다.
-- 불변식과 조회 패턴에서 설계를 시작한다.
-- 논리 SQL과 물리 실행 계획을 구분한다.
-- 읽기 최적화는 쓰기 비용을 만들 수 있다.
-- 정합성과 재시도를 함께 설계한다.
-- ACID 보장은 DB 설정·격리 수준과 정확한 Transaction 경계에서 해석한다.
-- 불확실한 Commit과 외부 부작용에는 멱등성·Outbox 같은 별도 설계가 필요하다.
+- 원자성은 DB 트랜잭션 밖의 이메일, HTTP, 메시지 전송까지 자동으로 되돌리지 못한다.
+- WAL은 변경 로그를 데이터 페이지보다 먼저 안정적으로 기록해 지속성과 복구를 제공한다.
+- COMMIT 응답을 받지 못하면 Commit 여부가 불확실하다. 타임아웃을 Rollback으로 간주하면 중복이 생길 수 있다. 요청 ID를 UNIQUE로 저장해 멱등 처리한다.
+- 긴 트랜잭션은 Lock을 오래 보유하고 MVCC에서도 Version 정리를 지연시키며 Connection Pool을 점유한다.
+- ACID의 Consistency는 트랜잭션 전후 불변식을 만족하는 상태 전이다. 분산 시스템의 Replica 즉시 일치와 다르다.
+- Transactional Outbox는 비즈니스 변경과 이벤트를 같은 트랜잭션에 저장해 DB Commit과 이벤트 발행의 원자성을 확보한다. Consumer는 Event ID로 멱등 처리한다.
+- 게임 아이템 구매에서는 요청 ID 확인, 조건부 차감, 아이템 생성, 요청 ID 기록을 한 트랜잭션으로 묶는다. 외부 HTTP는 Commit 성공 후에만 실행한다.
 
 ## 한 줄 정리
-> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. 비즈니스 요청 중복은 별도 멱등성이 필요합니다.
+
+> 트랜잭션은 여러 연산을 하나의 작업으로 묶고 ACID로 부분 반영, 동시 실행 오류와 장애 후 손실을 제어합니다. DB 밖의 부작용과 COMMIT 불확실성에는 별도 멱등성과 Outbox 패턴이 필요합니다.

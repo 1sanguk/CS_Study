@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 원리와 등장 이유를 설명할 수 있다.
-- 정확성·지연·운영 Trade-off를 설명할 수 있다.
-- 게임 서버 설계와 장애 대응에 적용할 수 있다.
+
+- Heartbeat가 왜 필요하고 TCP Keepalive와 차이를 설명할 수 있다.
+- Heartbeat 간격·Timeout 설정 기준과 Reconnect 상태 기계를 단계별로 설명할 수 있다.
+- Resume Token 검증 항목과 Session Generation으로 오래된 콜백을 폐기하는 방법을 설명할 수 있다.
+- 재접속 폭풍(Thundering Herd)을 Exponential Backoff + Jitter로 완화하는 방법을 설명할 수 있다.
 
 ## 1. 개요
 Heartbeat는 주기적 Message와 응답 기한으로 연결 생존을 판단하고 Reconnect는 새 연결을 기존 논리 Session에 안전하게 결합하는 절차다.
@@ -102,51 +104,149 @@ Heartbeat와 Reconnect은 정상 경로만 구현해서는 운영 준비가 끝�
 Heartbeat와 Reconnect에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-마지막 게임 Packet 이후 Heartbeat 응답도 기한을 넘기면 Server는 연결을 종료한다. Client는 Jitter가 포함된 Backoff로 재시도하고 마지막 Event Sequence를 보내 누락 상태만 동기화한다.
+
+아래는 Heartbeat Sequence 추적과 Reconnect 시 Generation 교체 흐름이다.
+
+```cpp
+// Server 측 Heartbeat 타이머 관리
+struct HeartbeatState {
+    uint32_t expectedSeq = 0;
+    TimePoint lastSeen;
+    static constexpr int TIMEOUT_MS = 10000;   // 10초
+};
+
+void OnPing(Session& session, uint32_t seq) {
+    session.heartbeat.lastSeen = Now();
+    SendPong(session, seq);   // Echo Sequence로 RTT 측정 가능
+}
+
+void CheckHeartbeat(Session& session) {
+    auto elapsed = Elapsed(session.heartbeat.lastSeen);
+    if (elapsed > HeartbeatState::TIMEOUT_MS) {
+        session.Close(CloseReason::HeartbeatTimeout);
+        // Grace Period 타이머 시작 — Session은 아직 보관
+    }
+}
+
+// Reconnect: Resume Token 검증 후 Generation 교체
+bool HandleResume(NewConn& newConn, ResumeToken token) {
+    auto session = SessionStore::Find(token.sessionId);
+    if (!session) return false;                    // Session 없음(Grace 만료)
+    if (!VerifyTokenSignature(token)) return false;
+    if (token.IsExpired()) return false;
+
+    // 새 Connection에 더 큰 Generation 부여
+    session->generation++;
+    session->connection = newConn;
+
+    // 누락 이벤트 재전송 또는 Full Snapshot
+    uint32_t clientLastSeq = token.lastReceivedEventSeq;
+    if (EventLog::CanReplay(clientLastSeq))
+        ReplayDelta(session, clientLastSeq);
+    else
+        SendFullSnapshot(session);
+
+    return true;
+}
+```
+
+- `session->generation++` 후 이전 Socket의 콜백이 도착하면 Generation이 달라 폐기된다.
+- Grace Period(예: 30초) 동안 Session을 보관하다 만료되면 캐릭터를 제거한다.
 
 ## 5. 비슷한 개념과 비교
-TCP Keepalive는 전송 경로 생존을 돕고 Application Heartbeat는 서비스 응답성을 판단한다. Reconnect는 새 연결과 이전 Session 상태를 별도로 복구해야 한다.
-## 6. 장점과 단점
-Heartbeat와 Reconnect을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Heartbeat Sequence, 마지막 Traffic와 Timeout 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-지수 Backoff와 Jitter로 동시 재접속 폭주를 막는다. Session Token, 마지막 Event ID와 generation으로 중복 Connection과 누락 상태를 처리한다.
 
-Heartbeat와 Reconnect 관점에서는 평균보다 p95·p99, 지역·Network별 분포, Queue·Buffer 상한, Drop·Retry와 복구 성공률을 관찰한다.
+| 방식 | 감지 대상 | 계층 | 간격 조절 | Application 상태 확인 |
+|------|---------|------|---------|---------------------|
+| **TCP Keepalive** | 전송 경로 생존 | OS/TCP | 분 단위 고정 | 불가 |
+| **Application Heartbeat (Ping/Pong)** | Application 응답성 | Application | 자유 조절 | 가능 |
+| **HTTP Long Polling** | 데이터 수신 대기 | Application | 응답 시 갱신 | 제한적 |
+| **WebSocket Ping/Pong** | 프레임 레벨 생존 | WebSocket | 자유 조절 | 제한적 |
+
+TCP Keepalive는 OS 기본값(보통 2시간)이 Application 요구보다 너무 길기 때문에 별도 Application Heartbeat가 필요하다.
+
+## 6. 장점과 단점
+
+**장점**
+- Heartbeat로 TCP 연결은 살아있지만 Application이 응답하지 않는 "Zombie Connection"을 감지한다.
+- Grace Period로 모바일 Wi-Fi 전환 같은 일시 단절에서 자동 재접속을 지원한다.
+- Session Generation으로 이전 Socket의 늦은 콜백이 새 Session에 영향을 주지 않는다.
+- Exponential Backoff + Jitter로 서버 장애 복구 중 재접속 폭풍을 완화한다.
+
+**단점**
+- Heartbeat 간격을 짧게 하면 Battery·Packet 부하가 늘고 Jitter 오탐이 증가한다.
+- Reconnect 상태 기계, Resume Token 서명 검증, 상태 재동기화가 구현 복잡도를 높인다.
+- Grace Period 동안 Match 중 악의적 연결 끊기를 패배 회피로 악용할 수 있다.
+- 상태 Replay Window가 만료되면 Full Snapshot을 전송해야 해서 부하가 발생한다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+실시간 Match는 Heartbeat 간격 3~5초, Timeout 10~15초로 설정한다. Lobby는 간격을 더 길게 잡는다. 게임 Packet이 자주 오면 별도 Ping을 생략하고 마지막 Packet 시각으로 생존을 판단한다.
+
+Reconnect는 Exponential Backoff(1s, 2s, 4s, 최대 30s)에 Random Jitter(±30%)를 더해 서버 복구 중 폭풍을 완화한다. 서버는 `Retry-After` 헤더로 대기 시간을 안내한다.
 
 ## 8. 자주 하는 오해
-- **Heartbeat Sequence**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **마지막 Traffic**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Timeout**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Grace Period**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **TCP Keepalive**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **Heartbeat에 응답이 없으면 즉시 연결을 끊어야 한다.** 일시적 Jitter나 단기 패킷 손실도 있으므로 단일 실패보다 연속 실패나 충분한 Grace Period로 판단한다.
+- **최근 Traffic이 있으면 Heartbeat를 생략해도 된다.** 서버→클라이언트 단방향 Push(Broadcast)에서는 클라이언트→서버 방향 생존을 별도로 확인해야 한다.
+- **TCP Keepalive를 켜면 Application Heartbeat가 필요 없다.** TCP Keepalive는 OS가 TCP 레벨 경로를 검사할 뿐 Application 응답성을 확인하지 않는다. 기본 간격도 2시간으로 게임 서버에 적합하지 않다.
+- **Reconnect하면 이전 Message 전달 상태가 자동 복구된다.** 새 Socket은 이전 Socket의 전달 미완료 메시지를 알지 못한다. 마지막 Event Sequence를 교환해 누락 이벤트를 명시적으로 재전송해야 한다.
+- **Grace Period 동안 모든 재연결을 허용해야 한다.** Token 만료·서명 검증 실패 시 거부해야 한다. 악의적 연결 끊기로 패배를 회피하는 정책도 함께 설계한다.
+- **재접속 성공률만 추적하면 충분하다.** Grace Period 만료 이유(Token 만료·Session 없음·인증 실패)와 재동기화 Byte를 별도로 집계해야 병목을 찾을 수 있다.
+- **모든 서버가 Heartbeat 간격을 동일하게 사용해야 한다.** 실시간 Match는 짧은 간격, Lobby는 긴 간격, 배경 Download는 매우 긴 간격으로 상황별로 달라야 한다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Heartbeat는 주기적 Message와 응답 기한으로 연결 생존을 판단하고 Reconnect는 새 연결을 기존 논리 Session에 안전하게 결합하는 절차다.
-### Q2. 어떤 Trade-off가 있나요?
-Heartbeat 간격이 짧으면 부하와 오탐이 늘고 길면 감지가 늦다. Reconnect는 새 Socket일 뿐 이전 Message 전달 상태를 자동 복구하지 않는다.
-### Q3. 실무 적용 사례는 무엇인가요?
-지수 Backoff와 Jitter로 동시 재접속 폭주를 막는다. Session Token, 마지막 Event ID와 generation으로 중복 Connection과 누락 상태를 처리한다.
-### Q4. 장애와 악용을 어떻게 제한하나요?
-Heartbeat와 Reconnect 관점에서는 서버 검증, 시간·크기 상한, Version과 Idempotency, Backpressure와 지표를 적용한다.
+
+### Q1. Heartbeat가 왜 필요하고 TCP Keepalive와의 차이는 무엇인가요?
+TCP 연결 객체가 살아 있어도 Wi-Fi 전환이나 NAT Mapping 만료로 실제 통신이 불가능한 상태가 될 수 있습니다. TCP Keepalive는 OS가 수행하는 전송 경로 점검이고 기본 간격이 2시간으로 게임 서버에 너무 깁니다. Application Heartbeat는 Application 응답성을 직접 확인하며 간격을 자유롭게 조절합니다.
+
+### Q2. Heartbeat 간격과 Timeout을 어떻게 설정하나요?
+RTT와 Jitter를 측정해 정합니다. 간격이 짧으면 Battery·부하가 늘고 Jitter를 장애로 오탐합니다. Timeout은 단일 응답 실패가 아닌 연속 실패나 충분한 Grace Period로 판단합니다. 실시간 Match는 간격 3~5초·Timeout 10~15초, Lobby는 더 길게 설정합니다.
+
+### Q3. Reconnect 상태 기계를 단계별로 설명해 주세요.
+Disconnected → Exponential Backoff(Jitter 포함) → 새 Connection 수립 → Resume Token 인증 → Session Generation 교체 → 누락 이벤트 Delta 재전송 또는 Full Snapshot → Active 순서입니다. 이전 Socket의 늦은 콜백은 Generation이 달라 자동 폐기됩니다.
+
+### Q4. Resume Token 검증에서 어떤 항목을 확인하나요?
+Session ID로 기존 Session을 조회하고, Token 서명·만료 시간·Audience를 검증합니다. 이미 사용된 Token인지(Replay 방지)도 확인합니다. 검증 성공 시 Session Generation을 증가시키고 새 Connection을 연결합니다.
+
+### Q5. 재접속 폭풍(Thundering Herd)을 어떻게 방지하나요?
+Exponential Backoff(1s, 2s, 4s...)에 Random Jitter(±30%)를 추가해 수만 클라이언트가 동시에 재시도하지 않도록 분산합니다. 서버는 `Retry-After` 응답으로 대기 시간을 안내합니다. 인증·State Sync 경로에도 Rate Limit과 Capacity 제한을 둡니다.
+
+### Q6. Match 중 연결이 끊겼을 때 캐릭터를 어떻게 처리하나요?
+Grace Period(예: 30초) 동안 캐릭터를 AI 제어나 정지 상태로 유지합니다. Grace 내 재접속 시 상태를 복원합니다. Grace 만료 시 캐릭터를 제거하고 Match 결과를 처리합니다. 악의적 연결 끊기로 패배를 회피하지 못하도록 패배 판정 정책과 함께 설계합니다.
 
 ## 10. 예상 꼬리질문
-- Heartbeat Sequence의 최종 소유자는 어디에 두나요?
-- 마지막 Traffic 처리에서 중복과 역순은 어떻게 구분하나요?
-- Timeout의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Grace Period 장애를 어떻게 재현하고 복구를 검증하나요?
-- TCP Keepalive 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- 게임 Packet이 자주 오는데도 별도 Ping을 보내야 하나요?
+- Token 만료 후 Reconnect를 어떻게 처리하나요?
+- Server Restart 후 기존 Session을 어떻게 복원하나요?
+- Grace Period 도중 악의적 연결 끊기를 어떻게 탐지하나요?
+- Delta Sync와 Full Snapshot 중 어느 쪽을 선택하는 기준은 무엇인가요?
+- 같은 Account의 두 연결이 동시에 Resume을 시도하면 어떻게 처리하나요?
+- Heartbeat RTT를 이용해 Clock Offset을 추정하는 방법은 무엇인가요?
+
 ## 11. 30초 모범답변
-> Heartbeat는 응답 기한으로 논리적 생존을 확인하고 Reconnect는 인증된 새 연결을 기존 Session에 재결합합니다. Backoff, Generation과 상태 재동기화가 필요합니다. 지수 Backoff와 Jitter로 동시 재접속 폭주를 막는다.
+
+> TCP 연결이 살아 있어도 Application이 멈추거나 NAT Mapping이 만료되면 실제 통신이 불가능합니다. Application Heartbeat로 응답성을 주기적으로 확인하고 Grace Period 동안 Session을 보관합니다. Reconnect 시 Resume Token 검증 후 Session Generation을 증가시켜 이전 콜백을 폐기하고 누락 이벤트를 재동기화합니다.
 
 ## 12. 1~2분 확장답변
-> Heartbeat는 응답 기한으로 논리적 생존을 확인하고 Reconnect는 인증된 새 연결을 기존 Session에 재결합합니다. Backoff, Generation과 상태 재동기화가 필요합니다. 설계에서는 서버가 최종 상태를 소유하고 Client 입력, Sequence와 시간을 검증합니다. 지연은 Prediction·Interpolation과 제한된 Rewind로 보정합니다. Queue, Pool과 Cache에는 상한을 두고 재접속·배포·중복 처리까지 정상 흐름으로 설계합니다.
+
+> TCP Keepalive는 OS 레벨 경로 점검으로 기본 간격이 2시간이라 게임 서버에 부적합합니다. Application Heartbeat는 응답성을 직접 확인하며 간격을 자유롭게 조절합니다. 실시간 Match는 간격 3~5초, Timeout 10~15초로 설정합니다.
+>
+> Reconnect는 새 Socket을 이전 논리 Session에 안전하게 결합하는 절차입니다. Resume Token 서명·만료를 검증하고 Session Generation을 증가시켜 이전 Socket의 늦은 콜백을 폐기합니다. 마지막 Event Sequence를 교환해 Delta 재전송 또는 Full Snapshot으로 상태를 복원합니다.
+>
+> 서버 장애 후 수만 클라이언트가 동시에 재접속하는 폭풍을 막기 위해 Exponential Backoff + Jitter를 사용합니다. Heartbeat RTT·Reconnect 성공률·재동기화 Byte·Grace Period 만료 이유를 지표로 수집합니다.
 
 ## 13. 핵심 요약
-- Heartbeat는 주기적 Message와 응답 기한으로 연결 생존을 판단하고 Reconnect는 새 연결을 기존 논리 Session에 안전하게 결합하는 절차다.
-- 서버 권위와 입력 검증을 유지한다.
-- Version·Sequence로 중복과 순서를 관리한다.
-- 성능 구조에는 크기와 시간 상한이 필요하다.
-- 복구와 p99를 운영 기준으로 둔다.
+
+- TCP Keepalive는 경로 점검만 하고 간격이 기본 2시간이라 Application Heartbeat가 별도로 필요하다.
+- Heartbeat 간격은 RTT·Jitter 기반으로, Timeout은 연속 실패 기준으로 설정한다.
+- Grace Period 동안 Session을 보관해 일시 단절 후 재접속을 지원한다.
+- Reconnect는 Resume Token 검증 → Session Generation 증가 → Delta/Full Sync 세 단계다.
+- Session Generation으로 이전 Socket의 늦은 콜백을 폐기한다.
+- Exponential Backoff + Jitter로 재접속 폭풍을 완화하고 서버가 Retry-After를 제공한다.
+- Match 중 연결 끊김 시 Grace Period 동안 캐릭터를 AI/정지로 유지하고 재접속을 기다린다.
+- Heartbeat RTT·Reconnect 성공률·재동기화 Byte를 지표로 수집한다.
 
 ## 한 줄 정리
-> Heartbeat는 응답 기한으로 논리적 생존을 확인하고 Reconnect는 인증된 새 연결을 기존 Session에 재결합합니다. Backoff, Generation과 상태 재동기화가 필요합니다.
+
+> Application Heartbeat로 Zombie Connection을 감지하고, Grace Period 동안 Session을 보관하며, Reconnect 시 Resume Token 검증 후 Session Generation을 증가시켜 이전 콜백을 폐기하고 누락 이벤트를 재동기화한다.

@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- Authoritative Server의 신뢰 경계와 입력 검증 원칙을 설명할 수 있다.
+- Client Prediction과 Server Authority의 역할 분리를 설명할 수 있다.
+- 이동·전투 검증에서 허용 오차를 설계하는 방법을 설명할 수 있다.
+- 중복·역순 입력 처리와 Cheat 탐지 파이프라인을 설명할 수 있다.
 
 ## 1. 개요
 권위 서버는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
@@ -157,39 +159,64 @@ Authoritative Server을 올바르게 적용하면 상태와 처리 책임이 명
 Authoritative Server 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- **신뢰 경계**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **입력 Sequence**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **이동 검증**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **전투 검증**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Cooldown**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+- Authoritative 서버를 두면 치팅이 완전히 불가능하다고 생각한다. 검증 비용 대비 가치를 설계해야 하며 서버도 공격 대상이 될 수 있다.
+- 서버에서 모든 게임 로직을 검증하면 플레이가 불가능할 정도로 지연된다고 생각한다. Input 전송과 State 수신만으로도 플레이 가능하며 Client Prediction으로 체감 지연을 보완한다.
+- 이동 검증은 목적지 좌표 범위만 확인하면 된다고 생각한다. 속도, 가속도, 장애물 충돌, 물리 조건 등 복합 검증이 필요하다.
+- 전투 검증은 서버에서 데미지 계산만 하면 된다고 생각한다. 사거리, 시야, 쿨다운, 버프·디버프 상태 전체가 서버 기준이어야 한다.
+- 클라이언트가 보낸 쿨다운 완료 신호를 믿어도 된다고 생각한다. Cooldown은 반드시 서버 시간 기준으로 계산해야 클라이언트 조작을 막을 수 있다.
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-권위 서버는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
-### Q2. 왜 필요한가요?
-변조된 Client가 위치, 피해량과 재화를 임의 결정하지 못하게 하고 모든 참가자에게 일관된 결과를 제공한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-공격 Packet의 damage 값을 믿지 않고 skillId, target과 input sequence를 받아 서버 데이터로 판정한다. 이상 행동은 거부뿐 아니라 지표·제재 파이프라인으로 기록한다.
-### Q4. 장애 시 무엇을 확인하나요?
-Authoritative Server 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. Authoritative Server를 설명해 주세요.
+게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델입니다. Client는 의도를 보내고 서버가 유효성을 판단하며, 서버 결과가 항상 최종 기준입니다.
+
+### Q2. 왜 Authoritative Server가 필요한가요?
+변조된 Client가 위치·피해량·재화를 임의 결정하지 못하게 하고 모든 참가자에게 일관된 결과를 제공하기 위해서입니다.
+
+### Q3. 공격 Packet을 어떻게 검증하나요?
+Client가 보낸 damage 값을 그대로 적용하지 않습니다. skillId·target·input sequence를 받아 서버 측 스탯·버프·Cooldown 기준으로 판정합니다. 이상 행동은 Drop·경고·탐지 점수 축적·제재 파이프라인으로 단계별 처리합니다.
+
+### Q4. 이동 검증 허용 오차를 어떻게 설정하나요?
+`허용거리 = 최대속도 × 경과시간 + 여유치`로 계산합니다. 여유치가 너무 작으면 정상 플레이어를 수정하고, 너무 크면 Cheat 여지가 커집니다. Network Jitter 분포와 게임 디자인 기준으로 측정하여 결정합니다.
+
+### Q5. 중복·역순 입력을 어떻게 처리하나요?
+Sequence Number로 오래된·중복 입력을 식별합니다. `lastProcessedSeq`보다 작거나 같은 Sequence는 Drop합니다. 재화 지급 같은 부작용이 있는 Command는 Idempotency Key와 영속 중복 방지가 추가로 필요합니다.
+
+### Q6. Client Prediction과 Server Authority를 어떻게 조합하나요?
+Client는 즉각 반응성을 위해 서버 응답 전에 결과를 예측해 표시합니다. Server 확정 결과가 오면 예측이 틀렸을 때 보정합니다. 서버 결과가 기준이며 Client 예측 상태는 임시 표시일 뿐입니다.
 
 ## 10. 예상 꼬리질문
-- 신뢰 경계의 최종 소유자는 어디에 두나요?
-- 입력 Sequence 처리에서 중복과 역순은 어떻게 구분하나요?
-- 이동 검증의 상한을 넘으면 어떤 요청부터 제한하나요?
-- 전투 검증 장애를 어떻게 재현하고 복구를 검증하나요?
-- Cooldown 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- 검증 실패를 모두 즉시 Ban으로 처리하면 어떤 문제가 생기나요?
+- Lag Compensation은 어떤 원리로 과거 상태를 참조하나요?
+- Server RNG와 Client RNG는 어떻게 분리하나요?
+- Authority를 여러 서비스로 분할할 때 경계를 어떻게 정하나요?
+- Authoritative Server에서 Replay 시스템을 어떻게 구현하나요?
+- Cooldown을 Server Time 기준으로 계산해야 하는 이유는 무엇인가요?
+- 이동 검증과 전투 판정 중 더 엄격하게 검증해야 하는 쪽은 어느 쪽인가요?
+
 ## 11. 30초 모범답변
-> Authoritative Server는 Client 입력을 신뢰하지 않고 서버가 규칙과 최종 상태를 판정합니다. 지연을 줄이기 위해 Client Prediction을 쓰더라도 서버 결과가 기준입니다. 공격 Packet의 damage 값을 믿지 않고 skillId, target과 input sequence를 받아 서버 데이터로 판정한다.
+
+> Authoritative Server는 Client 입력을 신뢰하지 않고 서버가 규칙·최종 상태를 판정합니다. Client는 반응성을 위해 예측하지만 서버 결과와 충돌하면 서버가 기준입니다. 공격 Packet의 damage는 서버 데이터로 재계산하고, Cooldown은 서버 시간 기준으로 검증합니다. 이상 행동은 거부뿐 아니라 탐지 점수 축적과 제재 파이프라인으로 기록합니다.
 
 ## 12. 1~2분 확장답변
-> Authoritative Server는 Client 입력을 신뢰하지 않고 서버가 규칙과 최종 상태를 판정합니다. 지연을 줄이기 위해 Client Prediction을 쓰더라도 서버 결과가 기준입니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> Authoritative Server는 최종 상태와 규칙 판정 권한을 서버가 가집니다. Client는 "앞으로 이동하겠다"는 의도를 보내고 서버가 속도·Cooldown·충돌·순서를 검증한 뒤 확정 결과를 모든 참가자에게 전달합니다.
+>
+> 이동 검증에서 허용 거리는 최대 속도×경과 시간+여유치로 계산합니다. 전투에서는 Client가 보낸 damage를 사용하지 않고 서버 스탯·버프·Armor 규칙으로 재계산합니다. 중복·역순 입력은 Sequence Number로 처리하고, 재화 지급은 Idempotency Key로 이중 지급을 막습니다.
+>
+> 검증 실패를 모두 즉시 Ban하면 Packet Loss나 Client Bug를 제재할 수 있으므로 Drop·경고·탐지 점수 축적으로 단계를 구분합니다. 지연을 숨기기 위해 Client Prediction을 사용하지만 서버 보정을 매끄럽게 처리하는 것이 핵심입니다.
 
 ## 13. 핵심 요약
-- 권위 서버는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- Authoritative Server는 Client 입력을 요청으로 받아 서버가 검증·판정해 최종 상태를 결정한다.
+- Client가 보낸 damage·위치·재화 값을 그대로 적용하지 않는다.
+- 이동 허용 오차는 속도×시간+여유치이며 Network Jitter 분포로 튜닝한다.
+- Cooldown·전투 판정은 서버 Time과 서버 데이터 기준이다.
+- 중복·역순 입력은 Sequence Number로 처리하며 재화는 Idempotency Key를 추가한다.
+- 검증 실패는 Drop·경고·탐지 점수·제재로 단계별 처리한다.
+- Authority는 여러 서비스로 분할 가능하며 같은 Field를 두 Authority가 수정하지 않도록 경계를 정한다.
+- Client Prediction은 반응성을 높이지만 서버 결과와 충돌하면 서버가 우선한다.
 
 ## 한 줄 정리
-> Authoritative Server는 Client 입력을 신뢰하지 않고 서버가 규칙과 최종 상태를 판정합니다. 지연을 줄이기 위해 Client Prediction을 쓰더라도 서버 결과가 기준입니다.
+
+> Authoritative Server는 Client 입력을 신뢰하지 않고 서버가 규칙·최종 상태를 판정하며, Client Prediction은 표시를 위한 임시 예측이고 서버 결과가 항상 기준이다.

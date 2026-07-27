@@ -10,23 +10,45 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 정의와 객체 수명 의미를 설명할 수 있다.
-- 유사 개념과 비용을 비교할 수 있다.
-- 게임 서버의 안전한 코드에 적용할 수 있다.
+
+- Virtual Function의 vtable/vptr 동작과 동적 Dispatch 원리를 설명할 수 있다.
+- Virtual Destructor가 필요한 이유와 Constructor/Destructor 안 Virtual 호출 제약을 설명할 수 있다.
+- 동적 다형성, 정적 다형성, Composition의 선택 기준을 설명할 수 있다.
+- 게임 서버의 Handler·Skill Effect 다형성 설계에 Virtual Function을 적용할 수 있다.
 
 ## 1. 개요
-가상 함수는 Base Pointer·Reference를 통한 호출을 실제 객체 타입의 Override로 동적 Dispatch하며 다형성은 공통 Interface로 다른 구현을 다루는 성질이다.
+
+Virtual Function은 Base Pointer·Reference를 통한 호출을 런타임에 실제 객체 타입의 Override로 Dispatch한다. 다형성은 공통 Interface로 서로 다른 구현을 교체 가능하게 다루는 성질이다.
+
+Overload(Compile Time 이름 해결), Template(Compile Time 타입 다형), Virtual(Runtime 타입 Dispatch)은 모두 다른 메커니즘이다. Virtual Function은 호출 시점에 실제 타입을 알 수 없거나 타입이 런타임에 결정될 때 사용한다.
 
 ## 2. 왜 필요한가
-호출자가 구체 타입에 의존하지 않고 교체 가능한 게임 행동과 서비스 구현을 사용한다. C++에서는 표현뿐 아니라 누가 소유하고 언제 파괴하는지가 API 의미의 일부다.
+
+Packet Command Handler, Skill Effect, Monster AI처럼 확장 가능한 동작이 필요할 때 호출자가 구체 타입을 알지 않아도 공통 Interface로 교체할 수 있게 한다.
+
+```cpp
+// 구체 타입마다 분기 → 확장 시 모든 분기에 추가해야 함
+void Dispatch(int type, Packet& p)
+{
+    if (type == 1) HandleLogin(p);
+    else if (type == 2) HandleMove(p);
+    // ...
+}
+
+// Virtual Interface → 새 Handler 추가 시 기존 코드 수정 불필요
+struct ICommandHandler
+{
+    virtual ~ICommandHandler() = default;
+    virtual Result Handle(Session&, const Packet&) = 0;
+};
+```
 
 ## 3. 핵심 동작 원리
-```text
-Base*→virtual table pointer→override function of Derived
-```
-Override와 Overload를 구분한다. 다형적 Base를 통해 삭제한다면 Virtual Destructor가 필요하다. 동적 Dispatch는 간접 호출 비용과 데이터 지역성 저하를 만들 수 있다.
 
-컴파일러가 생성하는 동작과 Container의 무효화 규칙을 이해해야 예외와 비동기 경로에서도 안전하다.
+```text
+Entity* ptr = new Player();
+ptr->Update(); → ptr의 vptr → Player vtable → Player::Update 호출
+```
 
 ### 정적 다형성과 동적 다형성
 
@@ -108,7 +130,7 @@ Container도 `vector<Base>`가 아니라 `vector<unique_ptr<Base>>` 같은 소�
 
 ## 7. 상속과 Composition
 
-상속은 Derived가 Base의 계약을 만족하는 “is-a” 관계일 때 사용한다. 코드 재사용만을 위한 상속은 Base 변경이 모든 Derived에 전파되고 결합을 높인다.
+상속은 Derived가 Base의 계약을 만족하는 "is-a" 관계일 때 사용한다. 코드 재사용만을 위한 상속은 Base 변경이 모든 Derived에 전파되고 결합을 높인다.
 
 ```text
 Player
@@ -159,7 +181,7 @@ struct ICommandHandler
 
 Registry가 Handler를 `unique_ptr`로 소유하고 Dispatch 시 Reference로 빌린다. Hot Reload 중 Registry를 교체하면 실행 중 Handler 수명을 Snapshot·Epoch로 보호한다.
 
-Skill Effect 다형성은 콘텐츠 확장에 편하지만 Tick마다 매우 많은 Virtual 호출과 개별 Allocation이 발생하면 Type별 Batch 처리도 측정한다. “Virtual 한 번의 ns”만 보지 않고 전체 Memory Layout, Allocation과 p99를 비교한다.
+Skill Effect 다형성은 콘텐츠 확장에 편하지만 Tick마다 매우 많은 Virtual 호출과 개별 Allocation이 발생하면 Type별 Batch 처리도 측정한다. "Virtual 한 번의 ns"만 보지 않고 전체 Memory Layout, Allocation과 p99를 비교한다.
 
 Interface가 Thread-safe인지, Handler가 Session Reference를 저장하는지, Callback 이후 수명이 유효한지도 계약에 포함한다. Virtual Function은 소유권 문제를 해결하지 않는다.
 
@@ -173,70 +195,187 @@ Template·Concept은 Compile-time 다형성으로 Inlining과 Type별 최적화�
 
 Base 계약에 대한 공통 Test Suite를 만들어 모든 Derived에 적용하면 대체 가능성을 검증할 수 있다. Destructor가 Virtual인지, Override에 `override`가 있는지, Base Pointer Collection의 Owner가 명확한지 Static Analysis와 Code Review로 확인한다. Sanitizer는 잘못된 다형 삭제와 수명 오류를 발견하는 데 도움을 준다.
 
-## 11. 쉬운 예시
-네트워크 Buffer를 함수에 넘길 때 읽기만 하는지, 복사하는지, 소유권을 넘기는지 Signature로 표현한다. 모호한 Raw Pointer만 전달하면 호출자가 수명을 추측하게 된다.
+## 11. 쉬운 예시: Packet Handler 교체
 
-## 12. 비슷한 개념과 비교
-| 관점 | 값·단독 소유 | 공유·비소유 |
-|---|---|---|
-| 목적 | 명확한 수명·이동 | 공동 수명·관찰 |
-| 장점 | 단순·낮은 비용 | 비동기 연결 용이 |
-| 위험 | 이동 후 사용 | Cycle·숨은 수명 연장 |
+같은 Handler Registry 코드가 Login, Move, Attack Handler를 구체 타입 없이 동일하게 호출할 수 있다.
+
+```cpp
+struct LoginHandler : ICommandHandler
+{
+    Result Handle(Session& s, const Packet& p) override
+    {
+        // 로그인 처리
+        return Result::Ok;
+    }
+};
+
+struct MoveHandler : ICommandHandler
+{
+    Result Handle(Session& s, const Packet& p) override
+    {
+        // 이동 처리
+        return Result::Ok;
+    }
+};
+
+class HandlerRegistry
+{
+public:
+    void Register(int opcode, std::unique_ptr<ICommandHandler> h)
+    {
+        handlers_[opcode] = std::move(h);
+    }
+
+    Result Dispatch(int opcode, Session& s, const Packet& p)
+    {
+        auto it = handlers_.find(opcode);
+        if (it == handlers_.end()) return Result::NotFound;
+        return it->second->Handle(s, p);   // Virtual Dispatch
+    }
+
+private:
+    std::unordered_map<int, std::unique_ptr<ICommandHandler>> handlers_;
+};
+```
+
+새 Handler를 추가할 때 `Dispatch` 분기를 수정하지 않아도 된다.
+
+## 12. 비슷한 개념 비교
+
+| 관점 | 동적 다형성(Virtual) | 정적 다형성(Template) | `variant`+Visitor |
+|---|---|---|---|
+| 호출 결정 | Runtime | Compile Time | Runtime(방문 순서) |
+| 확장 | 새 Derived 클래스 추가 | 새 타입 인스턴스화 | `variant` 목록 수정 |
+| 성능 비용 | 간접 호출·vptr | Inlining 가능 | Branch·Switch |
+| 가장 적합한 경우 | 타입이 런타임에 결정 | 타입이 Compile Time에 확정 | 폐쇄된 타입 집합 |
+| 소유 방식 | `unique_ptr<Base>` | 값 또는 Concept | `std::variant` |
 
 ## 13. 장점과 단점
-언어 기능은 추상화와 자원 효율을 제공하지만 잘못된 소유권, 무효화, 간접 호출은 메모리 오류와 지연을 만든다. 가장 단순한 값과 단독 소유를 기본으로 한다.
+
+### 장점
+
+- 새 Derived를 추가해도 호출 코드를 수정하지 않아 Open-closed 설계를 지원한다.
+- 공통 Interface로 여러 구현을 교체 가능하게 만들어 테스트와 Mock이 쉬워진다.
+- 런타임에 구현을 교체(Strategy 패턴)하거나 Plugin으로 로드할 수 있다.
+
+### 단점
+
+- 간접 호출, vptr 크기 추가, Inlining 불가로 Hot Tight Loop에서 성능 영향이 있다.
+- 객체를 `unique_ptr<Base>`로 관리해야 해 Container 내 Cache 지역성이 낮아진다.
+- Virtual Destructor 누락, `override` 미표기, Object Slicing 등 정확성 실수가 발생하기 쉽다.
+- Constructor와 Destructor 안에서 Virtual 호출이 예상과 다르게 동작한다.
 
 ## 14. 게임 서버·백엔드 실무 예시
-Skill Interface의 여러 효과를 다형성으로 구현할 수 있다. Tick마다 수백만 번 호출하는 경로는 Component Data와 분기 방식도 측정 비교한다.
 
-Address Sanitizer, Leak Sanitizer, 정적 분석과 부하 테스트를 사용하고 평균보다 최대 할당·해제 지연을 본다.
+### Skill Effect 다형성
+
+Skill Effect는 구체 타입마다 다른 적용 방식이 있다. 콘텐츠 확장 시 새 Effect Class를 추가하는 것만으로 끝난다.
+
+```cpp
+struct ISkillEffect
+{
+    virtual ~ISkillEffect() = default;
+    virtual void Apply(Player& target, float power) = 0;
+};
+
+struct DamageEffect : ISkillEffect
+{
+    void Apply(Player& target, float power) override
+    { target.TakeDamage(power); }
+};
+
+struct HealEffect : ISkillEffect
+{
+    void Apply(Player& target, float power) override
+    { target.Heal(power); }
+};
+```
+
+수십만 Entity Tick에서 이 구조로 호출이 폭발하면 ECS 방식이나 Type별 배열 처리를 측정해 비교한다.
+
+### AI State Machine
+
+State별 동작을 Virtual Interface로 표현하면 State 전환은 Pointer 교체만으로 구현된다.
+
+```cpp
+struct IAIState
+{
+    virtual ~IAIState() = default;
+    virtual void Enter(Monster& monster) {}
+    virtual void Update(Monster& monster, float dt) = 0;
+    virtual void Exit(Monster& monster) {}
+};
+```
 
 ## 15. 자주 하는 오해
-- Raw Pointer가 소유권을 자동 표현한다고 본다.
-- Reference는 절대 Dangling이 되지 않는다고 본다.
-- shared_ptr가 모든 수명 문제의 기본 해법이라고 본다.
-- Move가 항상 메모리 복사 0이라고 단정한다.
-- 가상 함수 비용만 보고 구조 전체 비용을 무시한다.
 
-### 최종 실무 판단 기준
-
-- **요구 확인**: 가상 함수는 Base Pointer·Reference를 통한 호출을 실제 객체 타입의 Override로 동적 Dispatch하며 다형성은 공통 Interface로 다른 구현을 다루는 성질이다. 이 내용을 적용하기 전에 데이터 규모, 호출 빈도와 허용 지연을 수치로 확인한다. 같은 기술도 요청량과 정확성 요구가 달라지면 적합한 선택이 달라질 수 있다.
-- **정확성 경계**: 소유권과 수명을 명시한다. 정상 흐름만 설명하지 않고 중복, 역순, 동시 실행과 부분 실패에서 어떤 불변식을 지켜야 하는지 함께 명시한다.
-- **비용 비교**: RAII와 값 의미를 우선한다. 평균 복잡도나 처리량 하나만 보지 않고 Memory, CPU, I/O, Lock 대기와 구현 복잡도까지 비교한다.
-- **장애 대응**: Virtual Function과 Polymorphism 관련 구성 요소가 느려지거나 중단됐을 때 Timeout, Retry 상한, Backpressure와 복구 순서를 정한다. Retry가 중복 부작용이나 연쇄 부하를 만들지 검증한다.
-- **운영 검증**: Virtual Function과 Polymorphism에서는 기능 Test와 함께 경계값, Peak 부하와 장애 주입 Test를 수행한다. 처리 시간 p95·p99, 오류율, Queue와 Resource 사용량을 관찰하고 변경 전후 결과를 비교한다.
-
-Virtual Function과 Polymorphism 답변에서는 이 기준으로 답하면 개념 정의에 그치지 않고 선택 조건, Trade-off와 실무 검증 방법까지 논리적으로 연결할 수 있다.
+- **`override`를 안 붙여도 Override가 된다**: Signature가 하나라도 다르면 새 Virtual을 만든다. `override`는 이를 Compile-time에 검출한다.
+- **Base Destructor가 Virtual이 아니어도 `delete`하면 된다**: Base Pointer로 Derived를 삭제하면 Derived Destructor가 호출되지 않아 Undefined Behavior가 된다.
+- **Virtual Function은 항상 Overhead가 크다**: 실제 Hot Path 병목은 Cache Miss와 Allocation인 경우가 많다. 추측하지 말고 Profile 먼저다.
+- **Constructor에서 Virtual을 호출하면 Derived Override가 실행된다**: Construction 중에는 Derived 부분이 아직 생성되지 않아 Base Override가 실행된다.
+- **`dynamic_cast` 실패는 예외가 난다**: Pointer에 대한 `dynamic_cast` 실패는 nullptr를 반환한다. 예외는 Reference에 대한 실패 시 `std::bad_cast`다.
+- **다중 상속을 쓰면 Interface 두 개를 쉽게 합칠 수 있다**: Diamond 문제, Layout 복잡성, 호출 Ambiguity가 생긴다. Interface 상속은 상태 없는 Abstract Class에 제한한다.
+- **Composition보다 상속이 재사용에 좋다**: 상속은 강한 결합이다. Member로 조합하는 Composition이 변경 영향 범위가 좁다.
 
 ## 16. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-가상 함수는 Base Pointer·Reference를 통한 호출을 실제 객체 타입의 Override로 동적 Dispatch하며 다형성은 공통 Interface로 다른 구현을 다루는 성질이다.
-### Q2. 어떤 Trade-off가 있나요?
-Override와 Overload를 구분한다. 다형적 Base를 통해 삭제한다면 Virtual Destructor가 필요하다. 동적 Dispatch는 간접 호출 비용과 데이터 지역성 저하를 만들 수 있다.
-### Q3. 게임 서버 적용 사례는 무엇인가요?
-Skill Interface의 여러 효과를 다형성으로 구현할 수 있다. Tick마다 수백만 번 호출하는 경로는 Component Data와 분기 방식도 측정 비교한다.
-### Q4. 안전성을 어떻게 검증하나요?
-소유권 규칙, Scope 종료, 예외·취소 경로를 확인하고 Sanitizer와 프로파일러를 사용한다.
+
+### Q1. Virtual Function의 동작 원리를 설명해 주세요.
+
+Compiler는 Virtual Function이 있는 Class에 vtable을 생성하고 각 객체에 vptr를 추가합니다. Base Pointer로 호출하면 vptr가 가리키는 vtable에서 함수 주소를 찾아 간접 호출합니다. 실제 타입의 Override가 실행됩니다.
+
+### Q2. Virtual Destructor가 필요한 이유는 무엇인가요?
+
+Base Pointer로 Derived 객체를 `delete`할 때 Base Destructor가 Virtual이 아니면 Derived Destructor가 호출되지 않아 Derived 자원이 정리되지 않고 Undefined Behavior가 됩니다. 다형 삭제가 발생하는 Base Class는 반드시 Virtual Destructor가 필요합니다.
+
+### Q3. Override와 Overload를 비교해 주세요.
+
+Override는 Derived가 Base의 Virtual Function을 같은 Signature로 재정의하는 것입니다. `override`를 표기해 Compiler가 검사합니다. Overload는 같은 Scope에서 이름은 같지만 Parameter가 다른 함수 집합을 만드는 것으로 Compile Time에 해결됩니다.
+
+### Q4. Virtual Function의 비용은 어느 수준인가요?
+
+간접 호출 한 번, vptr 크기, Inlining 불가 비용이 있습니다. 하지만 실제 Hot Path에서는 흩어진 Heap 객체의 Cache Miss와 Allocation이 더 큰 병목이 될 수 있습니다. 추측하지 않고 Profile한 뒤 필요하면 ECS나 Type별 배열 처리를 고려합니다.
+
+### Q5. 동적 다형성 대신 `std::variant`를 쓸 때는 언제인가요?
+
+타입 집합이 고정되어 있고 새 연산을 자주 추가할 때 `variant`+Visitor가 더 명확합니다. Virtual Interface는 타입 집합이 열려 있고 새 타입을 자주 추가할 때 적합합니다. 상황에 따라 두 가지를 혼용할 수 있습니다.
+
+### Q6. Constructor 안에서 Virtual을 호출하면 어떻게 되나요?
+
+Construction 중에는 Derived 부분이 아직 생성되지 않으므로 현재 Class의 Override가 호출됩니다. Derived Override로 Dispatch되지 않습니다. Destructor 안도 동일하게 이미 파괴된 Derived 부분에 Dispatch되지 않습니다.
 
 ## 17. 예상 꼬리질문
-- 소유권과 수명은 어떻게 다른가요?
-- Container 재할당은 참조에 어떤 영향을 주나요?
-- 예외가 발생하면 자원은 어떻게 정리되나요?
-- 공유 소유의 Cycle을 어떻게 끊나요?
-- 값 의미와 다형성을 어떻게 선택하나요?
+
+- Pure Virtual Function과 Abstract Class의 관계는 무엇인가요?
+- `final`이 성능에 영향을 줄 수 있는 이유는 무엇인가요?
+- Protected Non-virtual Destructor를 사용하는 경우는 언제인가요?
+- Object Slicing을 방지하는 방법은 무엇인가요?
+- Liskov Substitution 원칙이 깨지는 예를 들 수 있나요?
+- Template과 Virtual을 함께 쓸 때 주의할 점은 무엇인가요?
+- Base Class의 Contract는 어떻게 문서화하나요?
 
 ## 18. 30초 모범답변
-> 가상 함수는 Base를 통한 호출을 실제 객체의 Override로 연결합니다. 확장성에 유리하지만 수명, Virtual Destructor와 간접 호출 비용을 고려해야 합니다. Skill Interface의 여러 효과를 다형성으로 구현할 수 있다.
+
+> Virtual Function은 vptr·vtable을 통해 Base Pointer 호출을 실제 타입의 Override로 Dispatch합니다. Base Pointer로 삭제하는 Class는 Virtual Destructor가 필요합니다. 확장성에 유리하지만 Cache Miss가 많은 수십만 Entity Tick에서는 ECS나 Type별 배열 처리도 측정해 비교합니다.
 
 ## 19. 1~2분 확장답변
-> 가상 함수는 Base를 통한 호출을 실제 객체의 Override로 연결합니다. 확장성에 유리하지만 수명, Virtual Destructor와 간접 호출 비용을 고려해야 합니다. C++ 서버에서는 객체 수명과 소유권을 Type과 Scope로 표현하는 것이 핵심입니다. Raw Pointer는 비소유 관찰에 제한하고 RAII와 Container를 우선합니다. 성능은 추측하지 않고 할당, Cache, 간접 호출과 p99를 프로파일링합니다.
+
+> Virtual Function은 객체의 vptr가 가리키는 vtable에서 함수 주소를 찾는 간접 호출로 동적 Dispatch를 구현합니다. Base Pointer로 Derived를 삭제하려면 Base Destructor가 Virtual이어야 하며, Constructor와 Destructor 안의 Virtual 호출은 현재 Class의 Override만 실행됩니다.
+>
+> 상속은 Base 계약을 만족하는 "is-a" 관계에 사용하고, 재사용만이 목적이면 Composition을 씁니다. Derived가 Base를 기대하는 코드에 완전히 대체 가능해야 한다는 Liskov Substitution을 지켜야 합니다.
+>
+> 게임 서버에서 Packet Handler를 Virtual Interface로 Registry에 등록하면 새 Handler 추가 시 Dispatch 코드를 수정하지 않아도 됩니다. 단 수십만 Entity의 매 Tick Virtual 호출은 Cache Miss가 누적되므로 Profile 후 ECS나 Type별 배열 처리와 비교합니다.
 
 ## 20. 핵심 요약
-- 가상 함수는 Base Pointer·Reference를 통한 호출을 실제 객체 타입의 Override로 동적 Dispatch하며 다형성은 공통 Interface로 다른 구현을 다루는 성질이다.
-- 소유권과 수명을 명시한다.
-- RAII와 값 의미를 우선한다.
-- 무효화와 예외 경로를 확인한다.
-- 도구로 메모리 오류를 검증한다.
+
+- Virtual Function은 vptr·vtable 간접 호출로 실제 타입의 Override를 Runtime에 선택한다.
+- Base Pointer로 삭제하는 Class는 반드시 Virtual Destructor가 필요하다.
+- `override`를 명시해 Signature 불일치를 Compile Time에 탐지한다.
+- Constructor·Destructor 안의 Virtual 호출은 현재 Class Override만 실행된다.
+- 상속은 "is-a" 계약에, 재사용은 Composition에 사용한다.
+- Virtual은 타입 집합이 열린 확장 설계에, `variant`+Visitor는 폐쇄 타입 집합에 적합하다.
+- Hot Tight Loop의 Virtual 비용은 Cache Miss·Allocation이 더 클 수 있으므로 Profile 먼저다.
+- Virtual Function은 소유권 문제를 해결하지 않는다.
 
 ## 한 줄 정리
-> 가상 함수는 Base를 통한 호출을 실제 객체의 Override로 연결합니다. 확장성에 유리하지만 수명, Virtual Destructor와 간접 호출 비용을 고려해야 합니다.
+
+> Virtual Function은 vptr·vtable 간접 호출로 Runtime에 실제 타입의 Override를 Dispatch한다. Base Pointer 삭제에는 Virtual Destructor가 필수이며, Hot Loop 비용은 측정 후 판단한다.

@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 원리와 등장 이유를 설명할 수 있다.
-- 정확성·지연·운영 Trade-off를 설명할 수 있다.
-- 게임 서버 설계와 장애 대응에 적용할 수 있다.
+
+- Client Prediction의 목적과 입력 Sequence 기반 동작 원리를 설명할 수 있다.
+- Reconciliation 절차(권위 상태 적용 → Pending 제거 → 미확인 입력 재실행)를 단계별로 설명할 수 있다.
+- 서버가 클라이언트의 최종 좌표를 그대로 적용하지 않는 이유와 검증 방법을 설명할 수 있다.
+- 예측 적합 대상과 부적합 대상의 구분 기준을 설명할 수 있다.
 
 ## 1. 개요
 Client Prediction은 서버 응답 전 자신의 입력 결과를 즉시 보여 주고 Reconciliation은 권위 서버 상태와 차이를 수정하는 방식이다.
@@ -101,51 +103,140 @@ Client Prediction과 Reconciliation은 정상 경로만 구현해서는 운영 �
 Client Prediction과 Reconciliation에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-Client는 이동 입력 41번을 즉시 실행하고 Server가 40번까지 처리한 Snapshot을 보내면 41번 이후 입력을 다시 적용한다. 작은 위치 차이는 화면만 부드럽게 보정하고 Collision 상태는 권위 결과를 따른다.
+
+아래는 Client-side Prediction + Reconciliation 흐름의 의사 코드다.
+
+```
+// Client 측
+struct InputRecord { uint32_t seq; Vector2 dir; float dt; };
+std::deque<InputRecord> pendingInputs;
+
+void OnLocalInput(Vector2 dir, float dt) {
+    InputRecord rec = { ++localSeq, dir, dt };
+    pendingInputs.push_back(rec);
+    ApplyInputLocally(rec);          // 즉시 화면에 반영 (Prediction)
+    SendToServer(rec);               // 서버로 전송
+}
+
+// 서버 Snapshot 수신 시 Reconciliation
+void OnServerSnapshot(ServerState state) {
+    // 1. 서버 권위 상태로 즉시 되돌림
+    SetPositionFromAuthority(state.position);
+
+    // 2. 확인된 입력 제거
+    while (!pendingInputs.empty() &&
+           pendingInputs.front().seq <= state.lastProcessedSeq)
+        pendingInputs.pop_front();
+
+    // 3. 미확인 입력 재실행 (Replay)
+    for (auto& rec : pendingInputs)
+        ApplyInputLocally(rec);      // 예측 상태 재구성
+
+    // 4. 차이가 작으면 Visual Smoothing, 크면 즉시 교정
+    float diff = Distance(currentPos, state.position);
+    if (diff < CORRECTION_THRESHOLD)
+        SmoothTowards(state.position, 0.3f);
+    else
+        SetPositionFromAuthority(state.position);  // 텔레포트 교정
+}
+```
+
+- 서버가 `lastProcessedSeq = 42`를 Snapshot에 포함하면 Client는 `seq <= 42`인 입력을 Pending에서 제거하고 43번부터 다시 실행한다.
+- `CORRECTION_THRESHOLD`는 게임 장르와 Tick Rate에 따라 조정하며, 너무 크면 Cheat 여지가 생기고 너무 작으면 정상 Jitter에도 튄다.
 
 ## 5. 비슷한 개념과 비교
-Prediction은 자기 입력 반응을 빠르게 하지만 오차 교정이 필요하다. Server 응답만 기다리면 단순하고 정확하지만 RTT가 조작감으로 드러난다.
-## 6. 장점과 단점
-Client Prediction과 Reconciliation을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Input Sequence, Pending Queue와 Local Simulation 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-이동 입력을 sequence와 함께 보내고 서버가 마지막 처리 번호를 Snapshot에 포함한다. Client는 확인된 입력을 버리고 미확인 입력을 다시 적용한다.
 
-Client Prediction과 Reconciliation 관점에서는 평균보다 p95·p99, 지역·Network별 분포, Queue·Buffer 상한, Drop·Retry와 복구 성공률을 관찰한다.
+| 방식 | 반응성 | 서버 권위 | 구현 복잡도 | 적합한 상황 |
+|------|--------|---------|-----------|-----------|
+| **Server-only (Wait)** | RTT만큼 지연 | 완전 | 단순 | 턴제·RTS처럼 빠른 반응이 불필요한 경우 |
+| **Client Prediction** | 즉시 반응 | 유지 (Reconciliation) | 높음 | FPS·액션 게임 자기 이동 |
+| **Interpolation (타 플레이어)** | 약간 지연(버퍼) | 유지 | 중간 | 다른 플레이어 위치 표시 |
+| **Dead Reckoning** | 즉시 추정 | 최종 보정 | 중간 | 위치 업데이트가 드문 경우 |
+| **Rollback Netcode** | 즉시 반응 | 롤백 후 재실행 | 매우 높음 | 격투 게임처럼 입력 동기화가 핵심 |
+
+## 6. 장점과 단점
+
+**장점**
+- RTT가 높아도 자신의 이동이 즉시 반응해 조작감이 크게 개선된다.
+- 서버 권위를 유지하므로 Cheat 방지 기반이 유지된다.
+- Reconciliation으로 서버와 클라이언트 상태가 주기적으로 수렴한다.
+- 네트워크 품질과 무관하게 클라이언트 측 반응성이 일정하다.
+
+**단점**
+- 클라이언트와 서버 Simulation이 달라지면 오차가 누적되고 자주 튀는 현상이 생긴다.
+- Pending Queue 관리, Replay 로직, Threshold 조정이 복잡하다.
+- 발사·Hit 같은 결과 의존 이벤트는 Server 확인 후 확정해야 해서 느낌이 어색할 수 있다.
+- Float 결정론 미보장 시 재실행 결과가 누적 오차를 만든다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+이동 입력에 Sequence·방향·Timestamp를 포함해 전송하고, 서버는 Snapshot에 `lastProcessedSeq`를 담아 응답한다. 서버는 클라이언트 최종 좌표를 그대로 적용하지 않고, 방향·최대 속도·지형 충돌을 독립 시뮬레이션으로 검증한다.
+
+입력 손실 대비로 Unreliable 채널에서 최근 입력 2~3개를 중복 전송하고 서버는 Sequence로 중복 제거한다. Correction 거리·빈도·Pending 수·RTT Jitter를 지표로 수집해 네트워크 조건 변화를 감지한다.
 
 ## 8. 자주 하는 오해
-- **Input Sequence**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Pending Queue**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Local Simulation**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Server Ack**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Replay**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **Sequence 없이도 Reconciliation이 정확하게 작동한다.** 서버 Ack와 클라이언트 예측 상태를 매칭하려면 Sequence가 필수다. Sequence 없이는 어느 입력까지 반영됐는지 알 수 없다.
+- **Pending Queue 입력은 항상 순서대로 처리된다.** UDP 손실·재전송에서 중복·역순이 발생한다. 서버는 Sequence로 중복 제거하고 클라이언트는 재전송한다.
+- **Client와 서버 Simulation 결과가 다르면 항상 버그다.** Float 정밀도, Tick Rate, 다른 객체와의 충돌 순서로 일시적 불일치는 자연스럽다. Reconciliation으로 수렴시키는 것이 정상이다.
+- **Server Ack가 오면 클라이언트 상태가 즉시 일치한다.** Ack 이후에도 미확인 Pending 입력이 남아 Replay가 필요하다. Reconciliation 후에도 클라이언트가 서버보다 몇 프레임 앞서 있다.
+- **서버가 클라이언트 최종 좌표를 검증하면 충분하다.** 클라이언트는 좌표를 조작할 수 있다. 서버는 이동 방향·최대 속도·충돌·Cooldown을 독립 시뮬레이션으로 검증해야 한다.
+- **Correction Threshold를 크게 잡으면 덜 튄다.** Threshold가 크면 소폭의 Cheat 이동을 허용하게 된다. 실제 Jitter 분포를 측정해 적절한 값을 설정해야 한다.
+- **구매·보상도 Prediction해서 먼저 보여주면 UX가 좋아진다.** 되돌리기 어려운 상태 변경을 Prediction하면 서버가 거부했을 때 롤백 UX가 더 나빠진다. 서버 확인 후 확정하는 것이 안전하다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Client Prediction은 서버 응답 전 자신의 입력 결과를 즉시 보여 주고 Reconciliation은 권위 서버 상태와 차이를 수정하는 방식이다.
-### Q2. 어떤 Trade-off가 있나요?
-Client와 서버 Simulation이 다르면 오차가 쌓인다. 입력 Sequence, 동일 규칙과 보정 Threshold가 필요하며 큰 차이는 즉시, 작은 차이는 부드럽게 보정할 수 있다.
-### Q3. 실무 적용 사례는 무엇인가요?
-이동 입력을 sequence와 함께 보내고 서버가 마지막 처리 번호를 Snapshot에 포함한다. Client는 확인된 입력을 버리고 미확인 입력을 다시 적용한다.
-### Q4. 장애와 악용을 어떻게 제한하나요?
-Client Prediction과 Reconciliation 관점에서는 서버 검증, 시간·크기 상한, Version과 Idempotency, Backpressure와 지표를 적용한다.
+
+### Q1. Client Prediction의 목적과 동작 원리를 설명해 주세요.
+RTT 동안 서버 응답을 기다리면 조작감이 나빠집니다. Client Prediction은 자신의 입력을 로컬에서 즉시 실행해 화면에 반영하고, 같은 입력을 Sequence와 함께 서버로 전송합니다. 서버는 독립적으로 판정하고 최종 상태를 권위로 사용합니다.
+
+### Q2. Reconciliation 절차를 단계별로 설명해 주세요.
+서버 Snapshot이 도착하면 세 단계로 처리합니다. 1단계: 서버 권위 상태를 클라이언트에 즉시 적용합니다. 2단계: `lastProcessedSeq` 이하의 확인된 입력을 Pending Queue에서 제거합니다. 3단계: 남은 미확인 입력을 순서대로 재실행해 현재 예측 상태를 재구성합니다. 차이가 작으면 Visual Smoothing, 크면 즉시 교정합니다.
+
+### Q3. 서버가 클라이언트의 최종 좌표를 그대로 적용하지 않는 이유는?
+클라이언트 코드는 수정·패치 가능하므로 좌표를 조작할 수 있습니다. 서버는 이동 방향·버튼·Duration을 받아 최대 속도·가속도·지형 충돌·Cooldown을 독립 시뮬레이션으로 검증합니다. 클라이언트 Timestamp도 조작 가능하므로 서버 시간 기준 Window로 제한합니다.
+
+### Q4. 입력 손실 시 Pending Queue를 어떻게 처리하나요?
+Unreliable 채널에서 최근 입력 2~3개를 Packet에 중복 포함해 손실을 보상합니다. 서버는 Sequence로 중복을 제거합니다. Pending 입력에 시간·개수 상한을 두고 오래 확인되지 않으면 재동기화를 요청하거나 연결 품질 UI를 표시합니다.
+
+### Q5. 예측에 적합한 대상과 부적합한 대상의 기준은 무엇인가요?
+자기 이동·무기 반동처럼 즉시 피드백이 가치 있고 되돌리기 쉬운 상태는 예측 대상입니다. 구매·보상·Match 결과처럼 되돌리기 어렵거나 다른 플레이어 상태처럼 미래 입력을 모르는 경우는 예측하지 않고 서버 확인 후 확정합니다.
+
+### Q6. Correction Threshold는 어떻게 설정하나요?
+Threshold가 너무 크면 소폭 Cheat 이동을 허용하고, 너무 작으면 정상 Jitter에 자꾸 화면이 튑니다. 실제 네트워크 환경에서 RTT·Jitter를 측정해 Jitter의 95퍼센타일 오차보다 약간 큰 값으로 시작합니다. 장르별 허용 오차도 다릅니다. FPS는 작고 MMORPG는 상대적으로 크게 설정합니다.
 
 ## 10. 예상 꼬리질문
-- Input Sequence의 최종 소유자는 어디에 두나요?
-- Pending Queue 처리에서 중복과 역순은 어떻게 구분하나요?
-- Local Simulation의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Server Ack 장애를 어떻게 재현하고 복구를 검증하나요?
-- Replay 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Rollback Netcode가 Client Prediction + Reconciliation과 다른 점은 무엇인가요?
+- 클라이언트와 서버가 다른 Tick Rate를 사용할 때 Reconciliation이 어렵게 되는 이유는?
+- 발사 효과를 먼저 보여주고 Hit 판정은 서버에서 처리할 때 UX를 어떻게 설계하나요?
+- 재접속 시 Pending Queue를 어떻게 처리하나요?
+- Prediction Replay 횟수가 많을 때 CPU 부하를 어떻게 줄이나요?
+- Reconciliation 후에도 위치가 계속 튄다면 어떤 원인을 먼저 확인하나요?
+- 다수의 플레이어가 같은 공간에 있을 때 Prediction 오차가 누적되는 이유는?
+
 ## 11. 30초 모범답변
-> Client Prediction은 입력을 즉시 Simulation하고 Reconciliation은 서버 상태에 미확인 입력을 재적용해 권위와 반응성을 함께 유지합니다. Client Prediction과 Reconciliation을 선택하거나 적용할 때는 정확성, 성능과 구현 복잡도의 균형을 함께 봐야 합니다. 이동 입력을 sequence와 함께 보내고 서버가 마지막 처리 번호를 Snapshot에 포함한다.
+
+> RTT 동안 서버 응답을 기다리면 조작감이 나빠집니다. Client Prediction은 입력을 로컬에서 즉시 실행하고, 서버 Snapshot이 오면 권위 상태를 적용 후 미확인 입력을 재실행합니다. 서버는 클라이언트 좌표가 아닌 이동 방향·속도·충돌을 독립 검증해 권위를 유지합니다.
 
 ## 12. 1~2분 확장답변
-> Client Prediction은 입력을 즉시 Simulation하고 Reconciliation은 서버 상태에 미확인 입력을 재적용해 권위와 반응성을 함께 유지합니다. 설계에서는 서버가 최종 상태를 소유하고 Client 입력, Sequence와 시간을 검증합니다. 지연은 Prediction·Interpolation과 제한된 Rewind로 보정합니다. Queue, Pool과 Cache에는 상한을 두고 재접속·배포·중복 처리까지 정상 흐름으로 설계합니다.
+
+> Client Prediction은 이동 입력을 Sequence와 함께 로컬에서 즉시 실행해 RTT에 무관하게 반응합니다. 서버가 Snapshot에 `lastProcessedSeq`를 포함해 응답하면 세 단계로 Reconciliation합니다. 권위 상태 적용 → `lastProcessedSeq` 이하 확인 입력 제거 → 나머지 미확인 입력 재실행입니다.
+>
+> 서버는 클라이언트가 보낸 최종 좌표를 그대로 적용하지 않습니다. 이동 방향·최대 속도·지형 충돌·Cooldown을 독립 시뮬레이션으로 검증합니다. 클라이언트 Timestamp도 서버 시간 Window로 제한합니다.
+>
+> 예측 대상은 즉시 피드백이 가치 있고 되돌리기 쉬운 자기 이동에 집중합니다. 구매·보상은 서버 확인 후 확정합니다. Correction 거리·빈도·Pending 수·RTT Jitter를 지표로 수집해 품질을 감시합니다.
 
 ## 13. 핵심 요약
-- Client Prediction은 서버 응답 전 자신의 입력 결과를 즉시 보여 주고 Reconciliation은 권위 서버 상태와 차이를 수정하는 방식이다.
-- 서버 권위와 입력 검증을 유지한다.
-- Version·Sequence로 중복과 순서를 관리한다.
-- 성능 구조에는 크기와 시간 상한이 필요하다.
-- 복구와 p99를 운영 기준으로 둔다.
+
+- Client Prediction은 서버 응답 전 자신의 입력을 로컬에서 즉시 실행해 반응성을 높인다.
+- 입력마다 Sequence를 붙이고 Pending Queue에 보관하다 서버 Ack 후 제거한다.
+- Reconciliation은 권위 상태 적용 → 확인 입력 제거 → 미확인 입력 재실행 세 단계다.
+- 서버는 클라이언트 최종 좌표가 아닌 이동 방향·속도·충돌을 독립 검증해 권위를 유지한다.
+- 작은 차이는 Visual Smoothing, 큰 차이는 즉시 교정한다.
+- 구매·보상처럼 되돌리기 어려운 상태는 서버 확인 후 확정한다.
+- Threshold가 너무 크면 Cheat 허용, 너무 작으면 Jitter 오탐이므로 실측 기반으로 조정한다.
+- Correction 거리·빈도·Pending 수·RTT Jitter를 지표로 수집해 네트워크 품질 변화를 감지한다.
 
 ## 한 줄 정리
-> Client Prediction은 입력을 즉시 Simulation하고 Reconciliation은 서버 상태에 미확인 입력을 재적용해 권위와 반응성을 함께 유지합니다.
+
+> Client Prediction은 입력을 즉시 로컬 실행하고, 서버 Snapshot 수신 시 권위 상태 복원 → 확인 입력 제거 → 미확인 입력 재실행으로 Reconciliation하며, 서버는 이동 방향·충돌·Cooldown을 독립 검증해 권위를 유지한다.

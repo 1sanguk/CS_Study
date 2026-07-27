@@ -147,11 +147,11 @@ Game Server Architecture을 올바르게 적용하면 상태와 처리 책임이
 Game Server Architecture 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- **Authority 경계**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Stateful 배치**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Gateway 용량**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Service Discovery**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Room Partition**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+- 게임 서버는 항상 Stateful해야 한다고 생각한다. 로그인, 매치메이킹, API 서버는 Stateless로도 충분하며 수평 확장에 유리하다.
+- Authoritative 서버를 두면 치팅이 완전히 불가능하다고 생각한다. 검증 범위와 비용을 설계해야 하며 완벽한 차단은 없다.
+- 분산 아키텍처를 도입하면 지연이 사라진다고 생각한다. 서비스 간 hop이 늘어날수록 네트워크 왕복 비용이 증가한다.
+- Service Discovery가 있으면 장애가 자동 복구된다고 생각한다. 자동 등록·해제는 Health Check 및 Circuit Breaker와 별도로 설계해야 한다.
+- Room을 분리하면 모든 동기화 문제가 사라진다고 생각한다. 월드 이벤트, 친구 목록, 글로벌 채팅 등 Room 간 상호작용은 여전히 설계가 필요하다.
 ## 9. 면접 질문
 ### Q1. 핵심 개념을 설명해 주세요.
 게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다.

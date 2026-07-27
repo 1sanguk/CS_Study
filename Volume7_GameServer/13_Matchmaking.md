@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 원리와 등장 이유를 설명할 수 있다.
-- 정확성·지연·운영 Trade-off를 설명할 수 있다.
-- 게임 서버 설계와 장애 대응에 적용할 수 있다.
+
+- Matchmaking의 핵심 목표와 Ticket 구성 요소를 설명할 수 있다.
+- 대기 시간에 따른 MMR 범위 확장 전략과 공정성 Trade-off를 설명할 수 있다.
+- Ticket 원자적 Claim과 이중 매칭 방지 방법을 설명할 수 있다.
+- Game Server Capacity 예약 실패 처리와 Matchmaking 품질 지표를 설명할 수 있다.
 
 ## 1. 개요
 Matchmaking은 실력, 지연, Party, 대기 시간과 서버 용량 조건으로 함께 플레이할 참가자와 Game Server를 선택하는 과정이다.
@@ -101,51 +103,128 @@ Matchmaking은 정상 경로만 구현해서는 운영 준비가 끝나지 않�
 Matchmaking에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-처음 10초는 비슷한 MMR과 같은 Region만 찾고 이후 Rating 범위를 점진적으로 넓힌다. 팀이 만들어지면 Game Instance Capacity를 TTL로 예약하고 모든 Player 확인 뒤 Match를 확정한다.
+
+아래는 Ticket 상태 기계와 원자적 Claim 흐름이다.
+
+```
+Ticket 상태 전이:
+  Queued → Claimed(matchId) → Reserved(serverId) → Confirmed
+     ↑           |                   |
+     └─ timeout/cancel ───────────── ┘ (Lease 만료 → Queued 복귀)
+
+// Ticket Claim (Redis Lua Script로 원자적 실행)
+local ticket = redis.call("GET", KEYS[1])  -- ticketId
+if not ticket then return 0 end            -- 이미 없음
+local state = cjson.decode(ticket)
+if state.status ~= "Queued" then return 0 end  -- 이미 다른 Worker가 Claim
+
+state.status  = "Claimed"
+state.matchId = ARGV[1]
+state.claimAt = tonumber(ARGV[2])
+redis.call("SET", KEYS[1], cjson.encode(state), "EX", 30)  -- 30초 Lease
+return 1
+
+-- Claim 성공한 Worker만 Match를 진행
+-- 실패한 Worker는 다른 Ticket을 탐색
+```
+
+- Lua Script로 Claim을 원자적으로 수행해 두 Worker가 같은 Ticket을 이중으로 매칭하는 것을 방지한다.
+- Claim Worker가 죽으면 30초 Lease 만료 후 `Queued` 상태로 자동 복귀한다.
+- 처음 10초는 MMR ±50·같은 Region, 10~30초는 ±100, 30초 이후는 ±150으로 범위를 점진적으로 확장한다.
 
 ## 5. 비슷한 개념과 비교
-좁은 조건은 품질을 높이지만 대기가 길고 넓은 조건은 빠르지만 공정성이 낮아질 수 있다. MMR, Ping, Party와 서버 용량을 하나의 품질 함수로 본다.
-## 6. 장점과 단점
-Matchmaking을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Ticket, Party 단위와 MMR 범위 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-Ticket에 version과 idempotency key를 두고 중복 Queue 진입을 막는다. 서버 예약 실패 시 Match를 원자적으로 취소·재배치하고 지표를 Segment별로 본다.
 
-Matchmaking 관점에서는 평균보다 p95·p99, 지역·Network별 분포, Queue·Buffer 상한, Drop·Retry와 복구 성공률을 관찰한다.
+| 전략 | 대기 시간 | 매칭 품질 | 적합한 상황 |
+|------|---------|---------|-----------|
+| **좁은 조건(엄격)** | 길다 | 높다 | 피크 시간대·경쟁 모드 |
+| **넓은 조건(느슨)** | 짧다 | 낮다 | 비피크·캐주얼 모드 |
+| **시간 기반 확장** | 균형 | 균형 | 대부분의 게임 |
+| **랜덤 매칭** | 매우 짧다 | 매우 낮다 | 튜토리얼·소규모 게임 |
+| **Rating 없는 역할 기반** | 역할 수급에 의존 | 역할 균형 우선 | MOBA·팀 역할 게임 |
+
+## 6. 장점과 단점
+
+**장점**
+- MMR 기반 매칭으로 비슷한 실력의 플레이어가 만나 게임 품질이 높아진다.
+- 시간 기반 범위 확장으로 피크·비피크 시간 모두 적정 대기 시간을 유지한다.
+- Ticket Lease와 원자적 Claim으로 이중 매칭과 Zombie Ticket을 방지한다.
+- Server Capacity 예약을 Match 확정 전에 수행해 입장 단계 실패를 줄인다.
+
+**단점**
+- 인구가 적은 시간대나 Region에서 조건 완화 없이는 매칭이 안 될 수 있다.
+- Party MMR 조합 계산, 역할 균형, Shard 간 원자적 Claim이 구현 복잡도를 높인다.
+- Server Capacity 예약 실패 시 이미 기다린 플레이어를 재배치해야 한다.
+- MMR 조작(Smurf 계정, 의도적 패배) 방지가 별도 시스템이 필요하다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+Ticket에 `version`과 `idempotencyKey`를 두어 중복 Queue 진입을 막는다. `Queued → Claimed → Reserved → Confirmed` 상태 전이를 Redis나 DB로 원자적으로 관리한다. Server Reservation에는 TTL을 두고 확인 실패 시 Capacity를 자동 반환한다.
+
+대기 시간 p50·p95·p99, 예상 승률 분포, 취소율, 예약 실패율을 Region·Mode·시간대별로 집계한다. 인구 급감 시나리오를 Simulation해 범위 확장 정책을 검증한다.
 
 ## 8. 자주 하는 오해
-- **Ticket**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Party 단위**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **MMR 범위**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Ping 범위**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **대기 확장**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **매칭 Ticket은 한 번만 처리하면 된다.** 네트워크 오류로 Ticket이 중복 제출될 수 있다. Idempotency Key로 중복 진입을 막고 Ticket Version으로 늦은 취소가 확정된 Match를 되돌리지 않게 한다.
+- **Party 매칭 시 Party 평균 MMR만 보면 된다.** Party 내 MMR 편차가 크면 팀 내 실력 불균형이 생긴다. 편차 상한과 대표 Rating 계산 방식(평균·최고값 등)을 명시해야 한다.
+- **MMR 범위를 넓히면 항상 빠르고 좋다.** 범위가 너무 넓으면 실력 차이가 극단적인 매칭이 만들어져 게임 경험이 나빠지고 이탈률이 높아진다.
+- **Ping 조건은 방 생성 후 확인해도 된다.** 방 생성 후 고지연 플레이어를 제거하면 이미 확보한 Server Capacity가 낭비되고 다른 플레이어가 재매칭 비용을 부담한다.
+- **대기가 길면 조건을 무제한으로 완화하면 된다.** 완화 한계를 명시하지 않으면 극단적 매칭이 발생한다. Mode별·Region별 최대 완화 범위를 Product 목표로 설정한다.
+- **Server Capacity는 Match 확정 후 예약해도 된다.** 플레이어가 모두 확인하고 Capacity를 예약하려 할 때 용량이 없으면 Match를 처음부터 다시 해야 한다. Match 확정 전에 Capacity를 TTL로 선점한다.
+- **MMR은 실력을 정확하게 반영한다.** MMR은 추정치이며 배치 경기·Smurf·역할 변경으로 부정확해진다. 추가 신호(역할·최근 게임 성적)를 조합해 보완한다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-Matchmaking은 실력, 지연, Party, 대기 시간과 서버 용량 조건으로 함께 플레이할 참가자와 Game Server를 선택하는 과정이다.
-### Q2. 어떤 Trade-off가 있나요?
-MMR은 실력 추정치이고 Matchmaking 규칙은 이를 포함한 제약 최적화다. 시간이 지날수록 실력 범위를 넓히되 Region·Party·역할과 악용 방지를 고려한다.
-### Q3. 실무 적용 사례는 무엇인가요?
-Ticket에 version과 idempotency key를 두고 중복 Queue 진입을 막는다. 서버 예약 실패 시 Match를 원자적으로 취소·재배치하고 지표를 Segment별로 본다.
-### Q4. 장애와 악용을 어떻게 제한하나요?
-Matchmaking 관점에서는 서버 검증, 시간·크기 상한, Version과 Idempotency, Backpressure와 지표를 적용한다.
+
+### Q1. Matchmaking의 핵심 목표와 Ticket 구성 요소를 설명해 주세요.
+공정성(비슷한 실력), 낮은 Ping(같은 Region), 적절한 대기 시간, 서버 용량을 균형 있게 최적화합니다. Ticket에는 Player/Party ID, Mode, Region, MMR, 역할, Platform, 대기 시작 시각, Idempotency Key, Version이 포함됩니다.
+
+### Q2. 대기 시간에 따른 MMR 범위 확장 전략은 어떻게 설계하나요?
+처음에는 좁은 MMR 범위와 같은 Region 조건으로 시작합니다. 대기 시간이 늘수록 MMR 범위와 Ping 허용치를 단계적으로 확장합니다. Mode·Region별 확장 속도를 달리하고, 최대 확장 범위를 Product 목표로 명시합니다. 빠른 매칭이 실제 이탈률을 줄이는지 지표로 검증합니다.
+
+### Q3. Ticket 원자적 Claim과 이중 매칭 방지는 어떻게 구현하나요?
+Redis Lua Script나 DB의 CAS(Compare-And-Swap)로 Ticket 상태를 `Queued → Claimed`로 원자적으로 전환합니다. Claim에 성공한 Worker만 Match를 진행하고, Lease(예: 30초) 만료 시 `Queued`로 자동 복귀합니다. Ticket Version으로 늦은 취소가 이미 확정된 Match를 되돌리지 않게 합니다.
+
+### Q4. Game Server Capacity 예약 실패 시 어떻게 처리하나요?
+Match 확정 전에 Region·Build Version·Mode 기준으로 Server Instance를 TTL로 선점합니다. 예약 실패 시 Match를 원자적으로 취소하고 Ticket을 Queue에 복귀시킵니다. 일부 Player만 확인한 경우 Mode 규칙에 따라 대체자를 배정하거나 Match를 해산합니다. Warm Pool과 Auto Scaling으로 예약 실패 자체를 줄입니다.
+
+### Q5. MMR 조작 같은 악용을 어떻게 방지하나요?
+MMR은 서버 기록에서 계산하고 클라이언트가 직접 제출하지 못합니다. 반복 Dodge에는 증가하는 대기 패널티를 부여합니다. Party 내 MMR 편차 상한으로 고수+초보 조합 악용을 제한합니다. 신규 계정과 배치 중인 계정은 별도 Pool에서 매칭합니다.
+
+### Q6. Matchmaking 품질 지표는 어떻게 측정하나요?
+평균 대기 시간만이 아닌 p50·p95·p99를 Region·Mode·시간대별로 집계합니다. 예상 승률 분포(50% 근처 분포가 좋은 매칭), Match 취소율, Server 예약 실패율을 봅니다. 알고리즘 변경 전후를 과거 Queue Event Replay로 비교 검증합니다.
 
 ## 10. 예상 꼬리질문
-- Ticket의 최종 소유자는 어디에 두나요?
-- Party 단위 처리에서 중복과 역순은 어떻게 구분하나요?
-- MMR 범위의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Ping 범위 장애를 어떻게 재현하고 복구를 검증하나요?
-- 대기 확장 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- 인구가 적은 Region에서 매칭 품질과 대기 시간을 어떻게 균형 잡나요?
+- Shard 간에 분산된 Ticket Queue를 어떻게 통합 탐색하나요?
+- Party 내 MMR 편차가 클 때 대표 Rating을 어떻게 계산하나요?
+- Match가 성사됐지만 플레이어가 응답하지 않으면(Dodge) 어떻게 처리하나요?
+- 특정 역할이 부족할 때 매칭 방식을 어떻게 조정하나요?
+- Server Build Version이 다른 플레이어가 섞이지 않게 어떻게 보장하나요?
+- 지역 장애로 한 Region Matchmaking이 중단됐을 때 어떻게 대응하나요?
+
 ## 11. 30초 모범답변
-> Matchmaking은 실력·지연·대기 시간·서버 용량을 함께 최적화합니다. 대기 시간에 따라 범위를 확장하고 Ticket 중복과 서버 예약 실패를 처리해야 합니다. Ticket에 version과 idempotency key를 두고 중복 Queue 진입을 막는다.
+
+> Matchmaking은 실력·Ping·대기 시간·서버 용량을 균형 있게 최적화합니다. 처음에는 좁은 MMR 범위로 시작하고 대기 시간에 따라 점진적으로 확장합니다. Ticket을 원자적으로 Claim해 이중 매칭을 방지하고 Server Capacity를 Match 확정 전에 TTL로 선점합니다.
 
 ## 12. 1~2분 확장답변
-> Matchmaking은 실력·지연·대기 시간·서버 용량을 함께 최적화합니다. 대기 시간에 따라 범위를 확장하고 Ticket 중복과 서버 예약 실패를 처리해야 합니다. 설계에서는 서버가 최종 상태를 소유하고 Client 입력, Sequence와 시간을 검증합니다. 지연은 Prediction·Interpolation과 제한된 Rewind로 보정합니다. Queue, Pool과 Cache에는 상한을 두고 재접속·배포·중복 처리까지 정상 흐름으로 설계합니다.
+
+> Matchmaking의 핵심 목표는 공정성·낮은 Ping·적절한 대기 시간·서버 용량을 동시에 만족하는 것입니다. 처음에는 좁은 MMR·같은 Region으로 시작하고 대기 시간에 따라 범위를 단계적으로 확장합니다. 빠른 매칭과 게임 품질 사이의 Trade-off를 이탈률 지표로 검증합니다.
+>
+> Ticket은 Redis Lua Script로 원자적으로 Claim해 이중 매칭을 방지합니다. Claim Lease(30초) 만료 시 자동으로 Queue에 복귀합니다. Server Capacity는 Match 확정 전에 TTL로 선점하고 예약 실패 시 Ticket을 재배치합니다.
+>
+> 운영에서는 대기 시간 p95·예상 승률 분포·취소율·예약 실패율을 Region·Mode별로 집계합니다. 과거 Queue Event를 Replay해 알고리즘 변경 효과를 사전 검증합니다.
 
 ## 13. 핵심 요약
-- Matchmaking은 실력, 지연, Party, 대기 시간과 서버 용량 조건으로 함께 플레이할 참가자와 Game Server를 선택하는 과정이다.
-- 서버 권위와 입력 검증을 유지한다.
-- Version·Sequence로 중복과 순서를 관리한다.
-- 성능 구조에는 크기와 시간 상한이 필요하다.
-- 복구와 p99를 운영 기준으로 둔다.
+
+- Matchmaking은 실력(MMR)·Ping·대기 시간·서버 용량을 균형 있게 최적화하는 과정이다.
+- Ticket에는 Player/Party ID·Mode·Region·MMR·역할·Idempotency Key·Version이 포함된다.
+- 처음에는 좁은 조건으로 시작하고 대기 시간에 따라 MMR 범위와 Ping 허용치를 단계적으로 확장한다.
+- Ticket Claim은 Redis Lua Script 등으로 원자적으로 수행해 이중 매칭을 방지한다.
+- Claim Lease 만료 시 Ticket이 자동으로 Queue에 복귀한다.
+- Server Capacity는 Match 확정 전에 TTL로 선점하고 예약 실패 시 Ticket을 재배치한다.
+- MMR은 서버가 계산하고 클라이언트가 제출하지 못하게 해 조작을 방지한다.
+- 대기 시간 p95·예상 승률 분포·취소율·예약 실패율을 Region·Mode별로 집계한다.
 
 ## 한 줄 정리
-> Matchmaking은 실력·지연·대기 시간·서버 용량을 함께 최적화합니다. 대기 시간에 따라 범위를 확장하고 Ticket 중복과 서버 예약 실패를 처리해야 합니다.
+
+> Matchmaking은 MMR·Ping·대기 시간·서버 용량을 균형 있게 최적화하며, 시간 기반 범위 확장과 원자적 Ticket Claim으로 공정성과 대기 시간을 모두 관리한다.

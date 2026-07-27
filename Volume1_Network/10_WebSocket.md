@@ -13,7 +13,8 @@ importance: 4
 
 - WebSocket의 등장 이유와 HTTP와의 차이를 설명할 수 있다.
 - HTTP Upgrade부터 양방향 프레임 교환까지의 흐름을 설명할 수 있다.
-- 실시간 서비스에서 연결 유지와 확장 문제를 설명할 수 있다.
+- 실시간 서비스에서 연결 유지, 느린 클라이언트 큐 관리, 확장 문제를 설명할 수 있다.
+- 재접속 시 이벤트 ID와 세션 토큰으로 누락·중복 이벤트를 복구하는 방법을 설명할 수 있다.
 
 ## 1. 개요
 
@@ -81,6 +82,63 @@ Client C ─┘          |
                  연결·방 구독 관리
 ```
 
+```java
+// Spring WebSocket: 연결 인증 + 메시지 브로드캐스트
+@Component
+public class GameWebSocketHandler extends TextWebSocketHandler {
+
+    private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, String> sessionToRoom = new ConcurrentHashMap<>();
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // 쿼리 파라미터로 단기 토큰 전달 (URL 로그 노출 주의: 장기 자격증명 금지)
+        String token = extractToken(session.getUri().getQuery());
+        Player player = authService.validate(token);
+        if (player == null) {
+            session.close(CloseStatus.POLICY_VIOLATION);
+            return;
+        }
+        sessions.put(player.getId(), session);
+        sessionToRoom.put(player.getId(), player.getRoomId());
+    }
+
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        ChatMessage msg = objectMapper.readValue(message.getPayload(), ChatMessage.class);
+        String roomId = sessionToRoom.get(session.getId());
+
+        // 같은 방의 모든 연결에 브로드캐스트
+        sessions.values().stream()
+            .filter(s -> roomId.equals(sessionToRoom.get(s.getId())) && s.isOpen())
+            .forEach(s -> {
+                try {
+                    s.sendMessage(message);
+                } catch (IOException e) {
+                    // 연결 상태 오류는 afterConnectionClosed에서 정리됨
+                }
+            });
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        sessions.values().remove(session);
+        sessionToRoom.values().remove(session.getId());
+    }
+}
+```
+
+```java
+// 재접속 시 누락 이벤트 복구: 클라이언트가 마지막 수신 ID 전달
+@PostMapping("/v1/chat/reconnect")
+public List<ChatMessage> reconnect(
+        @RequestParam String roomId,
+        @RequestParam long lastEventId) {
+    // lastEventId 이후 서버에 보관된 메시지 재전송 (보관 기간 내)
+    return chatStore.getAfter(roomId, lastEventId);
+}
+```
+
 ## 5. 비슷한 개념과 비교
 
 | 구분 | HTTP 폴링 | SSE | WebSocket |
@@ -94,7 +152,18 @@ SSE(Server-Sent Events)는 서버에서 브라우저로 단방향 이벤트를 �
 
 ## 6. 장점과 단점
 
-장점은 연결 재사용, 낮은 메시지 오버헤드, 진정한 양방향 통신, 브라우저 지원이다. 단점은 서버가 많은 장기 연결 상태를 유지해야 하고, 일반 HTTP 캐시를 활용하기 어려우며, 프록시 타임아웃과 재접속을 별도로 다뤄야 한다는 점이다.
+**WebSocket의 장점**
+
+- 하나의 연결을 재사용하므로 반복 HTTP 요청의 연결·헤더 오버헤드가 없다.
+- 서버가 이벤트 발생 즉시 클라이언트로 메시지를 밀 수 있는 진정한 양방향 통신이다.
+- 텍스트·바이너리 모두 지원하고 브라우저 내장 API로 추가 라이브러리 없이 사용 가능하다.
+
+**WebSocket의 단점**
+
+- 서버가 많은 장기 연결 상태를 유지해야 하므로 파일 디스크립터·메모리 관리가 필요하다.
+- 일반 HTTP 캐시·프록시를 그대로 적용하기 어렵다.
+- 프록시 유휴 타임아웃, 하트비트, 재접속, 인증 만료를 별도로 설계해야 한다.
+- 수평 확장 시 연결 위치와 서버 간 이벤트 전달 구조가 필요하다.
 
 ## 7. 게임 서버·백엔드 실무 예시
 
@@ -118,29 +187,14 @@ WebSocket 게이트웨이를 여러 대로 확장하면 연결은 특정 인스�
 
 ## 8. 자주 하는 오해
 
-### 메시지 전달 보장 설계
+- **”WebSocket은 UDP처럼 동작한다”**: 일반적으로 TCP 위에서 순서 있는 신뢰성 통신을 한다. 손실·순서 역전이 없지만 TCP HoL Blocking은 영향을 준다.
+- **”101 응답이면 인증도 완료된다”**: 101은 프로토콜 전환 승인일 뿐이다. 연결 시 토큰·쿠키 검증을 별도로 수행해야 한다.
+- **”Ping만 보내면 끊김 없이 연결이 유지된다”**: Ping은 단순 생존 확인이다. Pong 응답 기한 설정, 무응답 시 연결 종료, 지수 백오프 재접속 정책이 필요하다.
+- **”WebSocket은 HTTP/2 스트림이다”**: 완전히 별개의 프로토콜이다. WebSocket은 HTTP/1.1 Upgrade로 전환하며, HTTP/2와는 전환·프레이밍 방식이 다르다.
+- **”연결 서버를 늘리면 자동 확장된다”**: 장기 연결은 특정 인스턴스에 고정된다. 다른 인스턴스에서 발생한 이벤트를 전달하려면 메시지 브로커나 분산 구독이 필요하다.
+- **”WebSocket이 메시지를 정확히 한 번 전달을 보장한다”**: TCP는 바이트 전달을 보장하지만 처리 후 응답 전 연결이 끊기면 클라이언트는 처리 여부를 모른다. 중요한 명령에는 메시지 ID로 중복 감지를 설계해야 한다.
+- **”재접속하면 이전 WebSocket 세션이 자동 복구된다”**: 재접속은 새 TCP 연결이다. 세션 토큰, 마지막 이벤트 순번을 서버에 전달해야 인증 상태와 누락 이벤트를 복구할 수 있다.
 
-WebSocket과 TCP가 바이트 전달을 보장해도 서버 로직의 이벤트 처리를 정확히 한 번 보장하지는 않는다. 서버가 메시지를 처리한 뒤 응답 전에 연결이 끊기면 클라이언트는 처리 여부를 모른다. 중요한 명령에는 메시지 ID를 부여하고 서버가 중복 ID를 감지하도록 한다.
-
-서버에서 클라이언트로 보내는 이벤트는 순번을 붙일 수 있다. 클라이언트는 마지막 처리 순번을 저장하고 재접속 시 전달한다. 서버가 보관 범위 안의 누락 이벤트를 재전송하거나, 범위를 벗어났다면 전체 상태 스냅샷을 다시 내려준다. 위치처럼 최신 값만 중요하면 누락분을 모두 복원하지 않고 최신 상태로 대체한다.
-
-압축은 대역폭을 줄이지만 CPU와 메모리를 사용하며 작은 메시지에는 이득이 적을 수 있다. 사용자 입력을 포함한 압축과 비밀 데이터의 조합에는 보안 위험도 있으므로 라이브러리 기본값만 믿지 않고 메시지 특성과 위협 모델에 따라 결정한다.
-
-- “WebSocket은 UDP처럼 동작한다”: 일반적으로 TCP 위에서 순서 있는 통신을 한다.
-- “101 응답이면 인증도 완료된다”: 프로토콜 전환일 뿐이다.
-- “Ping만 보내면 끊김이 없다”: 응답 기한과 재접속 정책이 필요하다.
-- “WebSocket은 HTTP/2 스트림이다”: 별도 프로토콜이며 전환·전송 방식은 환경에 따라 다룬다.
-- “연결 서버를 늘리면 자동 확장된다”: 연결 위치와 이벤트 분배가 필요하다.
-
-### 최종 실무 판단 기준
-
-- **요구 확인**: WebSocket은 장기 연결의 전이중 메시지 프로토콜이다. 이 내용을 적용하기 전에 데이터 규모, 호출 빈도와 허용 지연을 수치로 확인한다. 같은 기술도 요청량과 정확성 요구가 달라지면 적합한 선택이 달라질 수 있다.
-- **정확성 경계**: HTTP Upgrade와 101 응답 후 WebSocket 프레임을 교환한다. 정상 흐름만 설명하지 않고 중복, 역순, 동시 실행과 부분 실패에서 어떤 불변식을 지켜야 하는지 함께 명시한다.
-- **비용 비교**: Ping/Pong, 타임아웃, 재접속 정책이 필요하다. 평균 복잡도나 처리량 하나만 보지 않고 Memory, CPU, I/O, Lock 대기와 구현 복잡도까지 비교한다.
-- **장애 대응**: WebSocket 관련 구성 요소가 느려지거나 중단됐을 때 Timeout, Retry 상한, Backpressure와 복구 순서를 정한다. Retry가 중복 부작용이나 연쇄 부하를 만들지 검증한다.
-- **운영 검증**: WebSocket에서는 기능 Test와 함께 경계값, Peak 부하와 장애 주입 Test를 수행한다. 처리 시간 p95·p99, 오류율, Queue와 Resource 사용량을 관찰하고 변경 전후 결과를 비교한다.
-
-WebSocket 답변에서는 이 기준으로 답하면 개념 정의에 그치지 않고 선택 조건, Trade-off와 실무 검증 방법까지 논리적으로 연결할 수 있다.
 
 ## 9. 면접 질문
 
@@ -188,12 +242,14 @@ HTTP 폴링의 반복 요청 없이 하나의 연결에서 서버와 클라이�
 
 ## 13. 핵심 요약
 
-- WebSocket은 장기 연결의 전이중 메시지 프로토콜이다.
-- HTTP Upgrade와 101 응답 후 WebSocket 프레임을 교환한다.
-- Ping/Pong, 타임아웃, 재접속 정책이 필요하다.
-- 수평 확장에는 연결 위치와 서버 간 이벤트 전달이 필요하다.
-- 메시지 신뢰성과 사용자 세션 복구는 응용 계층이 설계한다.
-- 느린 소비자에는 제한된 송신 큐와 메시지별 폐기·보존 정책이 필요하다.
+- WebSocket은 HTTP Upgrade·101 응답으로 시작해 하나의 연결에서 전이중 프레임을 교환한다.
+- `wss://`는 TLS를 포함한 WebSocket이다. 공개 서비스에서는 필수다.
+- 프로토콜 전환(101)은 인증이 아니다. 연결 시 토큰·쿠키 검증을 별도로 수행한다.
+- Ping/Pong + 응답 기한 + 재접속 정책(지수 백오프)이 갖춰져야 진정한 연결 유지다.
+- 느린 클라이언트의 송신 큐에는 상한을 둔다. 최신 값만 중요하면 병합, 보존이 필요하면 재접속 복구 저장소로 넘긴다.
+- 수평 확장 시 장기 연결은 인스턴스에 고정된다. 서버 간 이벤트 전달에는 메시지 브로커가 필요하다.
+- 재접속은 새 TCP 연결이다. 이벤트 순번과 세션 토큰으로 누락·중복을 앱 계층에서 복구한다.
+- TCP는 바이트 전달을 보장하지만 메시지 처리 정확히 한 번은 보장하지 않는다. 중요한 명령에는 메시지 ID가 필요하다.
 
 ## 한 줄 정리
 

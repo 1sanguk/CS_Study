@@ -10,9 +10,11 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+
+- TCP 바이트 스트림에서 Packet 경계가 사라지는 이유와 Length-prefix Framing 원리를 설명할 수 있다.
+- Partial Read·Multi-frame 상황을 Circular Buffer로 처리하는 파싱 루프를 설계할 수 있다.
+- Length 검증 누락이 OOM을 유발하는 경로와 방어 방법을 설명할 수 있다.
+- Fixed-size·Delimiter·Length-prefix 방식의 Trade-off와 게임 서버에서 Length-prefix를 선택하는 이유를 설명할 수 있다.
 
 ## 1. 개요
 패킷 프레이밍은 TCP 바이트 스트림에서 응용 메시지의 시작과 끝을 구분하는 규칙이다.
@@ -153,51 +155,149 @@ Packet Framing은 정상 경로만 구현해서는 운영 준비가 끝나지 �
 Packet Framing에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
 ## 4. 쉬운 예시
-길이 120인 Packet Header만 먼저 도착하면 Server는 120Byte가 모두 모일 때까지 기다린다. 다음 recv에서 나머지와 다음 Packet 일부가 함께 와도 Buffer Offset으로 정확히 두 Message를 분리한다.
+
+아래는 Length-prefix 방식의 파싱 루프 핵심 코드다.
+
+```cpp
+// Header: | totalLength(4B) | type(2B) | version(1B) | flags(1B) |
+constexpr int HEADER_SIZE = 8;
+constexpr int MAX_PACKET  = 65536;
+
+enum ParseResult { NeedMore, FrameReady, ProtocolError };
+
+ParseResult TryParseFrame(CircularBuffer& buf, Frame& outFrame) {
+    if (buf.Readable() < HEADER_SIZE)
+        return NeedMore;
+
+    uint32_t totalLen = buf.PeekUInt32BE(0);   // Network Byte Order
+    if (totalLen < HEADER_SIZE || totalLen > MAX_PACKET)
+        return ProtocolError;                   // OOM 방어
+
+    if (buf.Readable() < totalLen)
+        return NeedMore;                        // Body 아직 안 왔음
+
+    outFrame.type    = buf.PeekUInt16BE(4);
+    outFrame.version = buf.PeekUInt8(6);
+    outFrame.payload = buf.Slice(HEADER_SIZE, totalLen - HEADER_SIZE);
+    buf.Consume(totalLen);
+    return FrameReady;
+}
+
+// 호출 측 루프 — 한 recv에 여러 Frame이 왔을 때 전부 처리
+void OnRecv(Session& session, std::span<const uint8_t> data) {
+    session.recvBuf.Append(data);
+    Frame frame;
+    while (true) {
+        auto result = TryParseFrame(session.recvBuf, frame);
+        if (result == FrameReady)  session.Dispatch(frame);
+        else if (result == NeedMore) break;
+        else { session.Close(CloseReason::ProtocolError); break; }
+    }
+}
+```
+
+- `totalLen` 검증을 Memory 할당 전에 수행해 공격자가 2GB 값을 보내 OOM을 유발하는 것을 막는다.
+- `while(true)` 루프로 한 recv에 합쳐진 Frame을 모두 처리해야 한다. 루프 없이 하나만 처리하면 나머지 Frame이 다음 Network 이벤트까지 지연된다.
 
 ## 5. 비슷한 개념과 비교
-고정 길이는 Parsing이 단순하지만 작은 Message도 공간을 낭비한다. Length Prefix는 유연하지만 길이 위조와 최대 크기를 반드시 검증해야 한다.
-## 6. 장점과 단점
-Packet Framing을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Length Prefix, Header 크기와 최대 Packet 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
-## 7. 게임 서버·백엔드 실무 예시
-header에 totalLength, messageType, version을 두고 최대 크기보다 크거나 최소 Header보다 작은 값은 즉시 거부한다. 불완전 데이터는 Buffer에 보관하고 Complete Message만 Dispatch한다.
 
-Packet Framing 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
+| 방식 | 원리 | 장점 | 단점 | 적합한 상황 |
+|------|------|------|------|------------|
+| **Fixed-size** | 모든 Frame 크기 고정 | 파싱 단순, Zero-copy 쉬움 | 짧은 Packet도 공간 낭비 | 상태 동기화처럼 크기가 고정된 경우 |
+| **Delimiter** | 특수 문자(`\r\n`)로 경계 표시 | 사람이 읽기 쉬움 | Payload 내 Escape 필요, O(n) 스캔 | HTTP/1.x, Redis 같은 텍스트 Protocol |
+| **Length-prefix** | Header에 Payload 길이 기록 | 유연, Multi-frame 파싱 효율 | Length 검증 필수, Header 오버헤드 | 게임 서버 바이너리 Protocol |
+| **Chunk encoding** | 가변 Chunk 크기 반복 | Streaming 친화적 | 파싱 복잡 | HTTP/1.1 chunked, 스트리밍 API |
+
+게임 서버는 바이너리 효율과 유연한 크기를 모두 원하므로 Length-prefix가 표준이다.
+
+## 6. 장점과 단점
+
+**장점**
+- 정확한 Packet 경계 복원으로 Logic Layer에서 완전한 Message만 받는다.
+- Header의 type·version 필드로 Dispatch와 Protocol 버전 협상이 가능하다.
+- Length 범위 검증만으로 OOM·무한 대기 같은 공격 벡터를 차단한다.
+- Circular Buffer + 파싱 루프 조합으로 불필요한 메모리 복사 없이 처리한다.
+
+**단점**
+- Length·Magic·Version 검증 로직을 직접 구현해야 한다.
+- 길이 정의가 "Header 포함인지 Payload만인지" 팀 간 혼선이 생기기 쉽다.
+- Partial Read 상태 머신이 복잡해 버그가 숨기 쉽고 Fuzz Testing이 필요하다.
+- Protocol 변경 시 구 Client와의 호환성 검증 비용이 생긴다.
+
+## 7. 게임 서버·백엔드 실무 예시
+
+인증 전 클라이언트에는 더 낮은 Max Packet 한도(예: 4KB)를 적용하고, 인증 후 일반 Packet에는 64KB 한도를 적용한다. Handshake Packet 외 다른 Type이 오면 Protocol Error로 즉시 끊는다.
+
+연결 수 · Packet Rate · Frame 크기 분포 · Parser Error 수를 메트릭으로 수집한다. Parser Error가 특정 IP에서 집중되면 Rate Limit이나 Ban을 적용한다.
+
+배포 중 Protocol Version 변경 시 구 서버와 신 클라이언트 조합을 Staging에서 검증한다. Envelope(총 길이 · Type · Version)는 Layout을 고정하고 Payload 안에서 버전 협상 필드를 확장한다.
 
 ## 8. 자주 하는 오해
-- **Length Prefix**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Header 크기**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **최대 Packet**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Partial Read**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
-- **Multiple Frames**을 도입하면 관련 문제가 자동으로 모두 해결된다고 생각한다.
+
+- **TCP recv 한 번이 Packet 하나다.** TCP는 바이트 스트림이므로 recv 결과가 Packet 절반일 수도, 세 Packet을 합친 것일 수도 있다. Accumulation Buffer + while 파싱 루프가 필수다.
+- **Length가 있으면 OOM이 없다.** Length 검증 전에 해당 크기로 `malloc`하면 공격자가 0xFFFFFFFF를 보내 메모리를 고갈시킨다. 검증을 할당 전에 수행해야 한다.
+- **Delimiter 방식은 항상 단순하다.** Payload 안에 Delimiter 문자가 오면 Escape 처리가 필요하고, 최대 Line 길이를 검증하지 않으면 DOS 공격에 노출된다.
+- **Magic Number가 있으면 잘못된 연결을 즉시 감지할 수 있다.** Magic Number 2~4바이트는 랜덤 노이즈에서 우연히 일치할 수 있다. Magic은 빠른 필터일 뿐이고 Length·Checksum 검증과 함께 사용해야 한다.
+- **Frame 하나 처리 후 루프를 탈출한다.** 한 recv에 여러 Frame이 담겼을 때 하나만 처리하면 나머지가 다음 Network 이벤트까지 수백 ms 지연된다. FrameReady 동안 루프를 반복해야 한다.
+- **Header가 작을수록 좋다.** Version·Flags·예비 필드를 생략하면 Protocol을 확장할 때 Breaking Change가 된다. 적절한 Header 여유(reserved 바이트)가 필요하다.
+- **TLS가 있으면 Application Framing이 필요 없다.** TLS는 Transport 암호화만 제공하고 Application Message 경계는 보존하지 않는다. TLS 위에도 Length-prefix Framing이 필요하다.
+- **UDP는 Message 경계가 보장되므로 Framing이 필요 없다.** UDP는 Datagram 단위로 경계를 유지하지만, MTU 초과 분할 재조립 시 Fragment 재조립 로직과 최대 크기 검증이 여전히 필요하다.
+
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-패킷 프레이밍은 TCP 바이트 스트림에서 응용 메시지의 시작과 끝을 구분하는 규칙이다.
-### Q2. 왜 필요한가요?
-TCP의 Send·Receive 호출 경계가 보존되지 않으므로 부분 수신과 여러 메시지 결합을 정확히 파싱해야 한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-header에 totalLength, messageType, version을 두고 최대 크기보다 크거나 최소 Header보다 작은 값은 즉시 거부한다. 불완전 데이터는 Buffer에 보관하고 Complete Message만 Dispatch한다.
-### Q4. 장애 시 무엇을 확인하나요?
-Packet Framing 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. TCP에서 별도 Packet Framing이 왜 필요한가요?
+TCP는 바이트 순서와 신뢰성을 제공하지만 Application Message 경계를 보존하지 않습니다. send 두 번이 recv 한 번으로 합쳐지거나, send 한 번이 recv 두 번으로 쪼개질 수 있습니다. Length-prefix Header로 메시지 길이를 명시하고 Accumulation Buffer에 쌓아 완전한 Frame이 모일 때만 Dispatch합니다.
+
+### Q2. Length-prefix 방식의 보안 취약점과 방어 방법은 무엇인가요?
+공격자가 Length 필드에 0xFFFFFFFF 같은 거대 값을 보내면, 해당 크기로 메모리를 할당하다 OOM이 발생합니다. 방어 방법은 Length를 읽은 직후, 메모리 할당 전에 최솟값(HEADER_SIZE)과 최댓값(예: 64KB)을 검증하는 것입니다. 인증 전 클라이언트에는 더 낮은 한도를 적용합니다.
+
+### Q3. Circular Buffer를 쓰는 이유와 동작 원리를 설명해 주세요.
+매 Frame 소비 시 앞 바이트를 삭제하면 나머지를 앞으로 이동해야 해서 O(n) 복사가 발생합니다. Circular Buffer는 readPos·writePos 인덱스만 이동해 불필요한 복사를 없앱니다. readPos가 writePos를 따라잡으면 Buffer가 빈 것이고, writePos가 readPos를 따라잡으면 가득 찬 것입니다.
+
+### Q4. 한 recv에서 여러 Frame이 왔을 때 어떻게 처리하나요?
+recv 후 Buffer에 append하고 `TryParseFrame`을 `FrameReady`를 반환하는 동안 while 루프로 반복합니다. `NeedMore`가 되면 루프를 탈출해 다음 recv를 기다립니다. 루프 없이 Frame 하나만 처리하면 나머지 Frame이 다음 Network 이벤트까지 수십~수백 ms 지연됩니다.
+
+### Q5. UDP Datagram에도 Framing이 필요한가요?
+UDP는 Datagram 단위로 경계를 유지하므로 TCP 같은 경계 복원은 필요하지 않습니다. 그러나 MTU(보통 1500B)를 초과하는 메시지는 IP Fragmentation이나 Application 분할·재조립이 필요합니다. 재조립 시 Message ID·Fragment Index·Count·Timeout·최대 크기 검증이 필요하고, 불완전 Fragment로 메모리를 점유하는 공격을 막아야 합니다.
+
+### Q6. Protocol Version이 바뀔 때 Header 호환성을 어떻게 유지하나요?
+Envelope(totalLength·type·version)의 Layout을 고정하고 신규 필드는 Payload 안에서 확장합니다. Handshake에서 Client가 지원 버전을 알리고 Server가 사용 버전을 응답합니다. 구 Parser가 모르는 Type은 Length를 이용해 건너뜀(skip)으로써 전후 호환성을 유지합니다.
 
 ## 10. 예상 꼬리질문
-- Length Prefix의 최종 소유자는 어디에 두나요?
-- Header 크기 처리에서 중복과 역순은 어떻게 구분하나요?
-- 최대 Packet의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Partial Read 장애를 어떻게 재현하고 복구를 검증하나요?
-- Multiple Frames 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Partial Header가 도착한 상태에서 연결이 끊기면 어떻게 처리하나요?
+- Frame Body를 Zero-copy Span으로 Handler에 넘길 때 생명주기를 어떻게 관리하나요?
+- 같은 연결에서 짧은 Packet 수천 개와 큰 Packet 하나를 혼용할 때 Buffer 전략은?
+- Fuzzing으로 Parser를 검증할 때 어떤 입력 패턴을 우선 테스트하나요?
+- Compression Bomb을 막기 위해 어떤 검증을 추가하나요?
+- Magic Number를 Header 앞에 두면 어떤 이점과 한계가 있나요?
+- Rolling Deploy 중 구 Client와 신 Server가 공존할 때 Version Negotiation 실패를 어떻게 처리하나요?
+
 ## 11. 30초 모범답변
-> Packet Framing은 TCP Stream을 Length나 Delimiter로 Message 단위로 복원하는 과정입니다. 부분 수신과 합쳐진 수신을 처리하고 길이를 검증해야 합니다. header에 totalLength, messageType, version을 두고 최대 크기보다 크거나 최소 Header보다 작은 값은 즉시 거부한다.
+
+> TCP는 바이트 스트림이라 Application Message 경계를 보존하지 않습니다. Length-prefix Header로 메시지 길이를 명시하고, Accumulation Buffer에 쌓아 완전한 Frame이 모이면 Dispatch합니다. Length를 읽은 직후 최솟값·최댓값을 검증해 메모리 할당 전에 OOM 공격을 차단합니다.
 
 ## 12. 1~2분 확장답변
-> Packet Framing은 TCP Stream을 Length나 Delimiter로 Message 단위로 복원하는 과정입니다. 부분 수신과 합쳐진 수신을 처리하고 길이를 검증해야 합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
+
+> TCP recv 결과는 메시지의 절반일 수도, 세 메시지를 합친 것일 수도 있습니다. Length-prefix Framing은 Header에 totalLength를 기록하고 Accumulation Buffer에 쌓다가 완전한 Frame이 모이면 Dispatch하는 방식입니다.
+>
+> 핵심 보안 이슈는 Length 검증 순서입니다. 메모리 할당 전에 최솟값(HEADER_SIZE)과 최댓값(64KB)을 검사하지 않으면, 공격자가 거대한 Length를 보내 OOM을 유발할 수 있습니다. 인증 전 클라이언트에는 더 낮은 한도를 적용합니다.
+>
+> 파싱 루프는 `FrameReady` 동안 계속 돌아야 합니다. 하나만 처리하고 탈출하면 합쳐진 Frame이 다음 이벤트까지 지연됩니다. Circular Buffer로 불필요한 바이트 이동을 없애고, Parser가 `NeedMore·FrameReady·ProtocolError` 세 결과를 명시적으로 반환하도록 설계합니다.
+>
+> 운영에서는 Frame 크기 분포·Parser Error 수·Buffer 사용률을 지표로 수집합니다. Parser Error가 특정 IP에서 집중되면 Rate Limit을 적용합니다.
 
 ## 13. 핵심 요약
-- 패킷 프레이밍은 TCP 바이트 스트림에서 응용 메시지의 시작과 끝을 구분하는 규칙이다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- TCP는 바이트 스트림이므로 Application Message 경계가 없다. Length-prefix Framing으로 경계를 복원한다.
+- Length 검증은 메모리 할당 전에 최솟값·최댓값을 검사해야 OOM 공격을 막는다.
+- Accumulation Buffer에 recv 결과를 append하고 while 루프로 여러 Frame을 모두 처리한다.
+- Circular Buffer는 readPos·writePos 인덱스만 이동해 불필요한 바이트 복사를 없앤다.
+- Parser는 NeedMore·FrameReady·ProtocolError 세 결과를 명시적으로 반환해야 한다.
+- Fixed-size는 파싱이 단순하고, Delimiter는 텍스트에 적합하며, Length-prefix는 게임 바이너리 Protocol 표준이다.
+- Envelope(length·type·version) Layout을 고정하고 신규 필드는 Payload 안에서 확장해 전후 호환성을 유지한다.
+- Fuzz Testing으로 잘린 Header, 최대 Length, 여러 Frame 조합을 검증해 범위 이탈·무한 루프를 잡는다.
 
 ## 한 줄 정리
-> Packet Framing은 TCP Stream을 Length나 Delimiter로 Message 단위로 복원하는 과정입니다. 부분 수신과 합쳐진 수신을 처리하고 길이를 검증해야 합니다.
+
+> TCP 바이트 스트림에서 Application Message 경계를 복원하는 것이 Packet Framing이며, Length-prefix + Circular Buffer + while 파싱 루프로 Partial Read와 Multi-frame을 처리하고, 할당 전 Length 범위 검증으로 OOM 공격을 막는다.

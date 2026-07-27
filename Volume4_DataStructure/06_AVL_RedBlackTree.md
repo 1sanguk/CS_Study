@@ -11,8 +11,8 @@ importance: 4
 
 ## 학습 목표
 
-- 단순 BST에 균형이 필요한 이유를 설명할 수 있다.
-- 회전이 BST의 순서를 보존하면서 높이를 조정하는 원리를 설명할 수 있다.
+- 입력 데이터가 정렬된 순서로 들어올 때 단순 BST를 피해야 하는 이유를 최악 시간 복잡도로 설명하고, 균형 트리 도입 기준을 판단할 수 있다.
+- LL·RR·LR·RL 불균형 패턴을 식별하고 각각에 필요한 회전 조합이 BST Key 순서를 보존하는지 확인할 수 있다.
 - AVL Tree와 Red-Black Tree의 균형 조건과 Trade-off를 비교할 수 있다.
 - 정렬 Map·Set, 범위 검색, 게임 서버 작업에 적절한 구조를 선택할 수 있다.
 
@@ -243,6 +243,46 @@ MMR을 Key로 플레이어를 정렬해 두면 자신의 점수 주변 범위를
 
 플레이어의 MMR이 바뀌면 기존 Key를 삭제하고 새 Key로 삽입해야 한다. 객체 내부의 Key만 수정하면 BST 위치와 Key가 불일치해 불변식이 깨진다. 정렬 컨테이너에 들어간 Key를 변경 가능한 상태로 두지 않거나, 반드시 제거 후 재삽입하는 API를 제공해야 한다.
 
+```java
+// Java TreeMap = Red-Black Tree 기반 정렬 Map
+// 게임 서버: MMR 범위 기반 매칭 + 만료 이벤트 스케줄러
+class MatchmakingQueue {
+    // Key = MMR 점수, Value = 플레이어 ID 목록
+    private final TreeMap<Integer, List<Long>> queue = new TreeMap<>();
+
+    void enqueue(int mmr, long playerId) {
+        queue.computeIfAbsent(mmr, k -> new ArrayList<>()).add(playerId);
+    }
+
+    // MMR ±100 범위 내 플레이어 목록 조회: O(log n + k)
+    List<Long> findOpponents(int mmr, int range) {
+        List<Long> candidates = new ArrayList<>();
+        // subMap: [mmr-range, mmr+range] 범위 Red-Black Tree 내부 탐색
+        queue.subMap(mmr - range, true, mmr + range, true)
+             .values().forEach(candidates::addAll);
+        return candidates;
+    }
+}
+
+// 예약 이벤트 스케줄러: 만료 시간 기준 Red-Black Tree
+class EventScheduler {
+    private final TreeMap<Long, Runnable> events = new TreeMap<>();
+
+    void schedule(long triggerAt, Runnable task) {
+        events.put(triggerAt, task);
+    }
+
+    // 현재 시각 이하의 만료 이벤트 전부 실행: headMap = O(log n)
+    void tick(long now) {
+        NavigableMap<Long, Runnable> expired = events.headMap(now, true);
+        expired.values().forEach(Runnable::run);
+        expired.clear();
+    }
+}
+```
+
+Java TreeMap이 내부적으로 Red-Black Tree를 사용하므로 삽입·삭제 후 O(log n) 높이가 유지된다. subMap·headMap은 Red-Black Tree의 정렬 속성을 그대로 활용한다.
+
 ### 운영 고려사항
 
 표준 라이브러리의 정렬 Map·Set이 어떤 Tree를 사용하는지는 구현 문서를 확인한다. 예를 들어 C++ 표준은 `std::map`의 복잡도와 동작을 규정하지만 내부 자료구조를 Red-Black Tree로 강제하지는 않는다. C# 컬렉션도 구체적 계약을 기준으로 선택해야 한다.
@@ -256,54 +296,57 @@ MMR을 Key로 플레이어를 정렬해 두면 자신의 점수 주변 범위를
 - **Red-Black Tree의 모든 Root-to-Leaf 경로 길이가 같다**: 같은 것은 Black 노드 수이며 실제 길이는 다를 수 있다.
 - **Red 노드에는 Red 자식만 없으면 충분하다**: Black Height 등 다른 규칙도 함께 만족해야 한다.
 - **AVL 삽입과 삭제의 재균형은 완전히 같다**: 삭제는 높이 감소가 조상으로 전파되어 여러 번 회전할 수 있다.
-- **균형 Tree는 Hash Table보다 항상 우수하다**: 정확한 Key 조회 중심이면 Hash가 더 적합할 수 있다.
-- **컨테이너 안 Key를 직접 바꿔도 된다**: 정렬 기준 Key 변경은 위치 불변식을 깨므로 제거 후 재삽입해야 한다.
+- **AVL Tree와 Red-Black Tree는 같은 균형 알고리즘을 사용한다**: AVL은 Balance Factor(±1) 기반 엄격한 균형을 유지하고, Red-Black은 Red-Red 금지와 Black Height 균등 규칙으로 느슨한 균형을 유지한다. 두 알고리즘은 완전히 다른 회전·재색칠 절차를 따른다.
+- **Red-Black Tree의 색(Color) 정보는 트리 구조와 무관하므로 언제든 변경해도 된다**: Red-Black Tree의 5가지 불변식(루트는 Black, Red 자식은 Black, Black Height 균등 등) 중 일부는 색 정보에 직접 의존한다. 임의로 색을 바꾸면 Black Height가 맞지 않아 불변식이 깨지고 삽입·삭제 재균형 로직이 오작동한다.
 
 ## 11. 면접 질문
 
-### Q1. AVL과 Red-Black Tree가 필요한 이유는 무엇인가요?
+### Q1. 읽기 집약적인 랭킹 조회 서버에서 AVL Tree를 Red-Black Tree 대신 선택하는 것이 의미 있는 구체적인 조건은 무엇인가? 반대로 아이템 구매·MMR 변경처럼 삽입·삭제가 잦은 경우에는 왜 Red-Black Tree가 유리한가?
 
-단순 BST는 입력 순서에 따라 한쪽으로 편향되어 탐색·삽입·삭제가 최악 `O(n)`이 됩니다. 두 트리는 삽입·삭제 뒤 회전과 균형 정보 조정으로 높이를 `O(log n)`으로 제한해 주요 연산의 최악 `O(log n)`을 보장합니다.
+AVL은 모든 노드에서 좌우 높이 차이를 1 이하로 유지하므로 Red-Black Tree보다 트리 높이가 낮고 탐색 경로가 짧습니다. 랭킹 Top 100 조회나 MMR 범위 탐색처럼 읽기 연산 비율이 90% 이상이고 갱신은 드문 경우 AVL의 짧은 경로가 실질적으로 유리합니다. 반면 아이템 구매나 MMR 변경처럼 삽입·삭제가 빈번하면 AVL은 Balance Factor ±2 위반마다 회전을 수행하고 조상 방향으로 높이 갱신이 전파됩니다. Red-Black Tree는 색 변경만으로 해결되는 경우가 있어 구조 회전 횟수가 제한적이고 갱신 비용이 낮습니다. 결국 읽기가 압도적이면 AVL, 쓰기가 섞이면 Red-Black Tree가 현실적인 선택입니다. 다만 Big-O는 동일하므로 실제 Key 분포와 읽기·쓰기 비율을 측정한 뒤 선택해야 합니다.
 
-### Q2. 회전은 왜 BST의 순서를 깨뜨리지 않나요?
+### Q2. 동접 10만 규모 게임 서버에서 TreeMap 단독으로 MMR 랭킹을 처리하다가 성능 한계에 부딪히는 시점은 언제이며, 그때 샤딩 또는 Redis Sorted Set 전환을 판단하는 기준은 무엇인가?
 
-오른쪽 회전에서 왼쪽 자식이 위로 올라가고 기존 Root가 오른쪽으로 내려갑니다. 두 노드 사이 범위의 서브트리를 알맞은 위치로 옮기므로 모든 Key의 대소 관계와 중위 순서가 그대로 유지됩니다.
+TreeMap은 단일 JVM 힙에 올라가므로 플레이어 수가 수십만 수준이면 메모리는 감당 가능하지만 단일 Lock 아래 동시 쓰기가 몰릴 때가 문제입니다. Lock 경합이 심해지면 `synchronized(treeMap)` 블록 대기 시간이 늘고 GC 압박도 커집니다. 제 기준으로는 TreeMap 갱신 응답 시간의 p99가 10ms를 넘거나 Lock wait 비율이 30%를 넘기 시작하면 전환을 검토합니다. Redis Sorted Set은 단일 스레드 원자 연산으로 Lock 경합이 없고 `ZRANGEBYSCORE`로 범위 조회를 처리하며 서버 간 공유가 가능합니다. 반면 네트워크 RTT가 추가되고 JVM 내 계산보다 비쌉니다. 따라서 단일 서버 내 인메모리 범위 조회로 충분하다면 ConcurrentSkipListMap으로 먼저 대응하고, 여러 서버가 동일 랭킹을 공유해야 하거나 단일 프로세스 한계에 도달하면 Redis Sorted Set으로 전환합니다.
 
-### Q3. AVL Tree의 Balance Factor는 무엇인가요?
+### Q3. 삽입·삭제 후 특정 MMR 구간 범위 조회 결과가 이상할 때, AVL 또는 Red-Black Tree의 불변식 위반을 어떻게 진단하는가?
 
-일반적으로 `왼쪽 서브트리 높이 - 오른쪽 서브트리 높이`입니다. AVL은 모든 노드에서 이 값이 `-1, 0, 1` 중 하나가 되도록 유지하고, `±2`가 되면 LL·RR·LR·RL 형태에 맞춰 회전합니다.
+먼저 범위 조회가 반환한 결과가 실제로 Key 순서를 벗어났는지 확인합니다. 중위 순회 결과가 정렬되지 않았다면 BST 불변식 자체가 깨진 것으로 회전 구현의 포인터 갱신 오류를 의심합니다. AVL이라면 각 노드의 Balance Factor를 재계산해 ±1을 벗어난 노드를 찾고, 삽입 경로 위 어느 단계에서 높이 갱신이 누락됐는지 역추적합니다. Red-Black Tree라면 임의 경로의 Black 노드 수를 세어 Black Height가 균등한지 확인하고, Red 노드 연속 여부를 검사합니다. 테스트 환경에서는 삽입·삭제 후마다 전체 트리를 순회하며 불변식을 검증하는 assertion을 추가합니다. 운영 환경에서 이런 버그가 터지면 대부분 회전 중 부모 포인터나 Root 참조를 빠뜨린 경우입니다.
 
-### Q4. Red-Black Tree가 높이 O(log n)을 보장하는 이유는 무엇인가요?
+### Q4. 게임 서버에서 멀티스레드 환경으로 TreeMap을 사용할 때 ReentrantReadWriteLock과 ConcurrentSkipListMap 중 어떤 기준으로 선택하는가? 각각 실패하는 시나리오도 설명하라.
 
-모든 경로의 Black 노드 수가 같고 Red 노드가 연속될 수 없습니다. 따라서 가장 긴 경로는 Black 사이에 Red가 끼어 있는 형태여도 가장 짧은 Black-only 경로의 두 배를 넘지 않아 전체 높이가 `O(log n)`입니다.
+읽기 비율이 높고 읽기 쓰레드가 많다면 ReentrantReadWriteLock이 유리합니다. 여러 쓰레드가 동시에 읽기 락을 공유하므로 읽기 처리량이 높아집니다. 하지만 쓰기 락이 잡히면 모든 읽기가 블록되고, 쓰기가 자주 발생하는 구간에서 읽기가 기아 상태에 빠질 수 있습니다. MMR 변경이 초당 수백 건씩 몰리는 시간대에 이 현상이 나타납니다. ConcurrentSkipListMap은 Lock-free에 가까운 CAS 기반이라 쓰기가 빈번해도 읽기가 블록되지 않고, 여러 쓰레드가 동시에 쓸 때도 충돌 범위가 좁습니다. 대신 TreeMap보다 메모리 사용량이 많고 랜덤 접근보다 순차 범위 조회에서 Cache 지역성이 떨어질 수 있습니다. 일반적으로 동접이 많고 쓰기도 꾸준히 섞이면 ConcurrentSkipListMap, 읽기가 압도적이고 쓰기가 간헐적이면 ReadWriteLock + TreeMap을 선택합니다.
 
-### Q5. AVL과 Red-Black Tree를 어떻게 선택하나요?
+### Q5. MMR 변경 시 TreeMap에서 기존 Key를 삭제하고 새 Key로 재삽입하지 않고 객체 내부 필드만 직접 수정하면 어떤 장애가 발생하는가? 실제 운영에서 이 버그를 어떻게 탐지하는가?
 
-AVL은 균형이 더 엄격해 조회 경로가 짧은 반면 갱신 재조정이 더 잦습니다. Red-Black Tree는 균형을 완화해 조회와 갱신이 섞인 범용 Map·Set에 많이 사용됩니다. 다만 실제 선택은 라이브러리 지원, 읽기·쓰기 비율과 실측 결과를 기준으로 합니다.
+TreeMap은 삽입 시점의 Key 값으로 노드 위치를 결정합니다. Key에 해당하는 객체 필드를 외부에서 직접 수정하면 노드 물리 위치는 그대로인데 Key 값이 달라집니다. 이후 해당 Key로 조회하면 BST 탐색이 엉뚱한 방향으로 내려가 결과를 찾지 못하거나, 범위 조회에서 해당 플레이어가 빠지거나 중복으로 나타납니다. 매칭 대기열에서 이 버그가 나면 특정 MMR 구간에서 매칭이 성립하지 않거나 같은 플레이어가 중복 매칭됩니다. 탐지 방법으로는 TreeMap에 들어간 모든 Key의 스냅샷을 주기적으로 중위 순회로 검증해 정렬 순서가 깨지면 경보를 올립니다. 근본 해결은 TreeMap의 Key를 불변 객체로 설계하거나, 변경 API를 remove 후 put으로만 제공하는 것입니다.
 
-### Q6. 균형 Tree와 Hash Table을 비교해 주세요.
+### Q6. 100만 명 랭킹에서 상위 100명 범위 조회와 특정 플레이어 UID 단건 조회를 모두 지원해야 할 때, TreeMap 단독·HashMap 단독·TreeMap+HashMap 혼용 중 어떤 설계를 선택하고 그 이유는 무엇인가?
 
-균형 Tree는 주요 연산이 최악 `O(log n)`이고 정렬·범위 검색을 제공합니다. Hash Table은 정확한 Key 조회가 평균 `O(1)`이지만 정렬 순서를 제공하지 않고 충돌에 따른 최악 비용이 있습니다. 필요한 연산 계약이 선택 기준입니다.
+TreeMap+HashMap 혼용을 선택합니다. TreeMap 단독은 범위 조회는 `O(log n + k)`로 처리하지만 UID 단건 조회도 `O(log n)`입니다. 100만 명 규모에서 단건 조회 빈도가 높으면 `O(1)` 평균인 HashMap이 유리합니다. HashMap 단독은 UID 조회는 빠르지만 정렬 순서를 제공하지 않으므로 범위 조회 시 전체 순회가 필요합니다. 따라서 TreeMap으로 점수 기반 정렬·범위 조회를 처리하고, HashMap으로 UID→점수 매핑을 유지하는 혼용 구조가 두 요구를 각각 최적 복잡도로 처리합니다. 단, MMR 변경 시 두 자료구조를 함께 갱신해야 하므로 TreeMap에서 remove 후 put, HashMap에서 put을 한 트랜잭션처럼 묶어야 하며 실패 시 롤백 처리가 필요합니다.
 
 ## 12. 예상 꼬리질문
 
-- LL·RR·LR·RL 불균형은 각각 어떻게 회전하나요?
-- Red-Black Tree에서 새 노드를 Red로 삽입하는 이유는 무엇인가요?
-- Red-Black Tree의 Black Height는 무엇인가요?
-- AVL 삭제가 삽입보다 재균형이 복잡한 이유는 무엇인가요?
-- 회전할 때 갱신해야 하는 포인터와 메타데이터는 무엇인가요?
-- 정렬 컨테이너의 Key를 직접 수정하면 어떤 문제가 생기나요?
-- 범위에서 `k`개를 찾는 시간 복잡도는 어떻게 표현하나요?
+- 읽기 90%·쓰기 10% 비율의 랭킹 서버에서 AVL을 선택했는데 갱신 지연이 예상보다 높게 나왔다. 어떤 항목부터 측정하겠는가?
+- ConcurrentSkipListMap을 쓰다가 범위 조회 정확도 문제가 생겼다. 원인으로 의심할 수 있는 것은 무엇인가?
+- TreeMap 삽입·삭제 후 중위 순회 결과가 정렬 순서를 벗어나는 버그를 발견했다. 회전 구현 어느 부분을 먼저 점검하겠는가?
+- Redis Sorted Set으로 전환 후 `ZRANGEBYSCORE` 응답이 TreeMap 범위 조회보다 느렸다. 가능한 원인은 무엇인가?
+- MMR 변경이 초당 1,000건 발생하는 서버에서 ReentrantReadWriteLock + TreeMap 조합이 쓰기 기아를 일으키지 않으려면 어떤 설정을 확인해야 하는가?
+- 복합 Key `(MMR, playerId)` 로 TreeMap을 구성했을 때 동점 플레이어의 삭제가 잘못된 노드를 제거하는 버그가 나타날 수 있다. 어떤 경우에 발생하며 어떻게 방지하는가?
+- 게임 서버 재시작 시 TreeMap을 DB에서 복원해야 한다. 100만 건 삽입 시 소요 시간 추정과 Hot Reload 방법을 어떻게 설계하겠는가?
+- AVL Tree의 삭제가 삽입보다 회전이 많이 발생하는 이유는 무엇이며, 이것이 게임 서버의 아이템 만료 처리 성능에 어떤 영향을 주는가?
 
 ## 13. 30초 모범답변
 
-> AVL과 Red-Black Tree는 단순 BST가 한쪽으로 편향되는 문제를 해결하는 균형 탐색 트리입니다. 회전으로 BST 순서를 보존하면서 높이를 `O(log n)`으로 유지해 탐색·삽입·삭제의 최악 `O(log n)`을 보장합니다. AVL은 높이 차이를 엄격히 제한해 조회에 유리하고, Red-Black Tree는 색 규칙으로 균형을 완화해 갱신이 섞인 범용 Map·Set에 많이 쓰입니다.
+> AVL과 Red-Black Tree는 삽입·삭제 후 회전으로 높이를 `O(log n)`으로 유지하는 균형 BST입니다. AVL은 좌우 높이 차이를 1 이하로 엄격히 제한해 탐색 경로가 짧고 읽기 집약적 구조에 유리합니다. Red-Black Tree는 색 규칙으로 균형을 완화해 구조 회전 빈도가 낮아 삽입·삭제가 섞인 범용 Map·Set에 많이 쓰입니다. Java TreeMap이 Red-Black Tree 기반이라 MMR 범위 매칭 같은 실무에서 직접 활용됩니다. 단, 동시성 안전을 제공하지 않으므로 멀티스레드 환경에서는 ConcurrentSkipListMap이나 별도 Lock 전략이 필요합니다.
 
 ## 14. 1~2분 확장답변
 
-> 단순 BST는 정렬된 입력이 들어오면 연결 리스트처럼 편향되어 주요 연산이 `O(n)`까지 악화됩니다. AVL과 Red-Black Tree는 삽입·삭제 후 재균형해 높이를 `O(log n)`으로 제한합니다. 회전은 일부 부모·자식 연결을 바꾸지만 중간 서브트리를 Key 범위에 맞게 옮겨 중위 순서를 보존합니다.
+> 단순 BST는 정렬된 입력이 들어오면 한쪽으로 편향되어 탐색이 `O(n)`까지 악화됩니다. 균형 트리는 삽입·삭제 후 회전으로 높이를 `O(log n)`으로 유지합니다. 회전은 포인터 일부를 바꾸지만 중간 서브트리를 Key 범위에 맞게 옮기기 때문에 중위 순서는 보존됩니다.
 >
-> AVL은 모든 노드의 좌우 높이 차이를 1 이하로 유지하며 LL·RR은 단일 회전, LR·RL은 이중 회전으로 복구합니다. 균형이 엄격해 탐색 경로가 짧지만 갱신 검사와 회전이 더 잦습니다. Red-Black Tree는 Red 연속 금지와 모든 경로의 동일한 Black Height 같은 규칙을 사용합니다. 균형이 더 느슨해서 높이는 AVL보다 클 수 있지만 갱신 비용과 균형의 절충이 좋아 범용 정렬 Map·Set에 널리 사용됩니다. 게임 서버에서는 시간순 예약 작업이나 MMR 범위 검색에 쓸 수 있고, 정확한 ID 조회만 필요하다면 Hash Table이 더 적합할 수 있습니다.
+> AVL은 Balance Factor ±1을 강제해 트리 높이가 낮고 탐색 경로가 짧습니다. 읽기 비율이 압도적인 서버에서 유리하지만, 삽입·삭제마다 조상 방향으로 높이 갱신이 전파되고 불균형이 생기면 즉시 회전하므로 쓰기 비용이 Red-Black Tree보다 높습니다. Red-Black Tree는 Red 연속 금지와 Black Height 균등 규칙으로 높이를 느슨하게 제한합니다. 삽입 시 색 변경만으로 해결되는 Case가 있어 구조 회전이 줄고, 삭제도 Double Black 전파로 처리 범위를 최소화합니다. Java TreeMap이 이 구조를 사용해 MMR 범위 매칭이나 예약 스케줄러에 바로 활용할 수 있습니다.
+>
+> 멀티스레드 환경에서는 TreeMap이 스레드 안전을 보장하지 않으므로 읽기 비율이 높으면 ReentrantReadWriteLock, 쓰기가 빈번하면 Lock-free에 가까운 ConcurrentSkipListMap을 선택합니다. 동접 10만 이상에서 단일 TreeMap의 Lock 경합이 심해지면 p99 지연을 지표로 삼아 Redis Sorted Set 전환 시점을 판단합니다. 또한 TreeMap에 넣은 Key 객체를 외부에서 직접 수정하면 BST 불변식이 깨져 범위 조회 오류나 중복 매칭이 발생하므로, Key는 불변 객체로 설계하거나 remove 후 put으로만 변경해야 합니다.
 
 ## 15. 핵심 요약
 

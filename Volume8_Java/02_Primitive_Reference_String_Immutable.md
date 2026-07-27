@@ -11,9 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Java Primitive Type은 값 자체를 표현하고 Reference Type 변수는 Heap 객체를 가리키는 참조 값을 보관한다.
-- 등장 이유와 핵심 동작을 설명할 수 있다.
-- 게임 서버·백엔드 사례와 Trade-off를 면접 답변으로 연결할 수 있다.
+- Primitive와 Reference Type의 메모리 표현 방식 차이와 복사·공유 동작을 설명할 수 있다.
+- Java가 항상 Pass-by-value임을 Reference 전달 예시로 정확히 설명할 수 있다.
+- String Immutability의 이점(Hash Key 안정성·Thread Safety)과 String Pool 동작을 설명할 수 있다.
+- Immutable 객체를 올바르게 설계하고 Defensive Copy가 필요한 시점을 구분할 수 있다.
 
 ## 1. 개요
 
@@ -31,27 +32,27 @@ primitive variable → value copy / reference variable → reference copy → sh
 
 이 흐름은 Primitive·Reference Type과 String·Immutability의 주요 처리 단계와 책임 경계를 나타낸다. 각 단계의 입력과 출력, 실패 시 복구 위치를 구분해야 한다.
 
-### 1) 핵심 포인트
+### Primitive Type 종류와 범위
 
 Java에는 boolean, byte, short, int, long, char, float, double의 Primitive Type이 있다. 크기와 숫자 승격 규칙을 알아야 Overflow와 비교 오류를 피할 수 있다. boolean의 구체적인 Memory 배치는 JVM 구현 대상이므로 Source 수준 규칙과 내부 배치를 구분한다.
 
-### 2) 핵심 포인트
+### Reference 복사와 Pass-by-value
 
 Reference 변수를 대입하면 객체 전체가 복사되는 것이 아니라 같은 객체를 가리키는 참조 값이 복사된다. 한 경로로 Mutable 객체를 바꾸면 다른 참조에서도 변경이 보인다. Method 인자도 항상 Pass-by-value이며 Reference가 값으로 전달되는 것이다.
 
-### 3) 핵심 포인트
+### String Immutability와 StringBuilder
 
 String은 Immutable이라 생성 뒤 내부 문자 Sequence가 바뀌지 않는다. 이 특성은 Hash Key 안정성, 공유와 Thread Safety에 유리하다. 문자열 결합이 반복되는 Loop에서는 중간 String이 많이 생길 수 있어 StringBuilder를 고려한다.
 
-### 4) 핵심 포인트
+### String Pool과 동등성 비교
 
 String Pool은 동일한 Literal을 재사용할 수 있다. new String으로 만든 객체와 Literal은 내용이 같아도 Identity가 다를 수 있다. 문자열 내용은 equals로 비교하고 ==는 같은 객체 참조인지 확인한다.
 
-### 5) 핵심 포인트
+### Immutable 객체 설계와 Defensive Copy
 
 Immutable 객체는 Field를 final로 두는 것만으로 완성되지 않는다. Constructor에서 Mutable Collection을 그대로 보관하거나 Getter로 내부 List를 반환하면 외부에서 상태를 바꿀 수 있다. Defensive Copy와 불변 Collection을 사용한다.
 
-### 6) 핵심 포인트
+### Wrapper Type과 Autoboxing 주의점
 
 Wrapper Type은 Collection과 Generic에서 Primitive 값을 객체로 다룰 수 있게 한다. Autoboxing은 편리하지만 Allocation, Null Unboxing과 == Cache 범위 오해를 만든다. Hot Path에서는 Boxing 발생 여부를 Profile한다.
 
@@ -67,89 +68,157 @@ Wrapper Type은 Collection과 Generic에서 Primitive 값을 객체로 다룰 �
 ### 게임 서버 점검 예시
 
 PlayerSnapshot이 Mutable Inventory List를 그대로 보유하면 Snapshot 전송 전 원본 변경이 Packet 내용까지 바꿀 수 있다. Snapshot 생성 시 필요한 값만 복사하고 생성 뒤 상태를 변경하지 않는다. Profile에서 Boxing과 문자열 Allocation이 실제 Hot Path인지 확인한 뒤 Primitive 전용 구조나 Buffer API를 검토한다.
-### 구현·운영 검증 기준
-
-- **입력 계약**: Primitive Reference String Immutable에서 입력 계약가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **상태 소유권**: Primitive Reference String Immutable에서 상태 소유권가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **Null 처리**: Primitive Reference String Immutable에서 Null 처리가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **Type 안전성**: Primitive Reference String Immutable에서 Type 안전성가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **경계값**: Primitive Reference String Immutable에서 경계값가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **동시 실행**: Primitive Reference String Immutable에서 동시 실행가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **예외 전파**: Primitive Reference String Immutable에서 예외 전파가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **자원 정리**: Primitive Reference String Immutable에서 자원 정리가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **성능 비용**: Primitive Reference String Immutable에서 성능 비용가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **Memory 사용**: Primitive Reference String Immutable에서 Memory 사용가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **Version 호환**: Primitive Reference String Immutable에서 Version 호환가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **관찰 지표**: Primitive Reference String Immutable에서 관찰 지표가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **부하 상한**: Primitive Reference String Immutable에서 부하 상한가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **장애 복구**: Primitive Reference String Immutable에서 장애 복구가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **Test 전략**: Primitive Reference String Immutable에서 Test 전략가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **보안 경계**: Primitive Reference String Immutable에서 보안 경계가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **배포 전환**: Primitive Reference String Immutable에서 배포 전환가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-- **면접 설명**: Primitive Reference String Immutable에서 면접 설명가 영향을 주는 코드 경계를 실제 Method와 객체 수명으로 표시한다. 정상 Case와 함께 Null, 최대 크기, 동시 호출, 예외와 취소를 재현하고 결과 상태와 Resource가 계약대로 남는지 확인한다. 측정 가능한 지표와 실패 시 대응을 Review 항목에 포함한다.
-
-이 기준은 기능을 무조건 복잡하게 만들기 위한 목록이 아니다. Primitive Reference String Immutable의 실제 호출 빈도와 장애 영향을 기준으로 필요한 항목을 선택하고, 변경 전후의 정확성과 p99를 비교한다.
 
 ## 4. 쉬운 예시
 
-Player 위치를 Mutable Vector 객체로 여러 Session에 공유하면 한 곳의 수정이 다른 Snapshot까지 바꿀 수 있다. 전송 DTO를 Immutable하게 만들거나 필요한 시점에 값을 복사해 Packet 생성 이후 상태가 변하지 않게 한다.
+Mutable 객체를 여러 Session이 공유할 때 발생하는 버그와 Immutable DTO로 수정하는 방법을 보여주는 예시다.
+
+```java
+// 문제: Mutable Position을 Snapshot과 공유
+class Position { public float x, y; }
+
+Position pos = player.getPosition(); // Mutable 참조 공유
+Snapshot snapshot = new Snapshot(pos); // 같은 객체 참조
+pos.x = 999f;                          // Tick 갱신
+// snapshot.pos.x도 999f → Packet에 잘못된 좌표 전송!
+
+// 수정: Immutable DTO로 값 복사
+record PositionDTO(float x, float y) {} // Java 16+, 불변 레코드
+
+PositionDTO dto = new PositionDTO(pos.x, pos.y); // 생성 시 값 복사
+Snapshot snapshot = new Snapshot(dto);
+pos.x = 999f; // dto는 영향 없음 → Packet 내용 보호
+
+// Pass-by-value 확인
+void resetPosition(Position p) {
+    p.x = 0; p.y = 0;      // ← Mutable 객체 내부 변경 → 호출자도 본다
+    p = new Position();      // ← Parameter 재대입 → 호출자 변수 영향 없음
+}
+
+// String 비교 함정
+String a = "hello";
+String b = new String("hello");
+System.out.println(a == b);       // false: 다른 객체 참조
+System.out.println(a.equals(b)); // true: 값 동등성
+
+// Integer Cache 범위 함정
+Integer x = 127, y = 127;
+System.out.println(x == y); // true: Cache 범위(-128~127)
+Integer m = 128, n = 128;
+System.out.println(m == n); // false: Cache 범위 초과 → 새 객체
+
+// Defensive Copy 없이 Immutable 설계 실패
+class ImmutableOrder {
+    private final List<Item> items;
+    ImmutableOrder(List<Item> items) {
+        this.items = items;           // ← 버그: 외부 List 직접 보관
+    }
+    List<Item> getItems() { return items; } // ← 버그: 내부 노출
+}
+// 수정: Defensive Copy + Unmodifiable View
+ImmutableOrder(List<Item> items) {
+    this.items = List.copyOf(items);  // 방어 복사
+}
+List<Item> getItems() { return Collections.unmodifiableList(items); }
+
+// int Overflow → long 승격 함정
+int a = Integer.MAX_VALUE;
+long result = a * 2;           // 이미 int 범위에서 Overflow 발생!
+long safe = (long) a * 2;     // 올바른 승격: 연산 전에 long으로 캐스트
+```
 
 ## 5. 비슷한 개념과 비교
 
-Primitive는 값과 연산이 단순하고 Null이 없지만 Generic Type Argument로 직접 쓸 수 없다. Wrapper는 객체 API와 Null을 지원하지만 Boxing 비용과 NullPointerException 가능성이 있다.
+| 구분 | Primitive | Wrapper (Integer 등) | String | Immutable Object |
+|---|---|---|---|---|
+| Null 허용 | 불가 | 가능 | 가능 | 가능 |
+| Generic 사용 | 불가 | 가능 | 가능 | 가능 |
+| Boxing 비용 | 없음 | 있음 (Autoboxing) | 없음 | 없음 |
+| 동등성 비교 | == (값) | equals (값) / ==는 Cache 범위만 | equals (내용) | equals Override 필요 |
+| Thread Safety | 해당 없음 | Mutable 상태 없음 | Thread-safe (불변) | 불변 설계 시 Thread-safe |
+| Hash Key 안전성 | 안전 | 안전 | 안전 (불변) | 불변 설계 시 안전 |
+| 게임 서버 용도 | 좌표·HP 등 Hot Path | Map Key·Optional 값 | 채널명·플레이어 ID | Snapshot DTO·이벤트 |
 
 ## 6. 장점과 단점
 
-Primitive·Reference Type과 String·Immutability을 올바르게 적용하면 코드 계약과 상태 흐름이 명확해지고 변경과 장애 진단이 쉬워진다. 반면 잘못된 추상화, 불필요한 객체와 Runtime 비용을 만들 수 있다. 실제 호출 빈도와 변경 축을 측정해 필요한 범위만 사용한다.
+**Immutable 객체 설계의 장점:**
+- 공유 상태 변경으로 인한 버그(Race Condition, Snapshot 오염)를 구조적으로 방지한다.
+- equals·hashCode 구현이 안정적이어서 Hash Key로 안전하게 사용할 수 있다.
+- Thread Safety를 별도 동기화 없이 확보할 수 있어 동시성 설계가 단순해진다.
+- 방어 복사 없이 공유할 수 있어 함수 간 데이터 전달이 명확해진다.
+
+**Immutable 객체 설계의 단점:**
+- 상태 변경이 필요할 때마다 새 객체를 생성해 GC 부담이 증가할 수 있다.
+- Defensive Copy 비용으로 초기화가 느려질 수 있다.
+- 대용량 컬렉션을 불변으로 관리하면 복사 비용이 크다.
+- Primitive 배열은 final 선언만으로 불변이 되지 않아 별도 처리가 필요하다.
 
 ## 7. 게임 서버·백엔드 실무 예시
 
-Player 위치를 Mutable Vector 객체로 여러 Session에 공유하면 한 곳의 수정이 다른 Snapshot까지 바꿀 수 있다. 전송 DTO를 Immutable하게 만들거나 필요한 시점에 값을 복사해 Packet 생성 이후 상태가 변하지 않게 한다. 운영에서는 처리량, 지연 p99, 오류율, Memory와 Thread 상태를 같은 시간축에서 관찰한다.
+게임 서버 Tick에서 Player 위치를 Snapshot에 담아 Broadcast할 때 Mutable 객체를 그대로 참조하면 Tick 갱신이 Packet 내용을 변경하는 버그가 생긴다. `record PositionDTO(float x, float y)` 같은 Immutable 레코드로 전송 DTO를 설계하면 생성 이후 상태 변경이 불가능해 이 문제를 구조적으로 방지한다.
+
+운영 중 GC 지표에서 단수명 객체 Allocation이 많으면 Autoboxing이 Hot Path에서 발생하는지 JFR로 확인한다. `Map<Integer, Player>`처럼 Wrapper를 Key로 쓸 때 Cache 범위를 벗어난 값에 ==를 사용하는 코드가 없는지 검토한다.
 
 ## 8. 자주 하는 오해
-- Java가 객체 Reference를 전달하므로 Pass-by-reference라고 말한다.
-- String 내용 비교에 ==를 사용한다.
-- final Field만 선언하면 내부 Collection도 자동으로 불변이라고 본다.
-- Wrapper의 Autoboxing과 Unboxing에는 예외 가능성이 없다고 생각한다.
-- int 연산 결과를 long에 담으면 Overflow가 자동으로 방지된다고 본다.
+- Java가 객체 Reference를 전달하므로 Pass-by-reference라고 말한다. Java는 항상 값을 전달하며 객체 인자도 Reference 값의 복사본이 전달된다. Parameter에 새 객체를 대입해도 호출자의 변수는 바뀌지 않는다.
+- String 내용 비교에 ==를 사용한다. ==는 같은 객체 참조인지 확인하고 String Pool 밖에서 생성된 `new String("...")`과 비교하면 내용이 같아도 false를 반환한다. 값 비교는 반드시 equals를 사용한다.
+- final Field만 선언하면 내부 Collection도 자동으로 불변이라고 본다. `final List<Item> items`는 items 참조 자체의 재대입을 막을 뿐 List 내부 원소 추가·삭제는 가능하다. List.copyOf 또는 Collections.unmodifiableList가 필요하다.
+- Wrapper의 Autoboxing에는 예외 가능성이 없다고 생각한다. Integer가 null인데 int로 Unboxing하면 NullPointerException이 발생한다. 이는 컴파일 오류 없이 런타임에만 나타나 주의가 필요하다.
+- int 연산 결과를 long에 담으면 Overflow가 자동으로 방지된다고 본다. `long result = a * b`에서 a·b가 int면 곱셈이 int 범위에서 먼저 일어나고 Overflow된 뒤 long으로 대입된다. `(long) a * b`로 연산 전에 승격해야 한다.
+- Integer의 == 비교는 항상 값을 비교한다고 생각한다. JVM은 -128~127 범위의 Integer를 캐시하므로 이 범위 안에서는 == 비교가 우연히 동작하지만 범위를 벗어나면 false가 된다. 항상 equals를 사용해야 한다.
+- StringBuilder는 Thread-safe하다고 생각한다. StringBuilder는 동기화가 없어 Thread-safe하지 않다. 멀티스레드 환경에서는 StringBuffer(동기화 있음)를 사용하거나 각 Thread가 독립 StringBuilder를 사용해야 한다.
+
 ## 9. 면접 질문
 ### Q1. Primitive와 Reference Type의 차이는 무엇인가요?
-Primitive 변수는 언어가 정의한 값을 직접 나타내고 Reference 변수는 객체를 가리키는 참조 값을 가집니다. Reference를 복사하면 두 변수가 같은 Mutable 객체를 가리킬 수 있습니다.
+Primitive 변수는 언어가 정의한 값(boolean·byte·int·long·float·double 등)을 스택에 직접 저장합니다. Reference 변수는 Heap의 객체를 가리키는 주소 값을 저장합니다. Reference를 복사하면 두 변수가 같은 Mutable 객체를 가리키므로 한 곳의 변경이 다른 곳에 보입니다.
 
 ### Q2. Java는 Pass-by-value인가요?
-Java는 항상 값을 전달합니다. 객체 인자도 Reference 값의 복사본이 전달되므로 Parameter 재대입은 호출자 변수에 영향을 주지 않지만 참조 대상의 변경은 공유될 수 있습니다.
+Java는 항상 값을 전달합니다. 객체 인자도 Reference 값의 복사본이 전달되므로 메서드 내에서 Parameter에 새 객체를 대입해도 호출자의 변수는 바뀌지 않습니다. 그러나 같은 Mutable 객체의 필드를 변경하면 호출자도 그 변경을 볼 수 있습니다. "Pass-by-reference-value"로 표현하기도 합니다.
 
 ### Q3. String이 Immutable인 이유는 무엇인가요?
-String은 생성 뒤 내용이 바뀌지 않아 Pool 공유, Hash Key 안정성과 Thread 간 읽기에 유리합니다. 반복 결합에는 중간 객체를 줄이기 위해 StringBuilder를 고려합니다.
+String이 생성 후 내부 문자 Sequence를 변경할 수 없어 String Pool에서 동일 Literal을 여러 변수가 공유할 수 있습니다. Immutability 덕분에 HashMap Key로 사용해도 hashCode가 변하지 않고, 멀티스레드 환경에서 별도 동기화 없이 안전하게 읽을 수 있습니다. 반복 문자열 결합에는 중간 String 생성을 줄이기 위해 StringBuilder를 사용합니다.
 
 ### Q4. ==와 equals는 어떻게 다른가요?
-Reference의 ==는 같은 객체를 가리키는지 확인하고 equals는 구현된 값 동등성을 검사합니다. Primitive의 ==는 값을 비교합니다.
+Reference Type에서 ==는 두 변수가 같은 객체를 가리키는지(Identity) 확인하고 equals는 구현된 값 동등성을 검사합니다. Primitive의 ==는 값을 직접 비교합니다. String과 Integer 같은 Wrapper를 비교할 때 ==를 사용하면 Cache 범위 여부나 `new` 사용 여부에 따라 예상과 다른 결과가 나오므로 항상 equals를 사용합니다.
 
 ### Q5. Immutable Class는 어떻게 설계하나요?
-상태 변경 Method를 두지 않고 Field를 안전하게 초기화합니다. Mutable 인자를 Defensive Copy하고 내부 Mutable 객체를 Getter로 직접 노출하지 않습니다.
-## 10. 예상 꼬리질문
+상태를 변경하는 메서드를 두지 않고 모든 Field를 `final`로 선언합니다. 생성자에서 Mutable 컬렉션 인자는 `List.copyOf`로 Defensive Copy하고 내부 Mutable 객체는 Getter로 직접 노출하지 않고 불변 View 또는 Copy를 반환합니다. Java 16+에서는 `record`가 이 패턴을 간결하게 표현합니다.
 
-- Primitive 범위의 핵심 계약과 실패 조건은 무엇인가요?
-- Reference 복사의 핵심 계약과 실패 조건은 무엇인가요?
-- Pass-by-value의 핵심 계약과 실패 조건은 무엇인가요?
-- Null의 핵심 계약과 실패 조건은 무엇인가요?
-- == 연산의 핵심 계약과 실패 조건은 무엇인가요?
+### Q6. Autoboxing이 게임 서버 Hot Path에서 문제가 되는 이유는 무엇인가요?
+Autoboxing은 `int → Integer` 변환 시 객체를 Heap에 할당하므로 Tick 처리나 패킷 파싱처럼 초당 수만 번 실행되는 경로에서 GC 압박을 높입니다. `Map<Integer, Player>`에서 int 키를 반복 조회하면 매 조회마다 Boxing이 발생합니다. JFR이나 async-profiler로 Allocation Profiling을 수행해 실제 Hot Path인지 확인한 뒤 Primitive 전용 Map(Eclipse Collections·Koloboke 등)을 검토합니다.
+
+## 10. 예상 꼬리질문
+- Autoboxing이 Hot Path에서 성능 문제를 일으키는 구체적인 예시와 해결 방법은 무엇인가요?
+- Defensive Copy 없이 Immutable Class가 외부에서 변경되는 상황을 코드로 설명해 주세요.
+- Integer의 == 비교에서 Cache 범위는 어디까지이고, 범위를 초과하면 어떻게 되나요?
+- String Pool에 명시적으로 추가하는 `intern()` 메서드의 사용 시점과 주의 사항은 무엇인가요?
+- int 연산 결과를 long에 담아도 Overflow가 날 수 있는 이유와 올바른 승격 방법은 무엇인가요?
+- equals를 Override할 때 반드시 hashCode도 같이 Override해야 하는 이유는 무엇인가요?
+- Java의 `record`가 Immutable 설계에서 기존 방식과 어떻게 다른가요?
 
 ## 11. 30초 모범답변
 
-> Java는 Primitive 값과 객체 Reference를 모두 값으로 전달합니다. Reference를 복사하면 같은 Mutable 객체를 가리킬 수 있으므로 공유와 변경 범위를 관리해야 합니다. String은 Immutable이라 Hash Key와 공유에 안전하고, 내용 비교에는 equals를 사용합니다.
+> Java는 Primitive 값과 객체 Reference를 모두 값으로 전달합니다. Reference를 복사하면 같은 Mutable 객체를 가리킬 수 있으므로 공유와 변경 범위를 관리해야 합니다. String은 Immutable이라 Hash Key와 멀티스레드 읽기에 안전하고, 내용 비교에는 equals를 사용합니다. 전송 DTO는 Immutable하게 만들어 Tick 갱신이 Packet 내용을 바꾸는 버그를 방지합니다.
 
 ## 12. 1~2분 확장답변
 
-> Java Primitive Type은 값 자체를 표현하고 Reference Type 변수는 Heap 객체를 가리키는 참조 값을 보관한다. 복사·동등성·Null·Memory와 변경 가능성을 정확히 이해해야 객체 상태 오류와 불필요한 Allocation을 줄일 수 있다. Reference 변수를 대입하면 객체 전체가 복사되는 것이 아니라 같은 객체를 가리키는 참조 값이 복사된다. 한 경로로 Mutable 객체를 바꾸면 다른 참조에서도 변경이 보인다. Method 인자도 항상 Pass-by-value이며 Reference가 값으로 전달되는 것이다. Primitive는 값과 연산이 단순하고 Null이 없지만 Generic Type Argument로 직접 쓸 수 없다. Wrapper는 객체 API와 Null을 지원하지만 Boxing 비용과 NullPointerException 가능성이 있다. Player 위치를 Mutable Vector 객체로 여러 Session에 공유하면 한 곳의 수정이 다른 Snapshot까지 바꿀 수 있다. 전송 DTO를 Immutable하게 만들거나 필요한 시점에 값을 복사해 Packet 생성 이후 상태가 변하지 않게 한다.
+> Primitive 변수는 값을 스택에 직접 저장하고 Reference 변수는 Heap 객체를 가리키는 주소를 저장합니다. Java는 항상 Pass-by-value입니다. 객체 인자도 Reference 값의 복사본이 전달되므로 메서드 내 Parameter 재대입은 호출자 변수에 영향이 없지만 같은 Mutable 객체의 필드를 변경하면 호출자도 볼 수 있습니다.
+>
+> String은 Immutable이라 생성 후 내부 문자 Sequence가 바뀌지 않습니다. 이 덕분에 String Pool에서 동일 Literal을 재사용하고, HashMap Key로 안전하게 사용하며, 별도 동기화 없이 멀티스레드 읽기가 가능합니다. 내용 비교는 항상 equals를 사용하고 `new String(...)`과 Literal의 == 비교는 false가 나올 수 있습니다.
+>
+> Immutable 객체 설계에서 `final Field`만으로는 부족합니다. Mutable 컬렉션 인자는 Defensive Copy하고 Getter는 불변 View를 반환해야 외부에서 내부 상태를 변경할 수 없습니다. 게임 서버에서는 전송 DTO를 `record` 같은 Immutable 타입으로 설계해 Tick 갱신이 Snapshot 내용을 오염하는 버그를 방지합니다. Autoboxing이 실제 Hot Path에서 GC 부담을 높이는지 JFR로 확인하고 필요하면 Primitive 전용 컬렉션을 검토합니다.
 
 ## 13. 핵심 요약
 
-- Java Primitive Type은 값 자체를 표현하고 Reference Type 변수는 Heap 객체를 가리키는 참조 값을 보관한다.
-- Java에는 boolean, byte, short, int, long, char, float, double의 Primitive Type이 있다. 크기와 숫자 승격 규칙을 알아야 Overflow와 비교 오류를 피할 수 있다. boolean의 구체적인 Memory 배치는 JVM 구현 대상이므로 Source 수준 규칙과 내부 배치를 구분한다.
-- Primitive는 값과 연산이 단순하고 Null이 없지만 Generic Type Argument로 직접 쓸 수 없다. Wrapper는 객체 API와 Null을 지원하지만 Boxing 비용과 NullPointerException 가능성이 있다.
-- Player 위치를 Mutable Vector 객체로 여러 Session에 공유하면 한 곳의 수정이 다른 Snapshot까지 바꿀 수 있다. 전송 DTO를 Immutable하게 만들거나 필요한 시점에 값을 복사해 Packet 생성 이후 상태가 변하지 않게 한다.
+- Primitive vs Reference: Primitive는 스택에 값 직접 저장, Reference는 Heap 객체 주소 저장 — 복사하면 같은 Mutable 객체를 공유한다.
+- Pass-by-value: Java는 항상 값을 전달하며 Reference도 참조 값의 복사본이 전달되므로 Parameter 재대입은 호출자에 영향 없다.
+- String Immutability: 생성 후 내용 변경 불가 → String Pool 공유, Hash Key 안정성, 멀티스레드 읽기 Thread Safety 확보.
+- String 비교: 내용 비교는 equals, ==는 Identity(같은 객체 참조) 확인 — `new String(...)`과 Literal 비교에서 ==는 false.
+- Immutable 설계: `final Field` + Defensive Copy(생성자) + Unmodifiable View(Getter) — `record`가 이 패턴을 간결하게 구현한다.
+- Integer Cache 범위: -128~127 범위 Integer는 JVM이 캐시하므로 ==가 우연히 동작하지만 범위 초과 시 false → 항상 equals 사용.
+- Autoboxing 비용: int→Integer 변환 시 Heap 할당 발생 → Tick 처리 같은 Hot Path에서 GC 부담 증가 → JFR로 실측 확인 후 최적화.
+- int Overflow 방지: `long result = (long) a * b`로 연산 전에 long 승격 — `long result = a * b`는 int 범위에서 Overflow 후 대입.
 
 ## 한 줄 정리
 
-> Java는 Primitive 값과 객체 Reference를 모두 값으로 전달합니다.
+> Java는 Primitive 값과 객체 Reference를 모두 값으로 전달하며, Immutable 객체는 Defensive Copy로 설계해 공유 상태 오염을 방지합니다.

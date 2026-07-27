@@ -1,6 +1,6 @@
 ---
 difficulty: 3
-reading_time: 20분
+reading_time: 25분
 interview_frequency: 5
 importance: 5
 ---
@@ -10,27 +10,68 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 정의와 객체 수명 의미를 설명할 수 있다.
-- 유사 개념과 비용을 비교할 수 있다.
-- 게임 서버의 안전한 코드에 적용할 수 있다.
+
+- RAII의 원리와 자원 수명 관리 방식을 설명할 수 있다.
+- `unique_ptr`, `shared_ptr`, `weak_ptr`의 소유권 의미와 비용을 비교할 수 있다.
+- Cycle 참조, 숨은 수명 연장, Dangling 위험을 설명할 수 있다.
+- 게임 서버의 Session·비동기 Callback 수명 설계에 적용할 수 있다.
 
 ## 1. 개요
-RAII는 자원 획득을 객체 생성과, 해제를 소멸과 결합하고 Smart Pointer는 Pointer 소유권을 객체 수명으로 표현한다.
+
+RAII(Resource Acquisition Is Initialization)는 자원 획득을 객체 초기화와 묶고, 객체가 Scope를 벗어날 때 Destructor에서 자원을 반환하는 C++ 수명 관리 패턴이다. 이름에는 초기화가 들어가지만 핵심은 "자원 수명을 객체 수명으로 표현한다"는 점이다.
+
+Smart Pointer는 RAII를 동적 Memory와 Pointer 소유권에 적용한 표준 도구다. `unique_ptr`는 단독 소유, `shared_ptr`는 참조 계수 기반 공동 소유, `weak_ptr`는 수명 연장 없는 관찰에 사용한다.
+
+```text
+자원 획득 → 객체 생성
+   ↓
+정상 Return · Early Return · Exception
+   ↓
+객체 소멸 → 자원 해제 (자동)
+```
 
 ## 2. 왜 필요한가
-정상 반환과 예외 등 모든 제어 흐름에서 Lock, Memory, File, Socket을 자동 정리한다. C++에서는 표현뿐 아니라 누가 소유하고 언제 파괴하는지가 API 의미의 일부다.
 
-## 3. 핵심 동작 원리
-```text
-scope enter→resource owner construct→use→scope exit→destructor release
+수동 `new/delete`와 직접 자원 관리는 함수의 모든 종료 경로에서 정리를 반복해야 한다. 조건문, Early Return, 예외, 비동기 Callback이 섞이면 짝이 깨지기 쉽다.
+
+```cpp
+void Process()
+{
+    Buffer* buffer = new Buffer();
+    if (!Read(*buffer)) {
+        delete buffer;    // 잊기 쉬운 경로
+        return;
+    }
+    if (!Send(*buffer)) {
+        delete buffer;    // 또 하나
+        return;
+    }
+    delete buffer;
+}
 ```
-unique_ptr는 단독 소유와 Move, shared_ptr는 참조 계수 공동 소유, weak_ptr는 비소유 관찰과 Cycle 해제에 사용한다. shared_ptr는 원자 참조 계수 비용과 Cycle 위험이 있다.
 
-컴파일러가 생성하는 동작과 Container의 무효화 규칙을 이해해야 예외와 비동기 경로에서도 안전하다.
+RAII를 사용하면 어느 경로로 함수를 빠져나가도 Destructor가 자동으로 호출된다.
 
-### RAII의 본질
+```cpp
+void Process()
+{
+    auto buffer = std::make_unique<Buffer>();
+    if (!Read(*buffer)) return;    // 자동 정리
+    if (!Send(*buffer)) return;    // 자동 정리
+}
+```
 
-RAII(Resource Acquisition Is Initialization)는 자원 획득을 객체 초기화와 묶고, 객체가 Scope를 벗어날 때 Destructor에서 반환하는 C++ 수명 관리 방식이다. 이름에는 초기화가 들어가지만 핵심은 “자원 수명을 객체 수명으로 표현한다”는 점이다.
+RAII는 Heap Memory에만 적용하지 않는다. Socket, File Descriptor, Mutex Lock, DB Transaction, GPU Handle처럼 획득과 반환의 짝이 있는 모든 자원에 적용한다.
+
+## 3. RAII의 핵심 동작 원리
+
+```text
+Scope 진입 → 자원 소유 객체 생성 → 자원 사용
+   ↓ 어떤 경로로 Scope 종료하더라도
+완전히 생성된 Local 객체의 Destructor 역순 호출
+   ↓
+자원 해제
+```
 
 ```cpp
 class Socket
@@ -47,13 +88,11 @@ private:
 };
 ```
 
-함수가 정상 반환하거나 중간 Return·Exception으로 빠져도 Stack Unwinding 과정에서 완전히 생성된 Local 객체의 Destructor가 역순으로 호출된다. 따라서 각 종료 경로에 `Close`, `Unlock`, `delete`를 반복하지 않아도 된다.
+함수가 정상 반환하거나 중간 Return·Exception으로 Stack Unwinding이 일어나도 완전히 생성된 Local 객체의 Destructor가 역순으로 호출된다. 각 종료 경로마다 `Close`, `Unlock`, `delete`를 반복하지 않아도 된다.
 
-RAII는 Heap Memory에만 적용하지 않는다. Socket, File, Mutex Lock, DB Transaction, GPU Handle처럼 획득과 반환의 짝이 있는 모든 자원에 적용할 수 있다.
+### Stack Unwinding과 Destructor 주의사항
 
-### Stack Unwinding과 Destructor
-
-Constructor가 성공한 Member와 Base만 파괴된다. Destructor는 일반적으로 예외를 밖으로 던지지 않아야 한다. 이미 다른 예외를 처리하며 Stack Unwinding 중인데 Destructor가 또 예외를 던지면 `std::terminate`로 이어질 수 있다. 실패 가능한 정리는 명시적인 `Close`·`Commit` API로 결과를 반환하고 Destructor는 안전한 Fallback 정리를 수행하는 식으로 설계한다.
+Constructor가 성공한 Member와 Base만 파괴된다. Destructor는 일반적으로 예외를 밖으로 던지지 않아야 한다. 이미 다른 예외를 처리하며 Stack Unwinding 중인데 Destructor가 또 예외를 던지면 `std::terminate`로 이어질 수 있다. 실패 가능한 정리는 명시적인 `Close`·`Commit` API로 결과를 반환하고, Destructor는 안전한 Fallback 정리를 수행하는 식으로 설계한다.
 
 ## 4. unique_ptr
 
@@ -70,12 +109,14 @@ StartSession(std::move(session));
 함수 Signature로 소유권을 표현할 수 있다.
 
 ```cpp
-void Observe(const Session& session);       // 빌림
+void Observe(const Session& session);        // 빌림, 수명 연장 없음
 void Take(std::unique_ptr<Session> session); // 소유권 이전
 std::unique_ptr<Session> Create();           // 새 소유권 반환
 ```
 
-`get()`은 비소유 Raw Pointer를 반환하지만 소유권을 넘기지 않는다. `release()`는 삭제 없이 소유권을 포기하고 Raw Pointer를 반환하므로 새 Owner가 확실할 때만 사용한다. `reset()`은 기존 객체를 정리하고 새 객체를 소유한다.
+- `get()`: 비소유 Raw Pointer 반환, 소유권 이전 없음
+- `release()`: 삭제 없이 소유권 포기, Raw Pointer 반환. 새 Owner가 확실할 때만 사용
+- `reset()`: 기존 객체 정리 후 새 객체 소유
 
 ### Custom Deleter
 
@@ -86,7 +127,7 @@ using FilePtr = std::unique_ptr<FILE, decltype(&std::fclose)>;
 FilePtr file(std::fopen(path, "rb"), &std::fclose);
 ```
 
-Deleter Type은 `unique_ptr` Type과 크기에 영향을 줄 수 있다. Stateless Deleter는 Empty Base Optimization으로 추가 크기가 없을 수 있지만 구현과 Type을 확인한다.
+Stateless Deleter는 Empty Base Optimization으로 추가 크기가 없을 수 있지만 Deleter Type은 `unique_ptr` Type과 크기에 영향을 줄 수 있다.
 
 ## 5. shared_ptr와 Control Block
 
@@ -99,7 +140,7 @@ auto copy = session; // Strong Count 증가
 
 Reference Count 증감은 Thread-safe하게 Control Block을 보호하지만, 가리키는 `Session` 객체의 Member 접근까지 Thread-safe하게 만들지는 않는다.
 
-`make_shared`는 Control Block과 객체를 한 Allocation에 배치할 수 있어 Allocation 수와 Locality에 유리하다. 그러나 Weak Reference가 오래 남으면 객체는 파괴되어도 결합 Allocation의 Memory가 Control Block 종료까지 유지될 수 있다. Custom Deleter·Allocator나 객체 Memory 조기 반환 요구에서는 별도 생성이 필요할 수 있다.
+`make_shared`는 Control Block과 객체를 한 Allocation에 배치할 수 있어 Allocation 수와 Locality에 유리하다. 그러나 Weak Reference가 오래 남으면 객체는 파괴되어도 결합 Allocation의 Memory가 Control Block 종료까지 유지될 수 있다.
 
 `shared_ptr` Copy는 Atomic Reference Count 조작과 Cache Line 경합을 만들 수 있다. 단순 편의를 위해 모든 객체에 사용하지 않고 실제 공유 수명일 때 선택한다.
 
@@ -122,7 +163,7 @@ Player(shared) ──> Party(shared)
    └──── shared ──────┘
 ```
 
-외부 Owner가 모두 사라져도 서로의 Strong Count를 유지한다. 소유 관계의 한쪽, 보통 Parent나 Registry가 소유하고 역방향 Observer는 `weak_ptr`로 둔다. 어떤 방향이 소유인지 Domain으로 결정해야 한다.
+외부 Owner가 모두 사라져도 서로의 Strong Count를 유지해 누수가 된다. 소유 관계의 한쪽, 보통 Parent나 Registry가 소유하고 역방향 Observer는 `weak_ptr`로 둔다. 어떤 방향이 소유인지는 Domain으로 결정해야 한다.
 
 ## 7. Smart Pointer 선택 기준
 
@@ -134,7 +175,7 @@ Player(shared) ──> Party(shared)
 | 공유 객체 관찰 | `weak_ptr` | 수명 연장 없이 확인 |
 | 짧은 비소유 접근 | `T&`, `T*` | 호출 범위 빌림 |
 
-Smart Pointer는 “Pointer를 더 안전하게 만든 Wrapper”를 넘어 소유권 의미를 Type에 담는다. 모든 함수 인자에 `shared_ptr const&`를 넘기면 함수가 수명을 공유하는지 단순 관찰하는지 모호해진다. 관찰만 하면 `T&`를 받는 편이 의도가 명확하다.
+Smart Pointer는 "Pointer를 더 안전하게 만든 Wrapper"를 넘어 소유권 의미를 Type에 담는다. 모든 함수 인자에 `shared_ptr const&`를 넘기면 함수가 수명을 공유하는지 단순 관찰하는지 모호해진다. 관찰만 하면 `T&`를 받는 편이 의도가 명확하다.
 
 ## 8. Rule of Zero와 소유 객체
 
@@ -151,90 +192,192 @@ class PlayerSession
 
 직접 Raw Handle과 `delete`를 가진 Class보다 예외 안전성과 유지보수가 좋다. Copy를 허용할지 여부는 Member Type에서 자연스럽게 드러난다.
 
-## 9. 실무 수명 설계
+## 9. 쉬운 예시: 네트워크 Buffer 전달
 
-게임 서버의 Session이 I/O 작업을 예약할 때 `shared_from_this()`로 자신을 Capture하면 Completion까지 살아 있게 할 수 있다. 그러나 Queue가 밀리면 종료된 Session도 작업 수만큼 오래 유지된다. 명시적 Closing State, Cancellation, Outstanding I/O Count와 함께 사용한다.
+네트워크 Buffer를 함수에 넘길 때 읽기만 하는지, 복사하는지, 소유권을 넘기는지를 Signature로 표현한다.
 
-```text
-Registry(unique owner 또는 shared owner)
-   ↓
-Session -- outstanding I/O --> Completion
-   ↓ closing
-새 I/O 금지 → 기존 완료·취소 → 최종 Owner 해제
+```cpp
+// 읽기만 함, 소유권 변경 없음
+void Inspect(const Buffer& buf);
+
+// 파싱 후 결과를 buf에 씀, 소유권 유지
+bool Decode(Buffer& buf);
+
+// 소유권을 Queue로 이전, 호출 후 sender는 Buffer를 사용하지 않음
+void Enqueue(std::unique_ptr<Buffer> buf);
+
+// 비동기 전송, 전송 완료까지 Buffer 수명 연장
+void AsyncSend(std::shared_ptr<Buffer> buf);
 ```
 
-World Entity처럼 Tick Thread가 단독 소유하는 객체는 공유 Pointer보다 ID·Generation Handle이 더 적합할 수 있다. `shared_ptr`는 주소 수명은 지키지만 Entity가 논리적으로 삭제되었다는 의미까지 해결하지 않는다.
+모호한 Raw Pointer만 전달하면 호출자가 수명과 소유권을 추측하게 된다. Signature 하나가 문서를 대신한다.
 
-## 10. 성능과 검증
+## 10. 비슷한 개념 비교
+
+| 관점 | 단독 소유(`unique_ptr`) | 공유 소유(`shared_ptr`) | 비소유(`T&`, `T*`) |
+|---|---|---|---|
+| 목적 | 명확한 소유권·이전 | 공동 수명 | 빌림·관찰 |
+| 비용 | Raw Pointer에 근접 | Control Block·Atomic Count | 없음 |
+| 위험 | Move 후 사용 | Cycle·숨은 수명 연장 | Dangling |
+| Cycle | 없음 | `weak_ptr`로 해결 | 해당 없음 |
+
+`shared_ptr`를 기본으로 남용하면 소유권 그래프가 모호해지고 Cycle 누수와 예상치 못한 수명 연장이 생긴다. `unique_ptr` 또는 값 소유가 부족할 때 `shared_ptr`를 추가하는 방향이 낫다.
+
+## 11. 장점과 단점
+
+### 장점
+
+- RAII는 정상·예외·Early Return 모든 경로에서 자원을 자동 정리한다.
+- `unique_ptr`는 소유권을 Type에 명확히 표현하며 Raw Pointer에 근접한 성능을 제공한다.
+- `shared_ptr`는 여러 소유자가 필요한 비동기 수명 설계를 안전하게 표현한다.
+- Rule of Zero로 Compiler가 올바른 Copy·Move·Destroy를 자동 생성한다.
+
+### 단점
+
+- `shared_ptr`의 Atomic Reference Count는 고빈도 복사 시 Cache Line 경합을 만들 수 있다.
+- `make_shared` 결합 Allocation은 Weak Reference가 남은 동안 객체 Memory를 반환하지 못한다.
+- 잘못된 `weak_ptr` 사용(`expired()`·`lock()` 분리)은 Race를 만들 수 있다.
+- 순환 참조는 `weak_ptr`로 수동 설계해야 하며 도구가 자동으로 탐지하지 않을 수 있다.
+
+## 12. 실무 수명 설계
+
+게임 서버의 Session이 I/O 작업을 예약할 때 `shared_from_this()`로 자신을 Capture하면 Completion까지 살아 있게 할 수 있다. 그러나 Queue가 밀리면 종료된 Session도 작업 수만큼 오래 유지된다.
+
+```text
+Registry(unique owner)
+   ↓
+Session -- outstanding I/O --> Completion
+   ↓ closing 요청
+새 I/O 금지 → 기존 완료·취소 → outstanding I/O Count = 0 → 최종 해제
+```
+
+명시적 Closing State와 Outstanding I/O Count를 조합해 수명을 통제한다.
+
+World Entity처럼 Tick Thread가 단독 소유하는 객체는 `shared_ptr`보다 ID·Generation Handle이 더 적합할 수 있다. `shared_ptr`는 주소 수명은 지키지만 Entity가 논리적으로 삭제되었다는 의미까지 해결하지 않는다.
+
+## 13. 게임 서버·백엔드 실무 예시
+
+### Session 소유권
+
+Match Server가 Session을 `unique_ptr`로 단독 소유한다. 비동기 I/O Callback은 `shared_from_this()`로 Session 수명을 Completion까지 연장하되, Closing 이후 새 작업이 시작되지 않도록 State를 확인한다.
+
+```cpp
+void Session::BeginReceive()
+{
+    if (state_ == State::Closing) return;
+
+    io_.AsyncRead(buffer_,
+        [self = shared_from_this()](std::error_code ec, size_t bytes)
+        {
+            if (ec) { self->Close(); return; }
+            self->OnReceive(bytes);
+            self->BeginReceive();
+        });
+}
+```
+
+### Party·Player 상호 참조
+
+Party가 Player를 `shared_ptr`로 소유하고 Player가 Party를 역참조하면 Cycle이 생긴다. Player의 역방향 참조는 `weak_ptr`로 둔다.
+
+```cpp
+class Party
+{
+    std::vector<std::shared_ptr<Player>> members_;
+};
+
+class Player
+{
+    std::weak_ptr<Party> party_; // 소유하지 않음
+};
+```
+
+### 콘텐츠 Snapshot 교체
+
+새 콘텐츠 Graph를 `unique_ptr` Container로 구성하다 검증이 실패하면 자동 정리된다. 검증 성공 시에만 현재 Snapshot과 Atomic Swap한다.
+
+```cpp
+auto next = std::make_unique<ContentGraph>();
+if (!next->Validate()) return false;  // 자동 해제
+current_ = std::move(next);
+```
+
+## 14. 성능과 검증
 
 `unique_ptr`는 보통 Raw Pointer에 가까운 소유 비용을 제공하지만 객체는 여전히 Heap Allocation일 수 있다. `shared_ptr`는 Control Block Allocation, Atomic Count와 간접 접근 비용이 있다. 실제 병목은 Pointer Wrapper보다 개별 Allocation과 Cache Miss일 수 있다.
 
-AddressSanitizer·LeakSanitizer, Static Analyzer를 사용하고 소유 Graph를 Code Review한다. `use_count()`를 동기화 판단에 사용하지 않는다. 관찰 직후 Count가 바뀔 수 있고 소유 설계가 Count 숫자에 의존하면 Race가 생긴다.
-
-## 11. 쉬운 예시
-네트워크 Buffer를 함수에 넘길 때 읽기만 하는지, 복사하는지, 소유권을 넘기는지 Signature로 표현한다. 모호한 Raw Pointer만 전달하면 호출자가 수명을 추측하게 된다.
-
-## 12. 비슷한 개념과 비교
-| 관점 | 값·단독 소유 | 공유·비소유 |
-|---|---|---|
-| 목적 | 명확한 수명·이동 | 공동 수명·관찰 |
-| 장점 | 단순·낮은 비용 | 비동기 연결 용이 |
-| 위험 | 이동 후 사용 | Cycle·숨은 수명 연장 |
-
-## 13. 장점과 단점
-언어 기능은 추상화와 자원 효율을 제공하지만 잘못된 소유권, 무효화, 간접 호출은 메모리 오류와 지연을 만든다. 가장 단순한 값과 단독 소유를 기본으로 한다.
-
-## 14. 게임 서버·백엔드 실무 예시
-Session의 명확한 소유자는 unique_ptr로 두고 비동기 Callback의 수명 연장이 정말 필요할 때 shared_ptr를 쓴다. 상호 참조 한쪽은 weak_ptr로 Cycle을 끊는다.
-
-Address Sanitizer, Leak Sanitizer, 정적 분석과 부하 테스트를 사용하고 평균보다 최대 할당·해제 지연을 본다.
+- AddressSanitizer·LeakSanitizer: Use-after-free, 누수 탐지
+- Static Analyzer: 소유 경로 의심 탐지
+- Heap Profiler: Type·Call Stack별 Live Byte 추세
+- `use_count()`를 동기화 판단에 사용하지 않는다. 관찰 직후 Count가 바뀔 수 있다.
 
 ## 15. 자주 하는 오해
-- Raw Pointer가 소유권을 자동 표현한다고 본다.
-- Reference는 절대 Dangling이 되지 않는다고 본다.
-- shared_ptr가 모든 수명 문제의 기본 해법이라고 본다.
-- Move가 항상 메모리 복사 0이라고 단정한다.
-- 가상 함수 비용만 보고 구조 전체 비용을 무시한다.
 
-### 최종 실무 판단 기준
-
-- **요구 확인**: RAII는 자원 획득을 객체 생성과, 해제를 소멸과 결합하고 Smart Pointer는 Pointer 소유권을 객체 수명으로 표현한다. 이 내용을 적용하기 전에 데이터 규모, 호출 빈도와 허용 지연을 수치로 확인한다. 같은 기술도 요청량과 정확성 요구가 달라지면 적합한 선택이 달라질 수 있다.
-- **정확성 경계**: 소유권과 수명을 명시한다. 정상 흐름만 설명하지 않고 중복, 역순, 동시 실행과 부분 실패에서 어떤 불변식을 지켜야 하는지 함께 명시한다.
-- **비용 비교**: RAII와 값 의미를 우선한다. 평균 복잡도나 처리량 하나만 보지 않고 Memory, CPU, I/O, Lock 대기와 구현 복잡도까지 비교한다.
-- **장애 대응**: RAII와 Smart Pointer 관련 구성 요소가 느려지거나 중단됐을 때 Timeout, Retry 상한, Backpressure와 복구 순서를 정한다. Retry가 중복 부작용이나 연쇄 부하를 만들지 검증한다.
-- **운영 검증**: RAII와 Smart Pointer에서는 기능 Test와 함께 경계값, Peak 부하와 장애 주입 Test를 수행한다. 처리 시간 p95·p99, 오류율, Queue와 Resource 사용량을 관찰하고 변경 전후 결과를 비교한다.
-
-RAII와 Smart Pointer 답변에서는 이 기준으로 답하면 개념 정의에 그치지 않고 선택 조건, Trade-off와 실무 검증 방법까지 논리적으로 연결할 수 있다.
+- **Raw Pointer가 소유권을 자동 표현한다**: 언어는 소유·비소유를 구분하지 않는다. Raw Pointer를 보고 소유자인지 관찰자인지 알 수 없다.
+- **Reference는 절대 Dangling이 되지 않는다**: 대상 객체가 먼저 파괴되면 Reference도 Dangling이 된다.
+- **`shared_ptr`가 모든 수명 문제의 기본 해법이다**: Cycle과 숨은 수명 연장이 생긴다. `unique_ptr`나 값 소유를 먼저 고려한다.
+- **Move가 항상 Memory 복사 0이다**: Move는 소유권 이전을 뜻하며 구현에 따라 실제 복사가 있을 수 있다. 단, 표준 Container·Smart Pointer의 Move는 Pointer 교체 수준이다.
+- **`shared_ptr` Reference Count는 객체 접근도 Thread-safe하게 만든다**: Count 증감만 보호하며 객체 Member 접근은 별도 동기화가 필요하다.
+- **`weak_ptr::expired()` 확인 후 `get()`을 호출해도 안전하다**: 두 호출 사이에 객체가 사라질 수 있다. `lock()`의 결과를 사용해야 한다.
+- **RAII는 Heap Memory에만 적용된다**: Socket·File·Mutex·DB Transaction 등 모든 획득·반환 쌍이 있는 자원에 적용한다.
 
 ## 16. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-RAII는 자원 획득을 객체 생성과, 해제를 소멸과 결합하고 Smart Pointer는 Pointer 소유권을 객체 수명으로 표현한다.
-### Q2. 어떤 Trade-off가 있나요?
-unique_ptr는 단독 소유와 Move, shared_ptr는 참조 계수 공동 소유, weak_ptr는 비소유 관찰과 Cycle 해제에 사용한다. shared_ptr는 원자 참조 계수 비용과 Cycle 위험이 있다.
-### Q3. 게임 서버 적용 사례는 무엇인가요?
-Session의 명확한 소유자는 unique_ptr로 두고 비동기 Callback의 수명 연장이 정말 필요할 때 shared_ptr를 쓴다. 상호 참조 한쪽은 weak_ptr로 Cycle을 끊는다.
-### Q4. 안전성을 어떻게 검증하나요?
-소유권 규칙, Scope 종료, 예외·취소 경로를 확인하고 Sanitizer와 프로파일러를 사용한다.
+
+### Q1. RAII를 설명해 주세요.
+
+자원 획득을 객체 생성과, 해제를 소멸과 결합하는 패턴입니다. Scope를 벗어나는 어떤 경로에서도 Destructor가 호출되므로 정상 Return, Early Return, Exception 모두에서 자원이 자동 정리됩니다. Socket, Lock, File, Memory 등 모든 자원에 적용할 수 있습니다.
+
+### Q2. `unique_ptr`와 `shared_ptr`를 비교해 주세요.
+
+`unique_ptr`는 단독 소유로 Copy할 수 없고 Move로 소유권을 이전합니다. Raw Pointer에 가까운 성능입니다. `shared_ptr`는 Control Block에 Strong Count를 관리해 공동 소유를 제공하며 Atomic Count 비용과 Cycle 위험이 있습니다. 단독 소유가 가능하면 `unique_ptr`를 기본으로 사용합니다.
+
+### Q3. `weak_ptr`는 언제 사용하나요?
+
+`shared_ptr`로 관리되는 객체를 수명 연장 없이 관찰할 때 사용합니다. 양방향 Strong Reference Cycle을 끊는 역방향 참조에 주로 씁니다. 사용 전 `lock()`으로 `shared_ptr`를 얻고 결과가 유효한지 확인합니다.
+
+### Q4. `shared_ptr` Cycle이 왜 문제인가요?
+
+서로 Strong Count를 유지하면 외부 Owner가 모두 사라져도 Count가 0이 되지 않아 객체가 파괴되지 않고 Memory 누수가 됩니다. 소유 방향 한쪽을 `weak_ptr`로 바꿔 Cycle을 끊습니다.
+
+### Q5. 게임 서버에서 Session 수명을 어떻게 관리하나요?
+
+Registry가 `unique_ptr`로 Session을 단독 소유합니다. 비동기 I/O Callback에는 `shared_from_this()`로 Completion까지 수명을 연장합니다. Closing 이후 새 I/O 시작을 막고 Outstanding I/O가 완료되면 Registry에서 Session을 제거해 파괴합니다.
+
+### Q6. RAII Destructor에서 예외를 던지면 어떻게 되나요?
+
+다른 예외로 인한 Stack Unwinding 중에 Destructor가 예외를 던지면 `std::terminate`가 호출됩니다. 실패 가능한 정리는 명시적 `Close`·`Commit` API로 결과를 반환하고, Destructor는 예외 없이 안전한 Fallback 정리만 수행하게 설계합니다.
 
 ## 17. 예상 꼬리질문
+
 - 소유권과 수명은 어떻게 다른가요?
-- Container 재할당은 참조에 어떤 영향을 주나요?
-- 예외가 발생하면 자원은 어떻게 정리되나요?
-- 공유 소유의 Cycle을 어떻게 끊나요?
-- 값 의미와 다형성을 어떻게 선택하나요?
+- `make_shared`와 별도 생성의 차이는 무엇인가요?
+- Container 재할당은 RAII Wrapper에 어떤 영향을 주나요?
+- `enable_shared_from_this`는 언제 필요한가요?
+- Rule of Zero를 따를 수 없는 경우는 언제인가요?
+- `shared_ptr`의 Reference Count는 왜 Thread-safe인데 객체 접근은 아닌가요?
+- `unique_ptr`의 Custom Deleter는 성능에 어떤 영향을 주나요?
 
 ## 18. 30초 모범답변
-> RAII는 자원 수명을 객체 수명에 결합합니다. unique_ptr를 기본 소유권으로 사용하고 shared_ptr는 실제 공동 소유일 때만 선택합니다. Session의 명확한 소유자는 unique_ptr로 두고 비동기 Callback의 수명 연장이 정말 필요할 때 shared_ptr를 쓴다.
+
+> RAII는 자원 수명을 객체 수명에 결합해 정상·예외·Early Return 모든 경로에서 자동 정리합니다. `unique_ptr`는 단독 소유를 표현하며 Raw Pointer에 근접한 비용이고, `shared_ptr`는 Atomic Count로 공동 소유를 관리하지만 Cycle과 숨은 수명 연장 위험이 있습니다. `weak_ptr`로 Cycle을 끊습니다. 단독 소유가 가능하면 `unique_ptr`를 기본으로 사용합니다.
 
 ## 19. 1~2분 확장답변
-> RAII는 자원 수명을 객체 수명에 결합합니다. unique_ptr를 기본 소유권으로 사용하고 shared_ptr는 실제 공동 소유일 때만 선택합니다. C++ 서버에서는 객체 수명과 소유권을 Type과 Scope로 표현하는 것이 핵심입니다. Raw Pointer는 비소유 관찰에 제한하고 RAII와 Container를 우선합니다. 성능은 추측하지 않고 할당, Cache, 간접 호출과 p99를 프로파일링합니다.
+
+> RAII는 자원을 소유한 객체가 Scope를 벗어날 때 Destructor에서 자동으로 해제하는 패턴입니다. Socket, Lock, File, Memory 등 획득과 반환 쌍이 있는 모든 자원에 적용합니다. Destructor는 예외를 던지지 않도록 설계하고 실패 가능한 정리는 명시적 API로 분리합니다.
+>
+> Smart Pointer는 Pointer 소유권에 RAII를 적용합니다. `unique_ptr`는 단독 소유와 Move 이전을 표현하며 Raw Pointer에 가까운 성능입니다. `shared_ptr`는 Control Block에 Atomic Reference Count를 유지해 여러 Owner가 수명을 공유하지만, Cycle 참조는 Count가 0이 되지 않아 누수가 됩니다. 소유 한쪽을 `weak_ptr`로 바꾸고 사용 전 `lock()`으로 유효성을 확인합니다. 게임 서버에서는 Session을 `unique_ptr`로 단독 소유하고 비동기 Callback에만 `shared_from_this()`로 수명을 연장합니다. Closing 이후 새 I/O를 막고 Outstanding I/O 완료 후 해제하는 명시적 State Machine이 필요합니다.
 
 ## 20. 핵심 요약
-- RAII는 자원 획득을 객체 생성과, 해제를 소멸과 결합하고 Smart Pointer는 Pointer 소유권을 객체 수명으로 표현한다.
-- 소유권과 수명을 명시한다.
-- RAII와 값 의미를 우선한다.
-- 무효화와 예외 경로를 확인한다.
-- 도구로 메모리 오류를 검증한다.
+
+- RAII는 자원 수명을 객체 수명과 결합해 모든 종료 경로에서 자동 정리한다.
+- `unique_ptr`는 단독 소유, Move 이전, Raw Pointer에 근접한 비용이다.
+- `shared_ptr`는 Atomic Count 공동 소유이며 Cycle·숨은 수명 연장 위험이 있다.
+- `weak_ptr`는 Strong Count를 늘리지 않고 Cycle을 끊으며 `lock()`으로 사용한다.
+- 단독 소유가 가능하면 `unique_ptr`를 기본으로 선택한다.
+- Rule of Zero로 Member를 값·RAII Wrapper로 구성하면 Compiler가 올바른 Copy·Move·Destroy를 생성한다.
+- RAII는 Heap Memory뿐 아니라 Socket·File·Lock 등 모든 자원에 적용한다.
+- Destructor는 예외를 던지지 않아야 하며 실패 정리는 명시적 API로 분리한다.
 
 ## 한 줄 정리
-> RAII는 자원 수명을 객체 수명에 결합합니다. unique_ptr를 기본 소유권으로 사용하고 shared_ptr는 실제 공동 소유일 때만 선택합니다.
+
+> RAII는 자원 수명을 객체 수명에 결합하고, `unique_ptr`를 기본 소유권으로 사용하며 실제 공동 소유가 필요할 때만 `shared_ptr`를 선택한다.
