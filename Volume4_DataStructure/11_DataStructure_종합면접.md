@@ -11,9 +11,9 @@ importance: 5
 
 ## 학습 목표
 
-- 요구 연산과 데이터 특성으로 자료구조를 선택하는 과정을 설명할 수 있다.
+- 연산 빈도·탐색 범위·동시성 조건에 따라 배열 기반·해시·트리·그래프 중 적합한 자료구조를 선택할 수 있다.
 - Array부터 Union-Find까지 대표 구조의 강점과 한계를 비교할 수 있다.
-- 여러 자료구조를 조합할 때 생기는 정합성·메모리·동시성 비용을 설명할 수 있다.
+- 여러 자료구조를 조합할 때 쓰기 정합성과 메모리 비용이 언제 병목이 되는지 판단하고 설계 결정을 내릴 수 있다.
 - 게임 서버 설계 문제를 1~3분의 논리적인 면접 답변으로 구성할 수 있다.
 
 ## 1. 개요
@@ -97,6 +97,39 @@ Linked List는 Node 위치를 알고 있을 때 주변 Pointer만 바꿔 삽입�
 ```
 
 LRU Cache는 Key를 찾는 Hash Map과 최근 사용 순서를 바꾸는 Doubly Linked List를 조합한다. Hash만으로는 순서를, List만으로는 빠른 Key 검색을 해결하지 못한다.
+
+```java
+// LRU Cache: HashMap(O(1) 조회) + LinkedList(O(1) 순서 유지) 조합
+class LRUSessionCache {
+    private final int capacity;
+    private final Map<String, Node> map = new HashMap<>();
+    private final Deque<Node> deque = new LinkedList<>();
+
+    LRUSessionCache(int capacity) { this.capacity = capacity; }
+
+    String get(String sessionId) {
+        if (!map.containsKey(sessionId)) return null;
+        Node node = map.get(sessionId);
+        deque.remove(node);
+        deque.addFirst(node);
+        return node.value;
+    }
+
+    void put(String sessionId, String value) {
+        if (map.containsKey(sessionId)) {
+            deque.remove(map.get(sessionId));
+        } else if (map.size() == capacity) {
+            Node evicted = deque.removeLast();
+            map.remove(evicted.key);
+        }
+        Node node = new Node(sessionId, value);
+        deque.addFirst(node);
+        map.put(sessionId, node);
+    }
+
+    record Node(String key, String value) {}
+}
+```
 
 ## 5. Stack·Queue·Deque 선택
 
@@ -228,53 +261,59 @@ Zone과 Portal은 Graph로 표현한다. 비가중 최소 Hop은 BFS, 가중 최
 ## 14. 자주 하는 오해
 
 - **Big-O가 낮으면 실제로 항상 빠르다**: 데이터 크기, Cache, 할당과 구현 상수가 다르다.
-- **Linked List 삭제는 무조건 O(1)이다**: 삭제 Node 위치를 찾는 비용은 별도다.
+- **여러 자료구조를 조합하면 단일 구조보다 항상 성능이 좋다**: 조합은 동기화 비용, 정합성 유지 코드, 메모리 오버헤드를 수반한다. 단순한 시나리오에서는 단일 구조가 더 빠르고 안전하다. 조합이 유리한 경우는 두 구조의 각기 다른 연산 강점이 모두 필요할 때만이다.
 - **Hash Table은 최악에도 O(1)이다**: 충돌과 Rehash 조건을 구분해야 한다.
-- **BST는 항상 O(log n)이다**: 단순 BST는 편향되면 O(n)이다.
-- **Heap은 정렬된 자료구조다**: 부모·자식의 부분 순서만 보장한다.
-- **Concurrent Container면 복합 로직도 안전하다**: 여러 호출 사이의 Race는 별도로 보호해야 한다.
+- **면접에서 Big-O를 정확히 말하면 자료구조 답변은 충분하다**: Big-O는 점근 상한만 표현한다. 상수 인자, Cache 지역성, 메모리 할당 패턴, 동시성 안전성이 실제 성능을 결정한다. 시니어 면접에서는 "어떤 조건에서 이 구조를 선택했는가"와 "한계와 트레이드오프"를 함께 설명해야 한다.
+- **자료구조 선택은 언어나 플랫폼과 무관하다**: Java의 ArrayList는 내부적으로 Object 배열이라 기본형 boxing 비용이 있다. C++의 std::unordered_map은 Java HashMap보다 Rehashing 비용이 크다. 플랫폼 메모리 모델, GC 유무, CPU 아키텍처가 자료구조 선택 기준을 바꾼다.
+- **자료구조 선택은 처음 설계 시에만 중요하고 이후에는 교체하기 어렵다**: 잘 설계된 인터페이스로 감싸면 내부 자료구조는 교체 가능하다. 실제로 트래픽 증가로 ArrayList를 ConcurrentHashMap으로, TreeMap을 Redis Sorted Set으로 교체하는 사례가 많다. 처음 선택은 중요하지만 "바꿀 수 없다"는 관점은 리팩토링을 포기하는 기술 부채로 이어진다.
 - **Index를 추가하면 성능만 좋아진다**: 메모리와 모든 쓰기의 갱신·정합성 비용이 늘어난다.
-- **하나의 구조로 모든 요구를 해결해야 한다**: 요구별 구조를 조합하되 불변식을 관리할 수 있다.
+- **캐시 히트율과 메모리 지역성은 자료구조 선택과 무관하다**: Linked List는 Node가 힙에 분산 배치되어 Cache Miss가 잦다. 같은 O(n) 탐색이라도 Array는 연속 메모리 덕분에 Cache Line을 활용해 수 배 빠르다. 게임 서버 틱 루프처럼 반복 접근이 많은 환경에서는 자료구조의 메모리 배치가 성능을 결정한다.
 
 ## 15. 면접 질문
 
-### Q1. 자료구조를 선택하는 기준을 설명해 주세요.
+### Q1. 게임 서버에서 동접 5만 명의 세션을 관리해야 합니다. 세션 ID 조회, 만료 시각 기준 정리, 접속 순서 기반 처리를 모두 지원해야 할 때 단일 자료구조로 해결하려는 설계와 복수 Index 조합 설계 중 어떤 쪽을 선택하고 그 이유는 무엇인가요?
 
-먼저 조회·삽입·삭제·순회·범위·최우선 선택 중 핵심 연산과 빈도를 정합니다. 그다음 원소 수와 분포, 평균·최악 복잡도, 메모리 지역성과 할당, 참조 수명과 동시성을 비교합니다. 후보를 실제 데이터로 측정해 결정합니다.
+**30초 모범답변:** 단일 자료구조로 세 가지 연산을 모두 만족하는 구조는 없습니다. ID 조회는 HashMap, 만료 기준 정리는 Heap, 접속 순서 처리는 List가 각각 O(1)·O(log n)·O(1)로 적합합니다. 복수 Index 조합을 선택하되, 세 구조의 동기 갱신 실패 시 정합성 깨짐을 방지하는 Rollback 설계가 필수입니다.
 
-### Q2. Array와 Linked List를 비교해 주세요.
+**1~2분 모범답변:** 동접 5만 세션에서 조회·만료·순서를 모두 지원하려면 세 구조를 조합해야 합니다. ID→HashMap(O(1)), 만료→Min Heap(O(log n) push/pop), 순서→Doubly Linked List(O(1) 삽입·삭제)로 역할을 분리합니다. 단, 세션 생성 시 세 구조를 순서대로 삽입하다가 Heap 삽입 후 List 삽입에서 실패하면 HashMap과 Heap에만 세션이 남아 유령 세션이 됩니다. 방지 방법: 삽입 전 성공 가능 여부를 확인하거나, 실패 시 이미 삽입된 구조를 Rollback하는 단일 책임 함수를 사용합니다. 운영 중에는 세 구조의 원소 수 일치 여부를 주기적으로 검사하는 불변식 검증을 Debug 빌드에 넣습니다.
 
-Array는 연속 메모리라 O(1) Index 접근과 순회 Cache 효율이 좋지만 중간 삽입·삭제가 O(n)입니다. Linked List는 Node 위치를 알면 연결 변경이 O(1)이지만 탐색은 O(n)이고 Pointer·할당 비용이 큽니다.
+### Q2. 게임 서버 틱 루프에서 Entity를 Array 대신 Linked List로 관리했을 때 발생하는 Cache Miss 문제와 대응 방법은?
 
-### Q3. Hash Table과 균형 Tree는 언제 선택하나요?
+**30초 모범답변:** Linked List의 Node는 힙에 분산 배치되므로 순차 순회 시 Cache Line 미스가 빈번합니다. 틱 루프처럼 매 프레임 모든 Entity를 순회하는 경우 Array 기반 구조가 캐시 친화적입니다. Linked List는 중간 삽입·삭제가 잦고 순회보다 위치 접근이 없을 때 적합합니다.
 
-정확한 Key 조회가 중심이면 평균 O(1) Hash를 우선 검토합니다. 정렬 순회, 범위 검색, 다음 Key 또는 예측 가능한 최악 O(log n)이 필요하면 균형 Tree가 적합합니다.
+**1~2분 모범답변:** 1만 Entity를 매 틱 순회할 때, Linked List는 Node마다 힙 포인터를 따라가므로 CPU Cache(보통 64B Cache Line)를 활용하지 못합니다. Array는 연속 메모리라 prefetch가 동작해 L1/L2 캐시 히트율이 높습니다. 실측 기준 같은 O(n) 탐색이라도 Array가 3~5배 빠른 사례가 있습니다. 해결책: Entity를 Array로 저장하되 삽입·삭제 인덱스를 별도 Free List로 관리하는 Slot Array 패턴을 사용합니다.
+
+### Q3. 만료 시각과 Session ID를 함께 관리해야 하는 상황에서 Heap과 HashMap을 어떻게 조합하고 두 구조 간 정합성을 어떻게 유지하는가?
+
+**30초 모범답변:** Heap은 최소 만료 시각을 O(log n)으로 꺼내는 데 최적이고, HashMap은 Session ID로 O(1) 조회에 최적입니다. 두 구조를 함께 쓸 때 Session 삭제 시 Heap에서의 제거 비용(O(n) 탐색 또는 Lazy Deletion)이 정합성 문제입니다.
+
+**1~2분 모범답변:** 구현 전략 두 가지: (1) Position Map — HashMap에 Heap 내 인덱스를 함께 저장해 O(log n) 삭제. 단 Heap 재정렬 시마다 인덱스 갱신 필요. (2) Lazy Deletion — Heap에서 꺼낼 때 HashMap에 없으면 무효 처리. 구현이 단순하나 Heap에 만료된 항목이 누적됩니다. Session 갱신(만료 시각 변경)이 잦으면 Position Map, 삭제 위주면 Lazy Deletion이 유리합니다.
 
 ### Q4. Timer 자료구조를 설계해 보세요.
 
 가장 빠른 만료를 반복 처리하므로 `(expireAt, id)` Min Heap을 사용합니다. 취소가 적으면 Version 기반 Lazy Deletion, 많으면 Position Map이나 Tree를 검토합니다. 동일 시간 순서, Tick 처리 상한, 무효 Entry 정리와 동시 등록 정책도 설계합니다.
 
-### Q5. 여러 자료구조를 조합할 때 무엇을 주의하나요?
+### Q5. Session을 ID HashMap, 만료 Heap, 접속 순서 List 세 구조에 동시 등록하다가 Heap 삽입 직후 프로세스가 죽었습니다. 재시작 후 어떤 불일치가 발생하고 이를 방지하거나 탐지하는 방법은 무엇인가요?
 
-LRU의 Hash와 List처럼 각 조회를 빠르게 할 수 있지만 메모리와 쓰기 비용이 증가합니다. 삽입·삭제 시 모든 Index를 원자적으로 갱신하고 실패 Rollback, Version·Generation, 불변식 검증을 둬야 합니다.
+**30초 모범답변:** Heap 삽입 후 List 삽입 전에 프로세스가 죽으면 재시작 후 HashMap과 Heap에는 세션이 있지만 List에는 없는 불일치가 생깁니다. 탐지 방법은 세 구조의 원소 수 불일치 검사이며, 방지는 삽입 실패 시 이전 구조를 즉시 Rollback하는 원자적 삽입 함수로 해결합니다.
 
-### Q6. Big-O 외에 실제 성능에 영향을 주는 요소는 무엇인가요?
+**1~2분 모범답변:** 세 구조를 순서대로 삽입하는 중 Heap 삽입 성공→List 삽입 전 크래시가 나면 재시작 시 HashMap과 Heap에 같은 세션이 있고 List에는 없는 상태가 됩니다. 결과: 만료 Heap에서 세션이 꺼지지만 List 순서 처리에서는 해당 세션을 찾지 못해 누락 처리 또는 NPE 크래시가 발생합니다. 방지 전략 두 가지: (1) 삽입 함수 단일화 — 세 구조 삽입을 하나의 함수로 감싸고 예외 발생 시 역순으로 Rollback. (2) 복구 검증 — 재시작 시 세 구조 원소 수와 Key Set을 비교해 불일치가 있으면 Heap·List 기준으로 HashMap을 재구성. Generation 또는 Version 카운터를 세션 객체에 두면 Heap에서 꺼낸 Entry가 HashMap의 최신 세션과 일치하는지 확인할 수 있습니다.
 
-연속성에 따른 Cache Miss, Allocation과 Fragmentation, 원소·Key 비교 비용, Capacity와 Rehash, Lock 경합, 최악 입력 분포가 영향을 줍니다. 평균 처리량뿐 아니라 p95·p99 지연과 메모리도 측정합니다.
+### Q6. 틱 루프에서 동일한 O(n) 순회임에도 Hash Map 순회가 Array 순회보다 3배 느린 현상이 발생했습니다. 원인을 어떻게 진단하고 어떤 구조로 교체하는 판단을 내리나요?
 
-### Q7. 공유 자료구조의 동시성을 어떻게 설계하나요?
+**30초 모범답변:** Hash Map은 Bucket 배열에 불연속 메모리로 저장되어 순회 시 Cache Miss가 빈번합니다. 동일한 O(n)이라도 연속 Array는 Cache Line prefetch 덕분에 실측 3~5배 차이가 날 수 있습니다. 프로파일러로 Cache Miss율과 L1/L2 히트율을 확인하고, 순회가 주 연산이면 Array 기반 구조로 교체를 검토합니다.
 
-먼저 단일 Thread 소유가 가능한지 봅니다. 공유가 필요하면 복합 불변식을 포함한 Lock 범위를 정하고 Sharding이나 Snapshot으로 경합을 줄입니다. Concurrent API를 사용해도 Check-Then-Act 같은 여러 단계 로직은 별도 원자화합니다.
+**1~2분 모범답변:** Hash Map 순회가 Array보다 느린 원인 진단은 세 단계입니다. (1) 프로파일러(perf, VTune 등)로 L1/L2 Cache Miss율 확인. Hash Map은 각 Bucket이 힙 곳곳에 분산돼 64B Cache Line 활용율이 낮습니다. (2) HashMap의 Load Factor 확인. 낮은 Load Factor는 Bucket 배열을 희소하게 만들어 순회 시 빈 Bucket 스킵 비용이 추가됩니다. (3) Entity 접근 패턴 확인. 틱마다 전체 순회가 필요하다면 HashMap은 구조적으로 불리합니다. 교체 판단 기준: 읽기 대 쓰기 비율이 10:1 이상이고 매 틱 전체 순회가 핵심 연산이면 컴팩트 배열(SOA 또는 Slot Array)로 교체하고 ID 조회용 HashMap은 별도 Index로 유지합니다. 교체 후 p99 틱 지연과 Cache Miss율을 재측정해 개선 여부를 검증합니다.
 
 ## 16. 예상 꼬리질문
 
-- 작은 데이터에서는 왜 선형 Array가 Tree보다 빠를 수 있나요?
-- Dynamic Array의 분할 상환 O(1)은 무엇을 뜻하나요?
-- Hash와 Equality가 일치해야 하는 이유는 무엇인가요?
-- Heap의 임의 삭제를 빠르게 하려면 무엇을 추가하나요?
-- Trie와 정렬 Tree의 Prefix 검색을 비교해 주세요.
+- 틱 루프에 Entity가 100개일 때는 HashMap 조회가 빠르던 게임 서버가 5,000개로 늘자 배열 선형 탐색이 더 빠른 것으로 프로파일링됐습니다. 어떤 기준으로 전환 시점을 판단하나요?
+- 게임 서버 틱 루프 중 Entity 배열이 Capacity를 초과해 재할당이 발생하면 그 틱에서 지연이 발생합니다. 재할당 빈도와 메모리 낭비 사이에서 초기 Capacity를 어떻게 결정하나요?
+- Session 객체를 HashMap Key로 사용하다가 세션 갱신 후 조회 실패가 발생했습니다. Mutable Key 문제임을 어떻게 진단하고, 재발 방지를 위한 Key 설계 원칙은 무엇인가요?
+- 게임 서버 쿨다운 Timer에서 스킬이 취소될 때 Heap에서 해당 Entry를 빠르게 제거해야 합니다. Lazy Deletion과 Position Map 중 스킬 취소 빈도가 높은 경우 어느 쪽을 선택하고 그 이유는 무엇인가요?
+- 게임 내 아이템 이름 자동완성 기능에서 입력 문자 수가 늘수록 Trie 탐색 노드 수가 커져 메모리가 문제가 됩니다. 압축 Trie 도입 기준과 정렬 Tree로 대체를 고려해야 하는 시점은 어떻게 판단하나요?
 - Graph 연결 여부에 Union-Find를 쓰지 못하는 경우는 언제인가요?
-- 자료구조 변경이 Pointer·Iterator에 미치는 영향은 어떻게 확인하나요?
+- 라이브 서버에서 Entity 배열 재할당 후 다른 시스템이 보관하던 포인터로 접근하다가 크래시가 발생했습니다. Iterator·포인터 무효화 버그를 사전에 탐지하는 방법과 설계 수준의 예방 방안은 무엇인가요?
 
 ## 17. 30초 모범답변
 

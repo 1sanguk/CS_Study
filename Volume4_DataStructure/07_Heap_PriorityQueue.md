@@ -11,9 +11,9 @@ importance: 4
 
 ## 학습 목표
 
-- Heap과 Priority Queue의 차이를 설명할 수 있다.
-- Binary Heap의 배열 표현과 삽입·삭제 과정을 설명할 수 있다.
-- Heapify의 시간 복잡도와 Heap Sort의 특성을 설명할 수 있다.
+- 삽입·삭제 추적 시 Sift 방향이 잘못 선택됐을 때 어떤 Heap 조건 위반이 발생하는지 진단하고, Min/Max Heap 배열 표현에서 부모·자식 Index를 계산할 수 있다.
+- Bottom-Up Heapify와 반복 삽입의 시간 복잡도 차이(O(n) vs O(n log n))를 설명하고, 각각이 적합한 상황을 구분할 수 있다.
+- Priority Queue 구현체 후보(Heap, 정렬 배열, 균형 BST) 중 주어진 삽입·삭제·조회 패턴에 가장 적합한 구조를 트레이드오프 근거와 함께 선택할 수 있다.
 - 타이머, 작업 Scheduling, Top-K 요구에 적절한 구조를 선택할 수 있다.
 
 ## 1. 개요
@@ -194,6 +194,33 @@ Game Tick ── now >= top.time? ───┤
                                  └─ yes: pop·실행, 다시 검사
 ```
 
+```java
+// 게임 서버: Priority Queue 기반 스킬 쿨다운 타이머
+class CooldownTimer {
+    // Min-Heap: 만료 시각 기준 정렬 (가장 빨리 끝나는 쿨다운이 top)
+    private final PriorityQueue<CooldownEvent> heap =
+        new PriorityQueue<>(Comparator.comparingLong(e -> e.expireAt));
+
+    void schedule(long skillId, long expireAt) {
+        heap.offer(new CooldownEvent(skillId, expireAt));
+    }
+
+    // 틱마다 호출: 현재 시각 이전에 만료된 쿨다운 처리
+    void tick(long now) {
+        while (!heap.isEmpty() && heap.peek().expireAt <= now) {
+            CooldownEvent event = heap.poll(); // O(log n)
+            notifySkillReady(event.skillId);
+        }
+    }
+}
+
+// Max-Heap: 높은 우선순위 패킷 먼저 처리
+PriorityQueue<Packet> packetQueue =
+    new PriorityQueue<>(Comparator.comparingInt((Packet p) -> p.priority).reversed());
+```
+
+Java `PriorityQueue`는 기본 Min-Heap이다. `Comparator.reversed()`로 Max-Heap으로 전환할 수 있다. Heap 내부 임의 원소 조회·수정은 `O(n)`이므로 우선순위 필드를 직접 바꾸면 Heap 조건이 깨진다.
+
 Timer를 취소할 때 Heap 전체를 검색하면 `O(n)`이다. 취소 빈도가 낮으면 Lazy Deletion이 단순하다. 취소가 많고 Heap이 오래 유지된다면 Position Map, 주기적 Rebuild, 무효 Entry 비율 제한을 고려한다.
 
 한 Tick에 만료 Timer가 폭증하면 모두 즉시 실행해 Tick Budget을 넘길 수 있다. 자료구조가 빠르더라도 실행 작업량은 별개다. Tick당 처리 상한, 지연 허용 범위, Overdue 지표와 Queue 크기 경보가 필요하다.
@@ -220,49 +247,54 @@ Backend Worker의 Priority Queue에는 긴급 결제 보정과 일반 통계 작
 
 ## 14. 면접 질문
 
-### Q1. Heap과 Priority Queue의 차이는 무엇인가요?
+### Q1. 게임 서버 Timer 시스템에서 쿨다운 취소 빈도가 높을 때, Position Map으로 즉시 제거하는 방식과 Lazy Deletion 중 어떤 전략을 선택하며 그 근거는 무엇인가?
 
-Priority Queue는 가장 높은 우선순위 원소를 먼저 꺼내는 동작을 정의한 추상 자료형이고, Heap은 이를 구현하는 대표 자료구조입니다. Priority Queue는 균형 Tree나 정렬 배열 등으로도 구현할 수 있습니다.
+취소 빈도가 높다면 일반적으로 Position Map 방식이 유리합니다. Lazy Deletion은 무효 Entry가 누적되어 Heap 크기가 실제 활성 Timer 수보다 커지고, 만료 처리 시 무효 Entry를 반복 건너뛰는 비용이 생깁니다. 반면 Position Map은 모든 Swap마다 Map을 동기화해야 하므로 구현 복잡도가 올라갑니다. 취소 빈도가 낮고 Heap이 짧게 유지되는 경우에는 Lazy Deletion이 단순하고 실용적입니다. 실무에서는 무효 Entry 비율을 모니터링하고, 일정 비율을 넘으면 주기적 Rebuild를 하이브리드로 적용하기도 합니다.
 
-### Q2. Binary Heap의 삽입과 삭제를 설명해 주세요.
+### Q2. Priority Queue 기반 작업 큐에서 낮은 우선순위 작업이 무기한 처리되지 않는 Starvation이 발생했다. 원인과 완화 방법을 설명하라.
 
-삽입은 완전 이진 트리 형태를 위해 배열 끝에 추가한 뒤 부모와 비교하며 Sift-Up합니다. Root 삭제는 마지막 원소를 Root로 옮긴 뒤 더 우선인 자식과 교환하며 Sift-Down합니다. 둘 다 트리 높이만큼 이동해 `O(log n)`입니다.
+Starvation의 원인은 높은 우선순위 작업이 지속적으로 유입되어 낮은 우선순위 작업이 항상 뒤로 밀리는 것입니다. 완화 방법으로는 첫째, Aging 기법을 사용해 대기 시간이 길어질수록 작업의 우선순위를 점진적으로 높입니다. 둘째, 우선순위별 처리 비율(예: 높음 70%, 낮음 30%)을 정해 낮은 우선순위 작업도 일정 비율 처리되도록 합니다. 셋째, 최대 대기 시간 상한을 두고 초과 시 강제로 처리합니다. 운영 측면에서는 우선순위별 Queue 깊이와 대기 시간을 지표로 수집해 Starvation을 사전에 감지해야 합니다.
 
-### Q3. Heap의 Root가 최솟값이면 왜 이진 탐색은 할 수 없나요?
+### Q3. 이미 Heap에 삽입된 Timer의 만료 시각을 외부에서 직접 수정했을 때 어떤 문제가 생기고, 운영 중에 이를 어떻게 탐지하는가?
 
-Min Heap은 부모가 자식보다 작다는 관계만 보장합니다. 왼쪽과 오른쪽 Subtree 사이의 대소 관계가 없으므로 비교 한 번으로 한쪽을 버릴 수 없고 임의 Key 검색은 최악 `O(n)`입니다.
+Heap은 삽입 당시의 Key 값으로 위치를 결정합니다. 삽입 이후 외부에서 만료 시각 필드를 직접 바꾸면 배열 내 위치는 구식 Key 기준 그대로이므로 Heap 조건이 조용히 깨집니다. Root가 최솟값이 아닌 채로 Tick이 돌면 아직 만료되지 않은 Timer가 먼저 실행되거나, 이미 지나간 Timer가 계속 Heap 안에 남아 있게 됩니다. 탐지 방법으로는 첫째, 전체 Heap을 순회하며 부모-자식 Key 관계를 검증하는 `assertHeapInvariant()` 함수를 QA·스테이징에서 주기적으로 실행합니다. 둘째, Root의 만료 시각이 현재 시각보다 과거인데도 실행 대상 조건에 걸리지 않는 케이스를 로깅해 이상 패턴을 감지합니다. 셋째, Timer 객체를 불변으로 설계해 만료 시각 변경이 필요하면 기존 Entry를 취소하고 새 Entry를 삽입하는 전용 API만 허용합니다.
 
-### Q4. Bottom-Up Heapify가 O(n)인 이유는 무엇인가요?
+### Q4. 게임 서버의 틱 루프에서 Timer 처리 중 p99 지연이 평소의 3배로 튀었다. 어떤 원인을 먼저 의심하고 어떤 순서로 진단하는가?
 
-Root 근처의 소수 노드는 많이 내려갈 수 있지만, 전체의 절반인 Leaf는 작업이 없고 대부분의 하단 노드는 한두 단계만 이동합니다. 높이별 노드 수와 작업량을 합하면 n에 비례합니다.
+첫 번째로 한 틱에 만료된 Timer 수를 확인합니다. 특정 시각에 대량 등록된 Timer가 동시에 만료되어 Tick Budget을 초과했을 가능성이 높습니다. `pop` 횟수가 평소 대비 수십 배 급증했는지를 메트릭으로 확인합니다. 두 번째로 Heap 크기를 봅니다. 취소되지 않은 무효 Entry가 누적되어 Heap이 비정상적으로 크면 Sift-Down 단계가 늘어나 `O(log n)`의 n이 커진 효과가 납니다. 세 번째로 GC 로그를 확인합니다. 만료 Timer 콜백이 객체를 대량 생성했다면 Minor GC가 지연을 유발할 수 있습니다. 네 번째로 Tick 처리 내부에서 I/O나 Lock 대기가 발생하는지 확인합니다. 자료구조 자체는 빠르더라도 콜백 안에서 DB 호출이 섞이면 지연이 폭증합니다. 원인이 Timer 폭증이면 틱당 처리 상한을 두고 초과분은 다음 틱으로 넘깁니다.
 
-### Q5. Heap에서 임의 원소 삭제를 빠르게 하려면 어떻게 하나요?
+### Q5. 삽입이 거의 없고 조회(범위 탐색·임의 Key 접근)가 빈번한 게임 서버 컴포넌트에서, 정렬 배열이 Heap보다 나을 수 있는 이유와 그 전환 판단 기준은 무엇인가?
 
-ID에서 Heap Index를 찾는 Hash Map을 함께 유지합니다. Index를 찾은 후 마지막 원소로 대체하고 Sift-Up 또는 Sift-Down하면 `O(log n)`입니다. 모든 Swap에서 Position Map도 갱신해야 합니다.
+정렬 배열은 이진 탐색으로 임의 Key를 `O(log n)`에 찾고, 만료 범위 전체를 연속 메모리 슬라이스로 꺼낼 수 있습니다. Heap은 임의 Key 조회가 `O(n)`이고 범위 탐색도 순회가 필요합니다. 반면 정렬 배열의 삽입은 시프트 비용 때문에 `O(n)`입니다. 따라서 삽입 빈도가 낮고 조회가 지배적인 경우, 특히 원소 수가 수천 이하라면 Cache 친화적인 정렬 배열이 실제 처리량에서 앞설 수 있습니다. 전환 판단 기준으로는 삽입과 조회의 비율을 프로파일링해 삽입이 전체의 5~10% 미만이고 범위 탐색이 자주 발생한다면 정렬 배열을 선택합니다. 원소 수가 늘어날수록 삽입 시프트 비용이 커지므로 임계점을 벤치마크로 측정해 결정합니다.
 
-### Q6. 게임 서버 Timer에 Heap을 쓸 때 고려할 점은 무엇인가요?
+### Q6. Aging 기반으로 낮은 우선순위 작업의 우선순위를 점진적으로 올릴 때, 공정성과 기아 방지 사이에서 어떤 균형 설계를 선택하고 그 근거는 무엇인가?
 
-Min Heap으로 가장 이른 만료를 빠르게 찾을 수 있습니다. 취소 방식, 동일 시각 Tie-break, 무효 Entry 정리, 한 Tick의 만료 폭증, 동시 접근과 Queue 상한까지 함께 설계해야 합니다.
+Aging은 대기 시간 t마다 우선순위를 δ만큼 높여 낮은 우선순위 작업도 결국 처리되도록 보장합니다. 균형 설계에서 핵심 변수는 두 가지입니다. 첫째, Aging 속도(δ)를 너무 빠르게 설정하면 낮은 우선순위 작업이 빠르게 높은 우선순위와 동등해져 우선순위 제어 자체가 무의미해집니다. 너무 느리면 기아가 방지되지 않습니다. 실무에서는 SLA 기준의 최대 허용 대기 시간을 역산해 Aging 속도를 정합니다. 예를 들어 최대 30초 대기를 허용한다면 30초 내에 우선순위가 최상위에 도달하도록 δ를 설정합니다. 둘째, 우선순위 상한선(cap)을 두어 Aging된 작업이 실시간 긴급 작업과 동일 레벨로 올라가지 않도록 합니다. 긴급 작업 전용 최상위 구간을 예약하고, 일반 작업의 Aging 상한은 그 바로 아래로 제한합니다. 운영 지표로는 우선순위별 대기 시간 분포와 Aging 발동 횟수를 수집해 설정값이 실제 트래픽 패턴에 맞는지 주기적으로 검증합니다.
 
 ## 15. 예상 꼬리질문
 
-- Min Heap과 Max Heap의 비교 함수는 어떻게 다른가요?
-- 배열에서 부모와 자식 Index는 어떻게 계산하나요?
-- Decrease-Key는 어떻게 구현하나요?
-- Lazy Deletion의 장단점은 무엇인가요?
-- Heap Sort의 복잡도와 안정성은 어떤가요?
-- Top-K를 Heap으로 구하면 복잡도는 얼마인가요?
-- 낮은 우선순위 작업의 Starvation은 어떻게 막나요?
+- Position Map 방식에서 Heap Swap 도중 프로세스가 죽으면 어떤 정합성 문제가 생기고 어떻게 복구하는가?
+- Lazy Deletion을 쓸 때 무효 Entry가 전체의 몇 퍼센트를 넘으면 주기적 Rebuild를 고려해야 하는가? 그 기준은 어디서 오는가?
+- 게임 서버에서 동일 만료 시각의 Timer가 수천 개 동시에 등록되는 이벤트 상황에서 Tie-break를 Sequence로 처리할 때 어떤 overflow 문제가 생길 수 있는가?
+- Priority Queue에 Capacity 상한을 두고 Backpressure를 적용할 때, 상한 초과 시 새 요청을 거부하는 것과 기존 최저 우선순위 항목을 밀어내는 방식 중 어느 쪽을 언제 선택하는가?
+- Aging으로 우선순위를 올린 작업이 처리된 뒤 원래 우선순위로 복원해야 하는 경우가 있는가? 있다면 어떻게 구현하는가?
+- Heap 기반 Timer와 Time Wheel 구조를 비교할 때 어떤 조건에서 Time Wheel이 유리한가?
+- 단일 Thread Tick 루프에서 Timer 콜백이 또 다른 Timer를 등록할 경우 재진입(re-entrancy) 문제를 어떻게 처리하는가?
+- Position Map 없이 Heap에서 특정 Timer를 취소할 때 `O(n)` 탐색 대신 쓸 수 있는 다른 트릭이 있는가?
 
 ## 16. 30초 모범답변
 
-> Heap은 부모가 자식보다 우선하는 완전 이진 트리이며 Priority Queue의 대표 구현입니다. 배열로 저장해 Root의 최우선 원소를 `O(1)`에 확인하고, 삽입은 Sift-Up, 제거는 Sift-Down으로 `O(log n)`에 처리합니다. 전체가 정렬된 것은 아니어서 임의 검색은 `O(n)`이며, 게임 서버에서는 만료 Timer나 우선순위 작업 관리에 사용할 수 있습니다.
+> Heap은 부모가 자식보다 우선하는 완전 이진 트리이며 Priority Queue의 대표 구현입니다. 게임 서버 Timer 설계에서는 취소 빈도를 먼저 판단합니다. 취소가 빈번하면 Position Map으로 O(log n) 즉시 제거를 선택하고, 취소가 드물면 Lazy Deletion으로 구현 복잡도를 낮춥니다. Starvation 완화는 대기 시간 기반 Aging과 우선순위 상한선을 함께 설정해 긴급 작업 구간을 보호합니다. 삽입 이후 Timer 객체의 만료 Key를 외부에서 직접 변경하면 Heap 조건이 조용히 깨지므로, 불변 객체 설계와 전용 Update API로 방지해야 합니다.
 
 ## 17. 1~2분 확장답변
 
-> Priority Queue는 가장 우선인 원소를 먼저 꺼내는 ADT이고 Binary Heap은 대표 구현입니다. Heap은 완전 이진 트리라 배열에 빈칸 없이 저장할 수 있고, Min Heap에서는 모든 부모가 자식보다 작거나 같습니다. 그래서 최솟값은 Root에 있지만 형제나 서로 다른 Subtree의 순서는 보장하지 않습니다.
+> Priority Queue는 가장 우선인 원소를 먼저 꺼내는 ADT이고 Binary Heap은 대표 구현입니다. Heap은 완전 이진 트리라 배열에 빈칸 없이 저장할 수 있고, Min Heap에서는 모든 부모가 자식보다 작거나 같습니다. 최솟값은 Root에 있지만 형제나 서로 다른 Subtree의 순서는 보장하지 않습니다.
 >
-> 삽입은 배열 끝에 넣고 부모 방향으로 Sift-Up하며, Root 제거는 마지막 값을 Root로 옮기고 더 작은 자식 방향으로 Sift-Down합니다. 두 연산은 높이에 비례해 `O(log n)`, Top 확인은 `O(1)`입니다. 임의 ID 검색은 `O(n)`이므로 취소가 빈번하면 Position Map을 함께 유지하거나 Lazy Deletion을 사용합니다. 게임 서버 Timer에서는 가장 빠른 만료를 효율적으로 처리할 수 있지만, 만료 폭증의 Tick Budget, 동일 우선순위 순서, 취소 Entry 정리와 동시성 정책까지 설계해야 합니다.
+> 삽입은 배열 끝에 넣고 Sift-Up, Root 제거는 마지막 값을 Root로 옮기고 Sift-Down합니다. 두 연산 모두 `O(log n)`, Top 확인은 `O(1)`입니다.
+>
+> 취소 전략 선택은 무효 Entry 누적 비율로 판단합니다. Lazy Deletion은 무효 Entry가 전체의 30~50%를 초과하면 Heap 크기 증가로 Sift 단계가 늘어나 실질적인 성능 저하가 발생합니다. 이 시점에 Position Map 방식 또는 주기적 Rebuild로 전환합니다. Position Map은 모든 Swap마다 Map을 정확히 동기화해야 하므로 Swap 도중 버그가 생기면 잘못된 원소를 제거하는 심각한 오류로 이어집니다. `assertHeapInvariant()` 검증을 스테이징에서 정기 실행해 불변식 위반을 조기에 잡습니다.
+>
+> p99 지연이 급등하면 진단 순서는 다음과 같습니다. 먼저 한 Tick의 `pop` 횟수가 평소 대비 급증했는지 확인합니다. Timer 폭증이면 Tick당 처리 상한을 두고 초과분을 다음 Tick으로 미룹니다. 다음으로 Heap 크기가 비정상적으로 크면 무효 Entry 누적을 의심합니다. 마지막으로 콜백 내부에서 I/O나 Lock 대기가 섞였는지 확인합니다. 자료구조가 빠르더라도 콜백 실행량이 많으면 Tick Budget은 초과합니다.
 
 ## 18. 핵심 요약
 

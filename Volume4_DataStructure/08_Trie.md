@@ -11,8 +11,8 @@ importance: 4
 
 ## 학습 목표
 
-- Trie가 문자열 Key의 Prefix를 공유하는 원리를 설명할 수 있다.
-- 검색·삽입·삭제·자동 완성의 동작과 복잡도를 설명할 수 있다.
+- 자식 표현 방식(고정 배열 vs Hash Map)과 Prefix 공유율을 보고 메모리·속도 트레이드오프를 판단하고 적합한 구조를 선택할 수 있다.
+- 자동 완성 후보 수(Subtree 크기)가 Prefix 길이만큼 O(|P|)가 아님을 인식하고, 결과 상한 K를 두어야 하는 이유와 구현 방법을 결정할 수 있다.
 - 자식 저장 방식과 압축 Trie의 메모리 Trade-off를 비교할 수 있다.
 - 닉네임 검색, 명령 자동 완성, IP Routing 사례에 적합성을 판단할 수 있다.
 
@@ -67,6 +67,60 @@ class TrieNode
     isTerminal: bool
     value: optional
 ```
+
+```java
+// 게임 서버: 닉네임 자동완성 Trie
+class TrieNode {
+    Map<Character, TrieNode> children = new HashMap<>();
+    boolean isTerminal = false; // 이 노드에서 Key가 끝나는지 표시
+}
+
+class NicknameTrie {
+    private final TrieNode root = new TrieNode();
+
+    void insert(String nickname) {
+        TrieNode node = root;
+        for (char c : nickname.toCharArray()) {
+            node.children.computeIfAbsent(c, k -> new TrieNode());
+            node = node.children.get(c);
+        }
+        node.isTerminal = true; // Terminal 표식 필수 — 없으면 경로는 있어도 Key 조회 실패
+    }
+
+    boolean search(String nickname) {
+        TrieNode node = root;
+        for (char c : nickname.toCharArray()) {
+            node = node.children.get(c);
+            if (node == null) return false;
+        }
+        return node.isTerminal; // 경로가 있어도 Terminal=false면 검색 실패
+    }
+
+    // Prefix로 시작하는 닉네임 최대 K개 반환 (Subtree 순회 비용 = O(K * avgLen))
+    List<String> autocomplete(String prefix, int k) {
+        TrieNode node = root;
+        for (char c : prefix.toCharArray()) {
+            node = node.children.get(c);
+            if (node == null) return Collections.emptyList();
+        }
+        List<String> result = new ArrayList<>();
+        collectDFS(node, new StringBuilder(prefix), result, k);
+        return result;
+    }
+
+    private void collectDFS(TrieNode node, StringBuilder sb, List<String> result, int k) {
+        if (result.size() >= k) return;
+        if (node.isTerminal) result.add(sb.toString());
+        for (Map.Entry<Character, TrieNode> entry : node.children.entrySet()) {
+            sb.append(entry.getKey());
+            collectDFS(entry.getValue(), sb, result, k);
+            sb.deleteCharAt(sb.length() - 1);
+        }
+    }
+}
+```
+
+자동완성 비용은 O(|Prefix|) + O(Subtree 크기)이므로 결과 상한 K 없이 호출하면 O(전체 Key 수)까지 탐색할 수 있다.
 
 문자 집합이 영문 소문자 26개로 제한되면 고정 배열 `children[26]`을 사용할 수 있다. 자식 접근이 빠르고 단순하지만 대부분의 칸이 비면 메모리를 낭비한다. Unicode나 넓은 문자 집합에는 Hash Map 또는 정렬된 작은 Vector를 사용할 수 있다.
 
@@ -215,52 +269,73 @@ Trie가 Exact Search에서 “무조건 Hash보다 빠르다”고 할 수 없�
 - **Trie는 전체 문자열에서 다중 Pattern을 자동으로 찾는다**: 단순 Trie와 Aho-Corasick의 요구를 구분해야 한다.
 - **Unicode 문자열은 화면의 글자 단위로 자동 분리된다**: 저장 단위와 정규화 정책을 명시해야 한다.
 - **자동 완성 비용은 항상 O(Prefix 길이)다**: 후보 Subtree 탐색과 K개 반환 비용이 추가된다.
+- **Trie는 Exact Match 속도가 Hash Table보다 항상 빠르다**: Trie의 검색 비용은 O(|Key|)이며 각 문자마다 포인터 추적과 Hash 조회가 발생한다. 단건 Exact Match만 필요하다면 Hash Table의 O(1) 평균이 Trie보다 빠를 수 있다. Trie는 Prefix 공유와 자동완성이 필요할 때 유리하다.
+- **삭제는 Terminal 표식만 끄면 완료된다**: Terminal을 false로 바꿔도 해당 경로의 Node는 메모리에 남는다. 다른 Key가 해당 경로를 공유하지 않는다면 불필요한 Node가 메모리를 점유한다. 완전한 삭제를 위해 공유 여부를 확인하고 미사용 Node를 역방향으로 제거해야 한다.
 
 ## 13. 면접 질문
 
-### Q1. Trie를 설명해 주세요.
+### Q1. 게임 서버에서 닉네임 자동완성 기능을 Hash Table 대신 Trie로 구현하려는 이유와, Trie 선택이 적절하지 않은 상황은 무엇인가?
 
-Trie는 문자열의 문자 또는 Token을 Edge로 저장하고 같은 Prefix의 경로를 공유하는 Tree입니다. Root부터 문자열 길이만큼 이동해 Exact Match와 Prefix 검색을 수행하며, 완전한 Key는 Terminal 표식으로 구분합니다.
+Hash Table은 완전한 Key의 Exact Match에는 평균 O(1)이지만 Prefix로 시작하는 후보를 직접 열거하지 못합니다. 닉네임 자동완성처럼 "입력한 문자열로 시작하는 닉네임 목록"이 필요하면 Hash Table은 전체 Scan이 필요합니다. Trie는 Prefix 경로를 탐색 구조 자체에 내재해 O(|Prefix|)에 후보 위치를 찾고, 그 아래 Subtree를 순회해 후보를 반환합니다.
 
-### Q2. 검색·삽입·삭제 복잡도는 얼마인가요?
+Trie가 적절하지 않은 상황은 Exact Match만 필요하거나 Key가 매우 드물고 Prefix 공유가 적은 경우입니다. 이 경우 Node와 자식 Container 할당 비용이 Hash Table보다 크며, Cache Miss도 늘어납니다. 또한 멀티바이트 Unicode 닉네임에 고정 배열 자식을 쓰면 메모리 낭비가 커지므로 Hash Map 자식 또는 압축 구조를 검토해야 합니다.
 
-문자열 길이를 `L`이라 하면 자식 조회가 상수 시간일 때 각각 `O(L)`입니다. 자동 완성은 Prefix Node 탐색 외에 후보 Subtree 방문과 결과 `K`개 반환 비용이 추가됩니다.
+### Q2. 닉네임 수가 100만 개에서 1000만 개로 증가했을 때 자동완성 Trie의 메모리가 예상보다 빠르게 늘어났다. 원인을 어디서 찾겠는가, 그리고 어떻게 완화하겠는가?
 
-### Q3. Exact Search와 Prefix Search의 차이는 무엇인가요?
+닉네임 수 10배 증가 시 메모리가 단순 10배를 크게 넘는다면 Prefix 공유율이 낮거나 자식 표현이 비효율적인 경우가 많습니다. 먼저 노드 수와 평균 분기 수를 측정합니다. Hash Map 자식은 각 노드마다 Map 객체 자체의 오버헤드가 생기고, 닉네임에 한글·이모지가 포함되면 Code Point 범위가 넓어져 분기가 흩어지고 빈 공간 없이도 노드 수가 급증합니다.
 
-둘 다 입력 경로가 존재해야 합니다. Exact Search는 마지막 Node가 Terminal이어야 하고 Prefix Search는 경로 존재만 확인합니다. `apple`만 저장된 Trie에서 `app`은 Prefix지만 Exact Key는 아닐 수 있습니다.
+완화 방법은 세 가지를 순서대로 검토합니다. 첫째, 단일 자식만 이어지는 경로(Prefix 공유 없는 긴 고유 닉네임)를 Radix Tree처럼 하나의 Edge 문자열로 압축합니다. 둘째, 조회 빈도가 낮은 닉네임을 Off-Process 검색 엔진(Elasticsearch 등)으로 위임하고 Trie에는 온라인 플레이어만 유지합니다. 셋째, 노드 풀을 Arena Allocator로 관리해 GC 압박과 Pointer 오버헤드를 줄입니다. 측정 없이 구조를 바꾸는 것은 위험하며, 노드 수·메모리·p95 지연을 모두 함께 봐야 합니다.
 
-### Q4. Trie의 메모리 사용을 줄이는 방법은 무엇인가요?
+### Q3. Trie에 Key를 삽입할 때 Terminal 표식을 누락하면 어떤 버그가 생기는가? 실무에서 이 버그를 탐지하는 방법을 설명하라.
 
-고정 자식 배열 대신 Hash Map이나 작은 정렬 Vector를 사용하고, 자식이 하나인 연속 경로는 Radix Tree처럼 하나의 Edge로 압축할 수 있습니다. Arena Allocation이나 Compact Index 표현도 Pointer·할당 비용을 줄일 수 있습니다.
+Terminal 표식을 누락하면 경로는 존재하지만 `search()`가 항상 false를 반환합니다. 게임 서버에서는 방금 삽입한 닉네임을 즉시 조회했을 때 "존재하지 않음"으로 응답하거나, 중복 닉네임 검사를 통과해 같은 닉네임이 두 계정에 등록되는 버그로 나타납니다.
 
-### Q5. Trie와 Hash Table을 어떻게 선택하나요?
+실무 탐지 방법은 두 가지입니다. 첫째, 삽입 직후 동일 Key로 `search()`를 호출하는 Round-trip 단위 테스트를 작성합니다. 삽입 성공 후 조회 실패를 즉시 잡을 수 있습니다. 둘째, 운영 중이라면 삽입 API의 응답과 이후 조회 API의 응답을 로그로 남겨 "삽입 성공 + 조회 실패" 패턴이 발생하는지 모니터링합니다. Trie 구현체 교체나 리팩토링 직후에는 이 패턴이 특히 자주 나타납니다.
 
-Exact Match만 중요하면 Hash Table이 더 단순하고 메모리 효율적일 수 있습니다. Prefix 존재, 자동 완성, 사전순 열거, Longest Prefix Match가 핵심이면 Trie가 적합합니다. 실제 Key 분포와 메모리를 측정해 결정합니다.
+### Q4. 닉네임 자동완성 Trie의 자식 노드를 고정 배열로 구현했다가 Hash Map으로 교체하기로 결정했다면, 어떤 상황이 그 판단을 유도했겠는가? 반대로 Hash Map에서 고정 배열로 돌아가야 하는 상황은 무엇인가?
 
-### Q6. Trie 삭제에서 주의할 점은 무엇인가요?
+고정 배열에서 Hash Map으로 교체를 결정하는 신호는 크게 두 가지입니다. 닉네임에 한글·이모지·특수문자가 섞여 실제 사용 Code Point 범위가 Unicode 전체로 퍼진 경우, 고정 배열 크기를 Unicode 범위(0~0x10FFFF)로 잡으면 노드 하나에 수십만 슬롯이 생겨 사실상 사용 불가합니다. 또는 영문만 허용해도 분기가 희소해서(노드당 평균 자식 1~2개 수준) 배열 26개 중 대부분이 null인 상황입니다. 이때 메모리 프로파일러로 null 포인터가 전체 메모리의 60% 이상을 차지하면 교체 근거가 됩니다.
 
-종료 표식을 끈 뒤 자식이 없고 다른 Key의 Terminal도 아닌 Node만 역방향으로 제거해야 합니다. 공유 Prefix Node를 지우면 다른 Key까지 손상됩니다.
+반대로 Hash Map에서 고정 배열로 돌아가야 하는 상황은 문자 집합이 확정적으로 작고 분기가 조밀한 경우입니다. 예를 들어 운영 명령어 자동완성처럼 영문 소문자+숫자만 허용하고, 짧은 명령 집합이라 Prefix 공유율이 높아 노드당 평균 자식이 10개 이상이면 배열의 O(1) 인덱스 접근과 CPU Cache 연속성이 Hash Map의 해시 계산·충돌 처리보다 유리합니다. 실제로 p95 자동완성 지연이 목표치(예: 5ms)를 초과할 때 두 구현을 벤치마킹해 결정합니다.
+
+### Q5. 닉네임 자동완성에 Trie를 도입했는데 서버 배포 후 GC 중단 시간이 급증했다. Trie 구조와 관련 있다고 판단하는 근거는 무엇이고, 첫 번째로 어떤 지표를 확인하겠는가?
+
+GC 중단이 Trie와 연관될 수 있는 근거는 Trie가 문자마다 노드 객체를 힙에 할당하기 때문입니다. 닉네임 100만 개에 평균 길이 8자라면 노드가 최대 수백만 개에 달하고, 자식을 Hash Map으로 구현했다면 Map 객체와 Entry 객체까지 함께 늘어납니다. 힙에 단명 객체(삽입·삭제 중 임시 노드)가 많으면 Minor GC 빈도와 Promotion 압박이 커집니다.
+
+첫 번째로 확인할 지표는 힙 사용량 추이와 GC 로그의 Old Gen Promotion 속도입니다. 닉네임 등록 요청이 많은 시간대에 Old Gen이 빠르게 차면 Trie 노드가 Old Gen으로 Promotion되고 있다는 신호입니다. 그다음으로 Heap Dump를 떠서 `TrieNode` 인스턴스 수와 총 점유 메모리를 확인합니다. 문제 확인 후 완화 경로는 두 가지입니다. 노드 생명주기가 명확하다면 Arena/Object Pool로 GC 압박을 줄이거나, 자주 바뀌지 않는 닉네임은 Off-Heap 구조나 외부 인덱스로 위임하고 Trie에는 온라인 세션 닉네임만 유지합니다.
+
+### Q6. 닉네임 자동완성 Trie에서 읽기(자동완성 조회)와 쓰기(닉네임 등록·삭제)가 동시에 발생할 때 어떤 동시성 전략을 선택하겠는가? 각 전략의 적합 조건을 설명하라.
+
+동시성 전략은 읽기·쓰기 비율과 쓰기 빈도에 따라 세 가지 경로로 나뉩니다.
+
+첫째, 읽기가 압도적으로 많고 쓰기가 드문 경우(예: 운영 명령어 Trie)에는 Immutable Snapshot 교체가 가장 단순합니다. 쓰기 요청이 올 때마다 전체 Trie를 새로 빌드하거나 Deep Copy해서 Atomic Reference를 교체하면, 읽기 스레드는 Lock 없이 이전 Snapshot을 계속 참조합니다. 빌드 비용이 허용 범위인지가 판단 기준입니다.
+
+둘째, 닉네임 등록이 자주 발생하는 경우(로그인마다 Trie 갱신)에는 ReadWriteLock이 현실적입니다. 읽기는 다수가 동시에 가능하고 쓰기만 독점합니다. 단, 쓰기 중 읽기가 블로킹되므로 p99 자동완성 지연에 직접 영향을 줍니다. 쓰기 시간을 최소화하는 것이 핵심입니다.
+
+셋째, 쓰기가 잦고 지연 허용치가 작으면 Copy-on-Write 또는 Lock-free 구조를 검토합니다. 노드 단위 CAS나 구조를 불변 Persistent 자료구조로 관리하면 읽기 지연 영향을 최소화할 수 있지만 구현 복잡도가 높습니다. 실무에서는 먼저 ReadWriteLock으로 구현하고 p99 지연과 Lock 경합을 측정한 후 필요하면 다음 단계로 넘어갑니다.
 
 ## 14. 예상 꼬리질문
 
-- 고정 배열과 Hash Map 자식 표현의 Trade-off는 무엇인가요?
-- Radix Tree는 일반 Trie와 어떻게 다른가요?
-- 자동 완성 상위 K개를 빠르게 반환하려면 무엇을 추가할 수 있나요?
-- 같은 Prefix를 가진 Key 삭제 시 어떤 Node를 남겨야 하나요?
-- Unicode 닉네임 저장 전에 어떤 정규화가 필요한가요?
-- Aho-Corasick은 단순 Trie에 무엇을 추가하나요?
-- 동시 읽기와 갱신은 어떻게 보호할 수 있나요?
+- 닉네임에 한글·이모지가 포함될 때 Java의 `toCharArray()`로 분리하면 어떤 버그가 생기나요? 올바른 처리 방법은 무엇인가요?
+- 자동완성 상위 K개를 반환할 때 인기순(점수순) 정렬이 필요하다면 Trie 구조를 어떻게 바꿔야 하나요? 삽입 비용은 어떻게 달라지나요?
+- Radix Tree로 전환을 결정하는 기준은 무엇인가요? 어떤 측정 지표가 임계점을 넘었을 때 전환을 고려하나요?
+- 닉네임 변경 요청이 초당 1000건 이상 들어올 때 단일 Trie에서 Lock 경합이 문제가 된다면 어떤 구조 변경을 검토하나요?
+- `app`과 `apple`이 함께 저장된 Trie에서 `app`을 삭제할 때 Terminal 표식만 끄는 방식과 노드까지 제거하는 방식의 차이가 실제 서비스에서 언제 문제가 되나요?
+- 자동완성 결과 상한 K를 서버에서 강제하지 않으면 어떤 장애 시나리오가 생기나요?
+- 닉네임 Trie를 단일 프로세스 메모리에만 두면 서버 재시작 시 어떤 문제가 생기고, 어떻게 복구 전략을 설계하나요?
+- 금칙어 필터에 Trie를 쓰는 것과 Aho-Corasick을 쓰는 것의 차이가 실제로 드러나는 상황은 무엇인가요?
 
 ## 15. 30초 모범답변
 
-> Trie는 문자열을 문자별 경로로 저장해 같은 Prefix를 공유하는 Tree입니다. 자식 조회가 상수 시간이라면 길이 `L`의 Key를 `O(L)`에 검색·삽입하며 Prefix 검색과 자동 완성에 유리합니다. 다만 문자마다 Node와 자식 구조가 필요해 메모리 비용이 크므로 희소 Map이나 압축 Trie를 고려합니다. 게임 서버에서는 명령이나 닉네임 자동 완성에 활용할 수 있습니다.
+> Trie는 공통 Prefix를 경로로 공유해 자동완성과 Prefix 검색에 유리한 구조입니다. Hash Table이 Prefix 범위를 직접 열거하지 못하는 반면, Trie는 O(|Prefix|)에 후보 위치를 찾습니다. 단, 닉네임에 한글·이모지가 섞이면 자식 표현을 Hash Map으로 바꿔야 하고 노드 수가 빠르게 늘어납니다. 메모리가 기대보다 빠르게 증가하면 단일 자식 경로 압축(Radix Tree 전환)이나 온라인 세션 닉네임만 Trie에 유지하는 범위 제한을 검토합니다.
 
 ## 16. 1~2분 확장답변
 
-> Trie는 Root부터 문자나 Token을 하나씩 따라가며 문자열을 저장하고, 같은 Prefix를 가진 Key는 경로를 공유합니다. 모든 문자를 소비했을 때 Terminal 표식을 확인해 완전한 Key와 단순 Prefix를 구분합니다. 검색·삽입·삭제는 문자열 길이 `L`에 비례하지만 자동 완성은 Prefix Node 아래의 후보를 순회하는 비용이 추가됩니다.
+> Trie는 Root부터 문자나 Token을 하나씩 따라가며 문자열을 저장하고, 같은 Prefix를 가진 Key는 경로를 공유합니다. 모든 문자를 소비했을 때 Terminal 표식을 확인해 완전한 Key와 단순 Prefix를 구분합니다. 검색·삽입·삭제는 문자열 길이 `L`에 비례하지만 자동완성은 Prefix Node 아래 후보를 순회하는 비용이 추가되므로 결과 상한 K를 반드시 설정합니다. K 없이 Subtree를 전부 순회하면 특정 짧은 Prefix에서 O(전체 Key 수)가 될 수 있습니다.
 >
-> 가장 큰 Trade-off는 메모리입니다. 작은 고정 Alphabet은 자식 배열이 빠르지만 빈 Pointer를 낭비하고, Unicode처럼 범위가 넓으면 Hash Map이나 작은 Vector가 적합할 수 있습니다. 한 자식만 이어지는 경로는 Radix Tree로 압축할 수 있습니다. Exact Match만 필요하면 Hash Table이 단순하지만 Prefix 자동 완성, 사전순 열거, Longest Prefix Match가 중요하면 Trie가 강점이 있습니다. 실무에서는 정규화, 결과 상한, 갱신 동시성과 실제 Node 수까지 함께 설계합니다.
+> 자식 표현 선택이 핵심 트레이드오프입니다. 영문 소문자 26자처럼 문자 집합이 작고 분기가 조밀하면 고정 배열이 O(1) 인덱스 접근으로 Cache 효율이 좋습니다. 한글·이모지가 포함되면 Code Point 범위가 넓어져 고정 배열이 불가하고 Hash Map을 써야 합니다. 이때 Java의 `toCharArray()`는 char 단위(UTF-16 코드 단위)로 분리하므로 이모지 같은 Surrogate Pair 문자가 두 개로 쪼개지는 버그가 생깁니다. `codePoints()` 스트림이나 ICU4J의 `UCharacterIterator`로 처리해야 합니다.
+>
+> 동시성은 읽기/쓰기 비율로 전략을 고릅니다. 운영 명령어처럼 쓰기가 드물면 Immutable Snapshot을 빌드해 Atomic Reference로 교체하면 읽기에 Lock이 없습니다. 닉네임처럼 쓰기가 빈번하면 ReadWriteLock으로 시작해 p99 지연과 Lock 경합을 측정한 뒤, 문제가 있으면 Copy-on-Write나 단일 Writer 구조로 이동합니다. 메모리 급증 시에는 노드 수와 평균 분기 수를 먼저 측정하고, 단일 자식 경로가 많으면 Radix Tree 압축, 대부분이 오프라인 계정이면 Trie 대상 범위를 온라인 세션으로 제한하는 순서로 접근합니다.
 
 ## 17. 핵심 요약
 

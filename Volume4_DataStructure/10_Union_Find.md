@@ -11,10 +11,10 @@ importance: 4
 
 ## 학습 목표
 
-- 서로소 집합과 MakeSet·Find·Union 연산을 설명할 수 있다.
-- 경로 압축과 Rank·Size 기준 결합이 Tree 높이를 줄이는 원리를 설명할 수 있다.
-- Union-Find의 분할 상환 복잡도와 지원하지 않는 연산을 설명할 수 있다.
-- 연결 요소, Cycle 판정, Kruskal과 게임 서버 사례에 적용할 수 있다.
+- 길드 동맹·서버 분할 등 Connectivity 판단이 필요한 상황에서 Union-Find와 BFS/DFS 중 어느 것을 선택할지 결정할 수 있다.
+- Tree 편향이 우려되는 조건에서 경로 압축과 Rank·Size 결합의 효과를 비교하고 적합한 최적화 조합을 선택할 수 있다.
+- Union-Find의 O(α(n)) 비용이 성립하는 조건과 Rollback·동시성 요구 시 포기해야 하는 최적화를 구분하여 설계 결정을 내릴 수 있다.
+- 연결 요소 수 관리, 무방향 Cycle 판정, Kruskal 선택 조건 중 어느 기법을 사용해야 하는지 각 상황의 요구 조건에 따라 구분하고 결정을 내릴 수 있다.
 
 ## 1. 개요
 
@@ -243,6 +243,37 @@ Union-Find의 Parent Tree는 원래 Graph의 경로가 아니다. `parent[x]`는
 
 그러나 동맹 탈퇴와 해체가 실시간으로 자주 발생하면 기본 Union-Find는 적합하지 않다. 탈퇴 후 남은 길드가 어떤 Component로 갈라지는지 알 수 없기 때문이다. 이 경우 실제 동맹 Graph를 보존하고 재계산 또는 다른 동적 구조를 사용한다.
 
+아래는 길드 동맹 Union-Find를 Java로 구현한 예시다.
+
+```java
+class GuildUnionFind {
+    private final int[] parent;
+    private final int[] rank;
+
+    GuildUnionFind(int n) {
+        parent = new int[n];
+        rank = new int[n];
+        for (int i = 0; i < n; i++) parent[i] = i;
+    }
+
+    int find(int x) {
+        if (parent[x] != x) parent[x] = find(parent[x]); // 경로 압축
+        return parent[x];
+    }
+
+    boolean union(int a, int b) {
+        int ra = find(a), rb = find(b);
+        if (ra == rb) return false; // 이미 같은 길드
+        if (rank[ra] < rank[rb]) { int t = ra; ra = rb; rb = t; }
+        parent[rb] = ra;
+        if (rank[ra] == rank[rb]) rank[ra]++;
+        return true;
+    }
+
+    boolean isAlly(int a, int b) { return find(a) == find(b); }
+}
+```
+
 ### 월드 연결 검증
 
 맵 생성 과정에서 통로를 하나씩 추가하며 두 방이 이미 연결되어 있는지 확인할 수 있다. 서로 다른 집합만 연결하면 Cycle 없는 Maze를 만들 수 있고, 모든 방이 하나의 집합인지 확인해 도달 가능성을 검증할 수 있다.
@@ -272,39 +303,45 @@ Offline 장애 분석에서 서버 간 통신 성공 Edge를 합쳐 독립된 Ne
 
 ## 15. 면접 질문
 
-### Q1. Union-Find를 설명해 주세요.
+### Q1. 길드 동맹 시스템에서 Union-Find가 적합한 경우와 BFS/DFS가 필요한 경우를 어떤 기준으로 구분하는가?
 
-서로 겹치지 않는 집합을 대표 Root로 관리하는 자료구조입니다. Find는 원소의 Root를 찾고, Union은 두 Root를 합칩니다. 두 원소의 Root가 같으면 같은 집합입니다.
+**30초 답변:** Union-Find는 동맹 여부, 즉 같은 집합인지만 판단할 때 적합합니다. 실제 경로나 최단 거리, 특정 멤버 탐색이 필요하면 BFS/DFS가 필요합니다. 두 연산의 비용 차이는 O(α(n)) vs O(V+E)이며 이 비교가 선택 기준입니다.
 
-### Q2. 경로 압축은 어떻게 동작하나요?
+**1~2분 답변:** 구체적으로, 길드 동맹 여부 확인은 Union-Find가 O(α(n))으로 최적입니다. 반면 길드 멤버 목록 조회, 특정 플레이어까지 최단 경로, 동맹 네트워크 시각화 등은 경로 정보가 필요하므로 Graph 탐색이 필수입니다. Union-Find는 경로 자체를 저장하지 않습니다. parent는 대표자 포인터일 뿐이며 원래 Edge 정보가 없습니다. 경로 복원이 필요한 순간이 Union-Find를 Graph 탐색으로 교체해야 하는 신호입니다.
 
-Find로 Root까지 올라간 뒤 경로에서 방문한 Node가 Root를 직접 가리키게 합니다. 이후 같은 경로의 Find 깊이가 줄어듭니다. 재귀 구현에서는 `parent[x] = Find(parent[x])`가 핵심입니다.
+### Q2. 경로 압축이 Find를 수정하는 부수 효과가 Rollback 요구와 충돌할 때 어떻게 설계하는가?
 
-### Q3. Union by Rank 또는 Size가 필요한 이유는 무엇인가요?
+**30초 답변:** 경로 압축은 find() 호출 시 parent를 직접 갱신합니다. Rollback이 필요하면 이 갱신을 되돌려야 하므로 경로 압축을 포기하고 Union by Size/Rank만 사용합니다. 또는 변경 이력 Stack을 유지하는 방법을 선택합니다.
 
-아무 기준 없이 합치면 긴 Chain이 생길 수 있습니다. 작은 Tree를 큰 Tree 아래에 붙여 높이 증가를 억제합니다. 경로 압축과 함께 쓰면 연산은 분할 상환 `O(α(n))`입니다.
+**1~2분 답변:** Rollback Union-Find(DSU with rollback)는 경로 압축을 제거하고 변경된 (node, oldParent, oldRank) 쌍을 Stack에 기록합니다. 롤백 시 Stack을 역순으로 복원합니다. 복잡도는 경로 압축 없이 Union by Rank만 사용하므로 O(log n)입니다. 온라인 쿼리(실시간 동맹 변경)보다 오프라인 배치 처리나 트랜잭션 취소 시나리오에 적합합니다.
 
-### Q4. 무방향 Graph의 Cycle을 어떻게 판정하나요?
+### Q3. Union by Size와 Union by Rank 중 어떤 상황에서 어느 쪽을 선택하고, 실제 높이와 Rank가 달라질 때 어떤 문제가 생기는가?
 
-Edge `(u, v)`를 추가하기 전에 두 Root를 비교합니다. 이미 같으면 기존 경로가 있으므로 Edge 추가가 Cycle을 만듭니다. 다르면 Union합니다.
+**30초 답변:** Union by Size는 집합 크기를 추적하므로 크기 쿼리가 필요하면 선택합니다. Rank는 경로 압축 후 실제 높이와 달라질 수 있지만 이는 정상 동작으로 상한만 보장합니다. 성능 차이는 미미하므로 크기 정보 필요 여부가 실질적인 선택 기준입니다.
 
-### Q5. Union-Find가 지원하지 않는 것은 무엇인가요?
+**1~2분 답변:** Union by Rank에서 Rank는 경로 압축 후 실제 높이가 아닌 상한값입니다. 압축 후에도 Rank를 낮추지 않는 것은 의도된 설계로, 재계산 비용을 줄입니다. 실제 높이가 중요한 로직에 Rank를 사용하면 부정확한 결과가 나올 수 있습니다. Union by Size는 크기를 정확히 유지하므로 길드 최대 멤버 수 쿼리, 큰 집합에 작은 집합을 합치는 부하 분산 시나리오에서 더 직관적입니다.
 
-실제 경로, 거리, 이웃 조회를 제공하지 않고 기본적으로 Edge 삭제나 집합 분할도 지원하지 않습니다. 이런 요구에는 Graph 탐색이나 동적 연결 구조가 필요합니다.
+### Q4. 동시 길드 동맹 요청이 들어올 때 Union-Find에서 발생할 수 있는 Race Condition은 무엇이고 어떻게 대응하는가?
 
-### Q6. Kruskal에서 Union-Find의 역할은 무엇인가요?
+두 Thread가 각자 Find를 완료하고 Union 직전에 다른 Thread가 Parent를 바꾸면 Size가 잘못 합산되거나 같은 Root에 중복 Union이 발생할 수 있습니다. 가장 단순한 대응은 길드 ID 범위별 Partition 락을 두고 단일 Writer가 Union을 처리하는 것입니다. Lock-free DSU는 이론상 가능하지만 CAS 몇 번으로 끝나는 문제가 아니므로 검증된 구현이 아니면 도입하지 않습니다. 실무에서는 동맹 요청을 Queue에 넣고 단일 Worker가 순차 처리하는 방식이 가장 안전합니다.
 
-가중치순 Edge를 보면서 양 끝이 서로 다른 Component일 때만 Edge를 선택하도록 Cycle을 판정하고 Component를 병합합니다. Edge 정렬이 최소 비용 선택 순서를 만들고 Union-Find는 연결 여부를 빠르게 답합니다.
+### Q5. Edge 삭제가 필요한 동맹 탈퇴 요청이 실시간으로 들어올 때 Union-Find만으로 처리할 수 없는 이유는 무엇이고 대안을 어떻게 선택하는가?
+
+Union-Find는 집합을 합칠 때 이전 경계 정보를 잃습니다. 경로 압축이 원래 Edge 구조를 덮어쓰기 때문에 특정 Edge를 제거한 뒤 Component가 어떻게 분리되는지 Parent 배열만으로 판단할 수 없습니다. 대안 선택 기준은 두 가지입니다. 탈퇴가 드물고 Offline 처리가 가능하면 Query를 역순으로 처리해 삭제를 추가로 바꾸는 Offline 기법을 씁니다. 실시간이 필요하면 실제 Graph를 별도 보존하고 탈퇴 후 BFS로 재계산하거나, Dynamic Connectivity 자료구조를 도입합니다.
+
+### Q6. Kruskal에서 Union-Find를 교체하거나 제거해야 하는 상황은 언제인가?
+
+Kruskal은 Edge를 가중치순 정렬 후 Cycle 없이 선택하므로 정적 Graph에서는 Union-Find가 적합합니다. 그러나 Edge가 실시간으로 추가·삭제되는 환경에서는 매 변경마다 MST를 재계산해야 합니다. 이 경우 Dynamic MST 알고리즘이나, 변경 빈도가 낮으면 주기적 배치 재계산으로 교체합니다. 또한 분산 환경에서 각 노드가 독립 Partition을 소유하는 경우 Union-Find의 전역 배열 공유가 병목이 됩니다. 이때는 Partition별 로컬 Union-Find를 두고 Cross-Partition Edge만 별도 처리하는 계층 구조를 설계합니다.
 
 ## 16. 예상 꼬리질문
 
-- MakeSet은 어떻게 초기화하나요?
-- Size와 Rank 기준 결합은 어떻게 다른가요?
-- 경로 압축 없는 Size Union의 높이는 어떻게 제한되나요?
-- Find가 읽기 연산처럼 보여도 배열을 수정하는 이유는 무엇인가요?
-- 연결 요소 수와 집합 크기는 어떻게 유지하나요?
-- Rollback Union-Find에서 경로 압축을 피하는 이유는 무엇인가요?
-- 동시 Union을 처리할 때 어떤 Race가 생길 수 있나요?
+- 길드 ID가 불연속 정수이거나 신규 길드가 런타임에 추가될 때 Parent 배열 초기화 전략을 어떻게 바꾸나요?
+- 동맹 인원 수 상한 정책을 Union 시점에 강제해야 할 때 Union by Size와 Union by Rank 중 어느 쪽이 유리하고 그 이유는 무엇인가요?
+- 경로 압축을 활성화한 상태에서 동시 Find가 같은 Node에 발생하면 Parent 배열에 어떤 쓰기 충돌이 생기고, 이를 방치해도 되는 이유 또는 방치하면 안 되는 조건은 무엇인가요?
+- 읽기 요청이 많은 환경에서 경로 압축 Find의 상태 변경 때문에 캐시 레이어 또는 Read-Only Replica와 연동할 수 없는 시나리오를 설명하고 어떻게 우회하나요?
+- 서버 클러스터 장애 분석에서 연결 요소 수가 갑자기 증가했을 때, Union-Find 카운터 감소 로직의 버그와 실제 네트워크 단절 중 어느 쪽인지 어떻게 구분해 디버깅하나요?
+- 퀘스트 의존성 그래프에서 특정 퀘스트 완료 조건을 트랜잭션 단위로 취소해야 할 때 Rollback Union-Find를 도입하면 감수해야 하는 성능 비용은 얼마이고, 그 비용이 허용 가능한 상황의 판단 기준은 무엇인가요?
+- 멀티스레드 환경에서 Find와 Union을 각각 Lock-free로 구현할 수 없는 이유를 CAS 연산 관점에서 설명하고, 실무에서 Lock-free DSU 도입을 거절해야 하는 기준은 무엇인가요?
 
 ## 17. 30초 모범답변
 
