@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Value Type과 Reference Type의 복사·공유 의미 차이를 설명할 수 있다.
-- 저장 위치 신화("Stack vs Heap")와 실제 의미를 구분할 수 있다.
-- `ref`, `in`, `readonly struct`, `Span<T>`의 사용 목적을 설명할 수 있다.
-- 게임 서버의 Position Struct, Session Class, Message Queue 설계에 적용할 수 있다.
+- Struct 배열·Class 참조를 혼합한 코드에서 대입이 독립 복사인지 참조 공유인지 판단하고, Position·Session처럼 게임 서버 객체마다 Struct·Class 중 어느 것이 적합한지 결정할 수 있다.
+- Session·Position 예시에서 'Stack vs Heap' 저장 위치가 아닌 복사 의미와 Identity를 기준으로 타입 선택이 바뀌는 조건을 판단할 수 있다.
+- 큰 Mutable Struct를 `ref`·`in`으로 전달할 때 방어적 Copy가 발생하는 조건을 진단하고, `readonly struct`·`ref return`이 필요한 시점을 결정할 수 있다.
+- Message Queue에 Mutable Class를 넣는 설계에서 Consumer 오염 버그를 진단하고, Immutable Record·Struct Snapshot 중 상황에 맞는 방식을 선택할 수 있다.
 
 ## 1. 개요
 
@@ -305,51 +305,51 @@ queue.Enqueue(new MessageSnapshot(content, timestamp));
 
 ## 17. 면접 질문
 
-### Q1. Value Type과 Reference Type의 차이를 설명해 주세요.
+### Q1. ECS 서버에서 Position·Velocity를 `class[]` 대신 `struct[]`로 전환했을 때 예상하는 Cache 효율 차이와, 도리어 성능이 나빠질 수 있는 조건은 무엇입니까?
 
-Value Type 변수는 값 자체를 포함해 대입 시 독립 복사본이 생깁니다. Reference Type 변수는 객체에 대한 참조를 담아 대입하면 같은 객체를 두 변수가 가리킵니다. 핵심은 Stack·Heap 저장 위치가 아니라 복사 의미와 Identity입니다.
+`struct[]`는 연속 Memory에 Field 값이 배치되어 순차 Tick 접근 시 Cache Line 활용이 높습니다. `class[]`는 배열이 Reference를 담아 객체마다 별도 Heap Allocation, Cache Miss가 발생합니다. 그러나 Position·Velocity를 함께 읽지 않고 각각 별도 배열로 분리하면 두 배열을 번갈아 읽을 때 Cache Line이 경쟁합니다. 또 Struct 크기가 커지면 Copy 비용이 늘고 Cache Line 당 원소 수가 줄어 효율이 낮아집니다. BenchmarkDotNet으로 실제 Cache Miss와 throughput을 측정해 결정합니다.
 
-### Q2. "Value Type은 Stack에 있다"가 왜 부정확한가요?
+### Q2. `List<Position>` Indexer로 꺼낸 Struct를 수정했는데 Entity 위치가 갱신되지 않는 버그가 발생했습니다. 원인을 설명하고 `ref local`·`CollectionsMarshal.AsSpan`으로 수정하는 방법을 설명하십시오.
 
-Class의 Struct Field는 Managed Heap의 객체 내부에 위치합니다. Boxing된 Struct도 Heap에 있습니다. 저장 위치는 포함 관계와 JIT 최적화에 따라 달라지며, 중요한 것은 "복사가 독립적인가(값 의미)"입니다.
+`List<T>` Indexer `get`은 Struct의 복사본을 반환합니다. `pos.X = 10;`은 복사본에만 적용되고 List 내부 배열은 변경되지 않습니다. 수정 방법은 두 가지입니다. 첫째, `ref Position pos = ref CollectionsMarshal.AsSpan(list)[i]; pos.X = 10;`으로 내부 배열 원소 Reference를 직접 얻어 수정합니다. 단 Span이 살아 있는 동안 List Add·Remove를 하면 내부 배열이 재할당되어 Span이 무효화되므로, 수정 구간 동안 List 크기를 변경하지 않아야 합니다. 둘째, 값을 꺼내 수정 후 다시 넣는 방식(`list[i] = new Position(10, pos.Y)`)을 사용합니다.
 
-### Q3. Mutable Struct의 위험은 무엇인가요?
+### Q3. Message Queue에 Mutable Session Message 객체를 넣었는데 Consumer가 예상과 다른 Content를 읽는 Race가 발생했습니다. 원인을 진단하고, Immutable record·Struct Snapshot 중 어느 것으로 수정하겠습니까?
 
-복사본이 생기는 것을 인식하지 못한 채 수정하면 원본이 바뀌지 않는 버그가 생깁니다. `List<T>`에서 Indexer로 꺼낸 Struct를 수정해도 List 내부는 바뀌지 않습니다. Struct는 가능하면 `readonly`로 설계합니다.
+Mutable Class 참조를 Queue에 넣으면 Producer가 Enqueue 후 객체를 수정할 때 같은 객체를 참조하는 Consumer도 다른 값을 봅니다. 진단은 `lock` 없이 참조를 공유하는 경로와 수정 시점을 Logging으로 확인합니다. 수정 방법은 두 가지입니다. Content가 수정 불가 단순 값이면 `record struct MessageSnapshot(string Content, long Timestamp);`로 값 복사 Snapshot을 사용합니다. 복잡한 중첩 구조나 상속이 필요하면 `record class`(Immutable init-only Property)를 사용하되, 내부 Collection이 있으면 `IReadOnlyList<T>`로 노출합니다. Struct Snapshot이 더 가볍지만 내부에 Reference Field가 있으면 Deep Copy가 아님을 명심합니다.
 
-### Q4. `ref`, `in`, `out`의 차이는 무엇인가요?
+### Q4. 64바이트 Struct를 자주 호출되는 함수에 `in T`로 전달했습니다. 항상 Copy 비용이 줄어드나요? 방어적 Copy가 생기는 조건과 효과를 측정하는 방법을 설명하십시오.
 
-`ref`는 변수 Alias를 전달해 호출자 변수를 수정할 수 있습니다. `in`은 읽기 전용 Reference로 큰 Struct 복사를 피하지만 Mutable Member 호출 시 방어적 Copy가 생깁니다. `out`은 함수 내에서 반드시 값을 쓰고 반환합니다.
+`in T`는 읽기 전용 Reference를 전달해 Struct 복사를 피합니다. 그러나 Readonly Context에서 Mutable Instance Member(Property Setter·Mutable Method)를 호출하면 Compiler가 원본 보호를 위해 방어적 Copy를 만들어 오히려 Copy가 발생합니다. `readonly struct`로 선언하면 Compiler가 모든 Member가 읽기 전용임을 알아 방어적 Copy 없이 Reference를 그대로 씁니다. 효과 측정은 BenchmarkDotNet에서 `[MemoryDiagnoser]`와 `[DisassemblyDiagnoser]`로 IL·Assembly를 확인하거나, Allocation Count로 복사 여부를 검증합니다. 작은 Struct(16바이트 이하)는 간접 접근 비용이 Copy 비용보다 클 수 있어 측정 후 결정합니다.
 
-### Q5. Struct에 Reference Field가 있으면 어떻게 되나요?
+### Q5. Session 객체를 `struct`로 만들면 어떤 문제가 발생합니까? 비동기 I/O Callback과 여러 System이 동일 Session을 참조하는 시나리오에서 각각 설명하십시오.
 
-Struct 복사 시 Reference 값(주소)만 복사되므로 내부 객체가 공유됩니다. 값처럼 보이면서 내부 상태를 공유해 혼동을 만듭니다. 불변 Reference나 Deep Copy를 명시하지 않으면 설계 버그가 됩니다.
+`struct` Session은 대입·함수 전달 시 복사본이 생깁니다. 비동기 I/O Callback에서 복사본이 받는 수신 데이터는 호출자의 원본 Session에 반영되지 않아 상태가 분기됩니다. 여러 System(전투, 인벤토리, 패킷 Handler)이 각자 복사본을 가지면 상태 변경이 전파되지 않아 불일치가 생깁니다. `async` 메서드에서 Struct의 `this`는 Reference가 아니므로 `await` 이후 상태 변경이 안전하지 않습니다. Session처럼 Identity를 공유하고 긴 수명을 가지며 비동기 경계를 넘는 객체는 반드시 `class`를 사용합니다.
 
-### Q6. `string`이 Reference Type인데 왜 값처럼 동작하나요?
+### Q6. `record struct PlayerSnapshot`에 `List<int> ItemIds`를 포함해 Message Queue에 Snapshot으로 Enqueue했는데 Consumer에서 ItemIds 내용이 달라지는 버그가 발생했습니다. 원인을 진단하고 설계 수정 방법을 제시하십시오.
 
-`string`은 Immutable Reference Type입니다. 한쪽에서 연결 등 새 문자열을 만들면 기존 객체가 변경되지 않고 새 객체가 생깁니다. 그래서 대입 후 독립적으로 보이지만 복사가 아니라 Immutability 덕분입니다.
+`record struct` 복사 시 `List<int>` Reference 값만 복사됩니다. 생산자와 소비자가 같은 `List<int>` 객체를 가리키므로 Producer가 이후 List를 수정하면 Consumer도 바뀐 내용을 봅니다. 수정 방법은 두 가지입니다. 첫째, Enqueue 시 `new List<int>(original.ItemIds)`로 Deep Copy해 List를 별도 인스턴스로 만듭니다. 둘째, `IReadOnlyList<int>` 또는 `ItemIds.ToArray()`·`ImmutableArray<int>`로 Immutable 표현으로 바꿔 수정 자체를 막습니다. Struct Snapshot이 가볍더라도 내부 Reference Field가 있으면 값 의미가 아니라 얕은 복사임을 설계에 명시합니다.
 
 ## 18. 예상 꼬리질문
 
-- `record struct`와 `record class`의 차이는 무엇인가요?
-- Boxing이 발생하는 상황은 어떤 경우인가요?
-- `Span<T>`와 `ref struct`가 Heap에 저장될 수 없는 이유는 무엇인가요?
-- `readonly struct`의 방어적 Copy는 언제 발생하나요?
-- Struct를 배열로 다루면 왜 Cache 효율이 높아지나요?
-- `IEquatable<T>`를 구현해야 하는 이유는 무엇인가요?
-- Mutable Struct를 API로 노출하면 어떤 문제가 생기나요?
+- ECS Tick에서 `Position[]·Velocity[]`를 별도 배열로 분리했는데 순차 접근 시 Cache Miss가 예상보다 높게 나왔습니다. 어떤 접근 패턴이 원인이고, SoA(Structure of Arrays)·AoS(Array of Structures) 중 어느 쪽으로 재조정합니까?
+- `record struct MessageSnapshot`에 `List<Player>` Field를 포함해 Queue에 Enqueue했는데 Consumer에서 내용이 달라지는 버그가 발생했습니다. 원인과 방어 방법은 무엇입니까?
+- `CollectionsMarshal.AsSpan`으로 `List<Position>` 내부를 직접 수정하다 List Add 후 Dangling 접근이 발생했습니다. 안전하게 사용하는 제약 조건과 패턴은 무엇입니까?
+- `interface`를 구현한 Struct를 Interface 변수에 대입할 때 Boxing이 발생하는 경로를 Allocation Profiler 없이 코드 레벨에서 탐지하는 방법은 무엇입니까?
+- Equality에 포함되는 Mutable Score Field를 가진 Struct를 Dictionary Key로 사용하다 Score 변경 후 조회 실패가 발생했습니다. 원인과 Key 설계 원칙은 무엇입니까?
+- 64바이트 `readonly struct`의 Non-readonly Extension Method 호출에서 방어적 Copy 발생 여부를 BenchmarkDotNet으로 확인하는 방법과 `in` 사용이 유리한 Struct 크기 기준은 무엇입니까?
+- `Nullable<int>` 타입과 Nullable Reference Annotation `Session?`을 동일하게 취급한 코드에서 Runtime null 검사가 달라지는 구체적 시나리오와 수정 방법은 무엇입니까?
 
 ## 19. 30초 모범답변
 
-> Value Type은 대입 시 독립 복사본을 만들고, Reference Type은 같은 객체를 두 변수가 가리킵니다. "Value Type은 Stack"보다 "복사 의미가 있는가"가 핵심입니다. 작고 불변인 좌표·ID는 Struct, Identity를 공유하는 Session·Player는 Class를 씁니다.
+> Value Type은 대입 시 독립 복사본을 만들고, Reference Type은 같은 객체를 두 변수가 가리킵니다. "Stack/Heap 위치"보다 "복사 의미와 Identity 공유 여부"가 핵심입니다. 게임 서버에서 Position·Velocity는 Struct 배열로 연속 배치해 Tick 당 Cache Miss를 줄이고, Session·Player처럼 여러 System이 동일 Identity를 공유하고 비동기 경계를 넘는 객체는 Class를 씁니다. Struct가 커지면 Copy 비용이 늘어 BenchmarkDotNet으로 Allocation Rate와 Cache Miss를 측정해 결정합니다.
 
 ## 20. 1~2분 확장답변
 
-> Value Type 변수는 값 자체를 포함해 대입 시 독립 복사본이 생깁니다. Reference Type 변수는 객체 참조를 담아 대입하면 같은 객체를 두 변수가 공유합니다. Class의 Struct Field는 Managed Heap에 있으므로 "Struct는 항상 Stack"은 부정확합니다.
+> Value Type 변수는 값 자체를 포함해 대입 시 독립 복사본이 생깁니다. Reference Type 변수는 객체 참조를 담아 대입하면 같은 객체를 두 변수가 공유합니다. Class의 Struct Field는 Managed Heap에 있으므로 "Struct는 항상 Stack"은 부정확하며, 핵심은 복사 의미와 Identity입니다.
 >
-> Mutable Struct는 복사 시 내부 Reference Field가 공유되어 값처럼 보이면서 부작용이 생깁니다. 가능하면 `readonly struct`로 설계합니다. `ref`·`in`으로 불필요한 Struct Copy를 줄이되 `in`은 Mutable Member 호출 시 방어적 Copy가 생길 수 있어 측정합니다.
+> Mutable Struct는 복사 시 내부 Reference Field가 공유되어 값처럼 보이면서 부작용이 생깁니다. `readonly struct`로 설계하면 Compiler가 방어적 Copy 없이 Reference를 그대로 씁니다. `in T`를 64바이트 Struct에 쓸 때 Mutable Member 호출이 있으면 오히려 방어적 Copy가 발생하므로, BenchmarkDotNet `[DisassemblyDiagnoser]`로 IL을 확인합니다. 16바이트 이하 Struct는 간접 접근 비용이 Copy 절감보다 클 수 있어 실측이 필요합니다.
 >
-> 게임 서버에서 Position·Velocity는 Struct 배열로 연속 배치해 Tick 처리 Cache 효율을 높이고, Session·Player는 Class로 여러 System이 동일 Identity를 공유합니다. Message Queue에 Mutable Class를 넣으면 Producer 수정이 Consumer에 영향을 주므로 Immutable Record나 Struct Snapshot을 씁니다.
+> 라이브 MMORPG 서버에서 10,000 Entity Tick 처리에 `class[]` 기반 Position을 썼을 때 GC Pause가 p99 기준 20ms를 넘겼는데, `struct[]` 전환 후 Allocation Rate가 0에 가까워지고 GC Pause가 1ms 미만으로 줄어든 경험이 있습니다. Session처럼 비동기 I/O Callback과 여러 System이 동일 Identity를 참조하는 객체는 Struct로 만들면 복사본이 분기되어 상태 불일치가 생기므로 반드시 Class를 씁니다. Message Queue에 Mutable Class 참조를 Enqueue하면 Producer가 이후 수정할 때 Consumer에도 영향을 주는 Race가 발생합니다. `record struct MessageSnapshot`으로 값 Snapshot을 쓰되, 내부에 `List<T>` 같은 Reference Field가 있으면 `ImmutableArray<T>`나 Enqueue 시 Deep Copy로 진짜 격리를 보장합니다.
 
 ## 21. 핵심 요약
 

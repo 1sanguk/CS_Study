@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- TCP 바이트 스트림에서 Packet 경계가 사라지는 이유와 Length-prefix Framing 원리를 설명할 수 있다.
-- Partial Read·Multi-frame 상황을 Circular Buffer로 처리하는 파싱 루프를 설계할 수 있다.
-- Length 검증 누락이 OOM을 유발하는 경로와 방어 방법을 설명할 수 있다.
-- Fixed-size·Delimiter·Length-prefix 방식의 Trade-off와 게임 서버에서 Length-prefix를 선택하는 이유를 설명할 수 있다.
+- TCP recv에서 Partial Read가 발생했을 때 Circular Buffer의 readPos·writePos로 불완전 Frame을 보관하고, Length 범위 검증을 메모리 할당 전에 수행해야 하는 시점을 판단할 수 있다.
+- 인증 전 연결에서 거대한 Length 값으로 OOM 공격이 발생했을 때, 인증 전 Max Packet 상한(예: 4KB)과 인증 후 상한(64KB)을 구분 적용하는 설계 결정을 내릴 수 있다.
+- 한 recv에 여러 Frame이 담겼을 때 while 파싱 루프 누락으로 Frame이 지연되는 문제를 진단하고, NeedMore·FrameReady·ProtocolError 세 결과를 명시적으로 반환하는 Parser 구조를 결정할 수 있다.
+- Protocol Version이 바뀔 때 Envelope(length·type·version) Layout 고정과 Payload 내 신규 필드 확장 중 Rolling Deploy 호환성과 Breaking Change 위험을 기준으로 설계 방향을 결정할 수 있다.
 
 ## 1. 개요
 패킷 프레이밍은 TCP 바이트 스트림에서 응용 메시지의 시작과 끝을 구분하는 규칙이다.
@@ -234,44 +234,50 @@ void OnRecv(Session& session, std::span<const uint8_t> data) {
 
 ## 8. 자주 하는 오해
 
-- **TCP recv 한 번이 Packet 하나다.** TCP는 바이트 스트림이므로 recv 결과가 Packet 절반일 수도, 세 Packet을 합친 것일 수도 있다. Accumulation Buffer + while 파싱 루프가 필수다.
-- **Length가 있으면 OOM이 없다.** Length 검증 전에 해당 크기로 `malloc`하면 공격자가 0xFFFFFFFF를 보내 메모리를 고갈시킨다. 검증을 할당 전에 수행해야 한다.
-- **Delimiter 방식은 항상 단순하다.** Payload 안에 Delimiter 문자가 오면 Escape 처리가 필요하고, 최대 Line 길이를 검증하지 않으면 DOS 공격에 노출된다.
-- **Magic Number가 있으면 잘못된 연결을 즉시 감지할 수 있다.** Magic Number 2~4바이트는 랜덤 노이즈에서 우연히 일치할 수 있다. Magic은 빠른 필터일 뿐이고 Length·Checksum 검증과 함께 사용해야 한다.
-- **Frame 하나 처리 후 루프를 탈출한다.** 한 recv에 여러 Frame이 담겼을 때 하나만 처리하면 나머지가 다음 Network 이벤트까지 수백 ms 지연된다. FrameReady 동안 루프를 반복해야 한다.
-- **Header가 작을수록 좋다.** Version·Flags·예비 필드를 생략하면 Protocol을 확장할 때 Breaking Change가 된다. 적절한 Header 여유(reserved 바이트)가 필요하다.
-- **TLS가 있으면 Application Framing이 필요 없다.** TLS는 Transport 암호화만 제공하고 Application Message 경계는 보존하지 않는다. TLS 위에도 Length-prefix Framing이 필요하다.
-- **UDP는 Message 경계가 보장되므로 Framing이 필요 없다.** UDP는 Datagram 단위로 경계를 유지하지만, MTU 초과 분할 재조립 시 Fragment 재조립 로직과 최대 크기 검증이 여전히 필요하다.
+- **TCP recv 한 번이 Packet 하나다**: TCP는 바이트 스트림이므로 recv 결과가 Packet 절반일 수도, 세 Packet을 합친 것일 수도 있다. Accumulation Buffer + while 파싱 루프가 필수다.
+- **Length가 있으면 OOM이 없다**: Length 검증 전에 해당 크기로 `malloc`하면 공격자가 0xFFFFFFFF를 보내 메모리를 고갈시킨다. 검증을 할당 전에 수행해야 한다.
+- **Delimiter 방식은 항상 단순하다**: Payload 안에 Delimiter 문자가 오면 Escape 처리가 필요하고, 최대 Line 길이를 검증하지 않으면 DoS 공격에 노출된다.
+- **Magic Number가 있으면 잘못된 연결을 즉시 감지할 수 있다**: Magic Number 2~4바이트는 랜덤 노이즈에서 우연히 일치할 수 있다. Magic은 빠른 필터일 뿐이고 Length·Checksum 검증과 함께 사용해야 한다.
+- **Frame 하나 처리 후 루프를 탈출한다**: 한 recv에 여러 Frame이 담겼을 때 하나만 처리하면 나머지가 다음 Network 이벤트까지 수백 ms 지연된다. FrameReady 동안 루프를 반복해야 한다.
+- **Header가 작을수록 좋다**: Version·Flags·예비 필드를 생략하면 Protocol을 확장할 때 Breaking Change가 된다. 적절한 Header 여유(reserved 바이트)가 필요하다.
+- **TLS가 있으면 Application Framing이 필요 없다**: TLS는 Transport 암호화만 제공하고 Application Message 경계는 보존하지 않는다. TLS 위에도 Length-prefix Framing이 필요하다.
+- **UDP는 Message 경계가 보장되므로 Framing이 필요 없다**: UDP는 Datagram 단위로 경계를 유지하지만, MTU 초과 분할 재조립 시 Fragment 재조립 로직과 최대 크기 검증이 여전히 필요하다.
 
 ## 9. 면접 질문
 
-### Q1. TCP에서 별도 Packet Framing이 왜 필요한가요?
-TCP는 바이트 순서와 신뢰성을 제공하지만 Application Message 경계를 보존하지 않습니다. send 두 번이 recv 한 번으로 합쳐지거나, send 한 번이 recv 두 번으로 쪼개질 수 있습니다. Length-prefix Header로 메시지 길이를 명시하고 Accumulation Buffer에 쌓아 완전한 Frame이 모일 때만 Dispatch합니다.
+### Q1. 신규 게임 서버 배포 후 특정 클라이언트에서 Parser Error가 급증했습니다. 어떤 원인을 먼저 의심하고 어떤 지표로 진단하나요?
 
-### Q2. Length-prefix 방식의 보안 취약점과 방어 방법은 무엇인가요?
-공격자가 Length 필드에 0xFFFFFFFF 같은 거대 값을 보내면, 해당 크기로 메모리를 할당하다 OOM이 발생합니다. 방어 방법은 Length를 읽은 직후, 메모리 할당 전에 최솟값(HEADER_SIZE)과 최댓값(예: 64KB)을 검증하는 것입니다. 인증 전 클라이언트에는 더 낮은 한도를 적용합니다.
+배포 시점과 Error 급증 시점을 대조합니다. (1) **Protocol Version 불일치**: 신 서버가 기존 Envelope Layout을 변경했다면 구 클라이언트 Parser가 Length를 잘못 읽어 ProtocolError. `parser_error_by_client_version` 카운터로 버전별 분포 확인. (2) **Length 범위 벗어남**: `invalid_length_count`가 급증하면 신 서버의 Max Packet 상한이 구 서버보다 낮아진 경우. (3) **인증 전 Max Packet 축소**: 배포로 인증 전 상한을 4KB→1KB로 낮춰 Handshake Packet이 걸린 경우. (4) **특정 ISP MTU 차이**: MTU 1400B 환경에서 분할된 Fragment가 오는 경우 — `fragment_reassembly_failure` 지표와 ISP IP 대역을 대조합니다.
 
-### Q3. Circular Buffer를 쓰는 이유와 동작 원리를 설명해 주세요.
-매 Frame 소비 시 앞 바이트를 삭제하면 나머지를 앞으로 이동해야 해서 O(n) 복사가 발생합니다. Circular Buffer는 readPos·writePos 인덱스만 이동해 불필요한 복사를 없앱니다. readPos가 writePos를 따라잡으면 Buffer가 빈 것이고, writePos가 readPos를 따라잡으면 가득 찬 것입니다.
+### Q2. 인증 전 클라이언트가 Length 필드에 0xFFFFFFFF를 보내 서버 OOM이 발생했습니다. 현재 구현의 취약점 위치와 방어 코드를 설명하세요.
 
-### Q4. 한 recv에서 여러 Frame이 왔을 때 어떻게 처리하나요?
-recv 후 Buffer에 append하고 `TryParseFrame`을 `FrameReady`를 반환하는 동안 while 루프로 반복합니다. `NeedMore`가 되면 루프를 탈출해 다음 recv를 기다립니다. 루프 없이 Frame 하나만 처리하면 나머지 Frame이 다음 Network 이벤트까지 수십~수백 ms 지연됩니다.
+취약점: `length = readLength()` 직후 `allocate(length)`를 호출했고, 검증 전에 4GB 할당이 시도됩니다. 방어 코드 순서: (1) Length를 읽은 직후, 할당 전에 `if length < HEADER_SIZE || length > MAX_PACKET: ProtocolError` 검증. (2) 인증 전 Connection의 `MAX_PACKET`을 4KB, 인증 후 64KB로 분리 적용. (3) 초당 ProtocolError 횟수가 임계값(예: 10회/초)을 넘으면 해당 IP를 Rate Limit 대상에 추가. (4) `parser_error_by_ip` 메트릭을 수집해 공격 IP를 Blacklist에 자동 등록하는 Circuit Breaker를 연결합니다.
 
-### Q5. UDP Datagram에도 Framing이 필요한가요?
-UDP는 Datagram 단위로 경계를 유지하므로 TCP 같은 경계 복원은 필요하지 않습니다. 그러나 MTU(보통 1500B)를 초과하는 메시지는 IP Fragmentation이나 Application 분할·재조립이 필요합니다. 재조립 시 Message ID·Fragment Index·Count·Timeout·최대 크기 검증이 필요하고, 불완전 Fragment로 메모리를 점유하는 공격을 막아야 합니다.
+### Q3. Circular Buffer readPos·writePos가 역전되어 같은 데이터를 두 번 파싱하는 버그가 재현됐습니다. 경계 조건을 어떻게 검증하나요?
 
-### Q6. Protocol Version이 바뀔 때 Header 호환성을 어떻게 유지하나요?
-Envelope(totalLength·type·version)의 Layout을 고정하고 신규 필드는 Payload 안에서 확장합니다. Handshake에서 Client가 지원 버전을 알리고 Server가 사용 버전을 응답합니다. 구 Parser가 모르는 Type은 Length를 이용해 건너뜀(skip)으로써 전후 호환성을 유지합니다.
+역전은 주로 Consume(totalLen)에서 `readPos = (readPos + totalLen) % capacity`를 잘못 구현할 때 발생합니다. 검증 방법: (1) **단위 테스트**: capacity 경계를 넘는 Wrap-around 시나리오 — readPos=capacity-2, totalLen=4인 경우 새 readPos=2가 되는지 확인. (2) **Assert**: `readPos != writePos` 보장 상태에서 `Readable() == 0`이 되는지 확인 — 빈 조건 처리 방식 검증. (3) **Fuzz Testing**: libFuzzer로 임의 길이 Append→Consume 시퀀스를 주입해 readPos>capacity 발생 여부 탐지. (4) **Invariant Check**: Consume 후 `assert(readPos < capacity && Readable() >= 0)` 삽입해 Debug 빌드에서 조기 탐지합니다.
+
+### Q4. recv 후 while 파싱 루프 없이 Frame 하나만 처리하는 구현에서 지연 민원이 발생했습니다. 어떻게 재현하고 수정하나요?
+
+재현: Nagle Algorithm이 활성화된 클라이언트에서 60Hz Tick으로 2~3개 Packet이 한 recv에 합쳐져 도착할 때, 하나만 처리하면 나머지가 다음 Network 이벤트(최대 수백 ms)까지 지연됩니다. 재현 방법: 서버 측 `recv` 호출 후 `Buffer.Readable()`이 `HEADER_SIZE` 이상인데도 처리 안 된 Frame을 로그로 확인. 수정: `TryParseFrame`을 while 루프로 감싸 `FrameReady`를 반환하는 동안 계속 호출. `NeedMore` 또는 `ProtocolError`에서 탈출. 수정 후 Frame당 처리 지연을 Histogram으로 측정해 개선 폭을 확인합니다.
+
+### Q5. UDP 게임 서버에서 MTU 1400B를 초과하는 스킬 이펙트 Packet이 분할 재조립 실패로 누락됩니다. Fragment 재조립 설계에서 어떤 검증이 필요한가요?
+
+Application 계층 분할 재조립 설계: (1) **Fragment 식별**: Message ID(uint32) + Fragment Index(uint8) + Fragment Count(uint8) 헤더. (2) **최대 크기 검증**: 조각 Count × MTU가 최대 메시지 크기(예: 64KB)를 초과하면 폐기. (3) **Timeout**: 첫 Fragment 수신 후 500ms 이내에 전체 Count가 모이지 않으면 폐기 — 불완전 Fragment의 메모리 점유 공격 방지. (4) **메모리 상한**: 재조립 중인 메시지 수 × 최대 크기의 합이 세션당 상한(예: 1MB)을 넘으면 해당 세션 연결 종료. (5) **중복 Fragment**: 같은 Index가 두 번 오면 두 번째를 폐기해 공격자가 데이터를 덮어쓰지 못하게 합니다.
+
+### Q6. Protocol Version 업그레이드 중 신 서버·구 클라이언트 조합에서 연결 즉시 끊기는 문제가 발생했습니다. Handshake Version 협상 실패를 어떻게 진단하고 수정하나요?
+
+진단: (1) `connection_close_reason=version_mismatch` 로그를 신 서버 배포 시점과 대조. (2) Handshake Packet의 client_version 필드 분포를 확인 — 구 클라이언트가 지원하지 않는 Version을 신 서버가 최솟값으로 요구하는 경우. 수정: (1) 신 서버는 지원 가능한 버전 범위(min~max)를 Handshake에서 전달. (2) 구 클라이언트 Version이 min 이상이면 구 Layout으로 응답. (3) Rolling Deploy 동안 "구 서버 20%·신 서버 80%" 혼재 시 클라이언트가 연결 대상 버전을 식별할 수 있도록 Server Version을 Handshake 응답에 포함. (4) Staging에서 구 Client 바이너리와 신 Server를 함께 테스트해 Version Negotiation이 올바른지 확인합니다.
 
 ## 10. 예상 꼬리질문
 
-- Partial Header가 도착한 상태에서 연결이 끊기면 어떻게 처리하나요?
-- Frame Body를 Zero-copy Span으로 Handler에 넘길 때 생명주기를 어떻게 관리하나요?
-- 같은 연결에서 짧은 Packet 수천 개와 큰 Packet 하나를 혼용할 때 Buffer 전략은?
-- Fuzzing으로 Parser를 검증할 때 어떤 입력 패턴을 우선 테스트하나요?
-- Compression Bomb을 막기 위해 어떤 검증을 추가하나요?
-- Magic Number를 Header 앞에 두면 어떤 이점과 한계가 있나요?
-- Rolling Deploy 중 구 Client와 신 Server가 공존할 때 Version Negotiation 실패를 어떻게 처리하나요?
+- Partial Header가 도착한 상태에서 연결이 끊겼을 때 Circular Buffer에 남은 Byte가 다음 세션 재사용으로 이어지는 버그를 Session 초기화에서 어떻게 방지하나요?
+- Frame Body를 Zero-copy Span으로 비동기 Handler에 넘겼는데 Buffer 재사용 후 데이터가 깨졌습니다. 수명을 보장하는 설계 방법(Reference-counted Segment, owning copy)을 비교해 주세요.
+- 초당 1만 건 소형 Packet(100B) 서버에서 Circular Buffer를 16KB로 설정했는데 Buffer 부족이 발생했습니다. Buffer 크기 결정 기준(p99 recv 크기·Burst Factor)을 설명해 주세요.
+- libFuzzer로 Parser를 검증했는데 Corpus 100만 건에서 Crash가 0건이었습니다. Fuzz 커버리지가 충분한지 확인하는 방법(Coverage Report, Edge Case 수동 추가)은 무엇인가요?
+- 1KB 압축 데이터가 100MB로 해제되는 Compression Bomb 시도가 있었습니다. 해제 전 크기 제한을 어느 단계에서 어떻게 검증하나요?
+- Rolling Deploy 중 구 Client(v1)·신 Server(v2) 조합에서 Reserved 필드 해석 차이로 Parser Error가 발생했습니다. Reserved 필드 호환성을 보장하는 방법은?
+- Parser Error가 특정 ISP에서 집중됩니다. MTU 차이로 인한 Fragmentation인지, Protocol 오류인지 구분하는 지표(Packet 크기 분포, Fragment Count)는 무엇인가요?
 
 ## 11. 30초 모범답변
 

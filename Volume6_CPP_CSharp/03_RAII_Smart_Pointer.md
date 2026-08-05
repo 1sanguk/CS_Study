@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- RAII의 원리와 자원 수명 관리 방식을 설명할 수 있다.
-- `unique_ptr`, `shared_ptr`, `weak_ptr`의 소유권 의미와 비용을 비교할 수 있다.
-- Cycle 참조, 숨은 수명 연장, Dangling 위험을 설명할 수 있다.
-- 게임 서버의 Session·비동기 Callback 수명 설계에 적용할 수 있다.
+- 함수에 복수의 종료 경로(Early Return, 예외)가 있을 때, RAII 패턴이 Manual cleanup보다 유리한지 판단할 수 있다.
+- 공동 소유가 필요한 비동기 I/O 수명 설계에서 `unique_ptr`, `shared_ptr`, `weak_ptr` 중 어느 것을 어디에 배치할지 결정할 수 있다.
+- Party–Player처럼 양방향 참조가 생기는 설계에서 Cycle 누수 위험을 판단하고 `weak_ptr`로 해소할 수 있다.
+- `shared_ptr`의 Reference Count가 Thread-safe함에도 객체 접근에 별도 동기화가 필요한 조건을 판단할 수 있다.
 
 ## 1. 개요
 
@@ -313,8 +313,8 @@ current_ = std::move(next);
 
 ## 15. 자주 하는 오해
 
-- **Raw Pointer가 소유권을 자동 표현한다**: 언어는 소유·비소유를 구분하지 않는다. Raw Pointer를 보고 소유자인지 관찰자인지 알 수 없다.
-- **Reference는 절대 Dangling이 되지 않는다**: 대상 객체가 먼저 파괴되면 Reference도 Dangling이 된다.
+- **`enable_shared_from_this`를 상속하지 않아도 `this`로 `shared_ptr`를 만들 수 있다**: `shared_ptr(this)`를 직접 생성하면 기존 Control Block과 무관한 별도 Count가 생겨 Double Free가 발생한다. `enable_shared_from_this`를 상속하고 `shared_from_this()`를 사용해야 한다.
+- **`unique_ptr`를 `release()`한 뒤 Raw Pointer로 써도 여전히 RAII 보호를 받는다**: `release()`는 소유권을 포기하고 RAII 보호를 끊는다. 이후 Raw Pointer의 정리는 호출자가 책임진다.
 - **`shared_ptr`가 모든 수명 문제의 기본 해법이다**: Cycle과 숨은 수명 연장이 생긴다. `unique_ptr`나 값 소유를 먼저 고려한다.
 - **Move가 항상 Memory 복사 0이다**: Move는 소유권 이전을 뜻하며 구현에 따라 실제 복사가 있을 수 있다. 단, 표준 Container·Smart Pointer의 Move는 Pointer 교체 수준이다.
 - **`shared_ptr` Reference Count는 객체 접근도 Thread-safe하게 만든다**: Count 증감만 보호하며 객체 Member 접근은 별도 동기화가 필요하다.
@@ -323,39 +323,39 @@ current_ = std::move(next);
 
 ## 16. 면접 질문
 
-### Q1. RAII를 설명해 주세요.
+### Q1. 게임 서버에서 Socket을 열었다가 인증 실패로 Early Return해야 하는 함수가 있습니다. Raw Pointer와 RAII Wrapper 중 어느 쪽을 선택하고, 그 이유는 무엇인가요?
 
-자원 획득을 객체 생성과, 해제를 소멸과 결합하는 패턴입니다. Scope를 벗어나는 어떤 경로에서도 Destructor가 호출되므로 정상 Return, Early Return, Exception 모두에서 자원이 자동 정리됩니다. Socket, Lock, File, Memory 등 모든 자원에 적용할 수 있습니다.
+RAII Wrapper를 선택합니다. Raw Pointer는 모든 종료 경로마다 Close를 반복해야 하고, 조건문이 늘어날수록 빠뜨리기 쉽습니다. RAII Wrapper는 Scope를 벗어나는 어떤 경로에서도 Destructor가 자동으로 Socket을 닫아줍니다. 인증 성공 후 소유권을 이전해야 한다면 unique_ptr를 사용해 이전 여부를 Type으로 표현합니다.
 
-### Q2. `unique_ptr`와 `shared_ptr`를 비교해 주세요.
+### Q2. Match Server에서 게임 Session을 생성할 때 `unique_ptr`와 `shared_ptr` 중 어느 것으로 시작하겠습니까? 비동기 I/O Callback이 추가된다면 설계가 어떻게 달라지나요?
 
-`unique_ptr`는 단독 소유로 Copy할 수 없고 Move로 소유권을 이전합니다. Raw Pointer에 가까운 성능입니다. `shared_ptr`는 Control Block에 Strong Count를 관리해 공동 소유를 제공하며 Atomic Count 비용과 Cycle 위험이 있습니다. 단독 소유가 가능하면 `unique_ptr`를 기본으로 사용합니다.
+우선 unique_ptr로 시작합니다. Registry가 Session을 단독 소유하면 소유권 그래프가 단순하고 의도가 명확합니다. 비동기 I/O Callback이 추가되면 Callback 완료 전에 Session이 해제될 수 있으므로, Session이 enable_shared_from_this를 상속하게 하고 Callback 등록 시 shared_from_this()로 수명을 Completion까지 연장합니다. 단, Closing 이후 새 I/O 시작을 막는 State 확인이 함께 필요합니다.
 
-### Q3. `weak_ptr`는 언제 사용하나요?
+### Q3. Party와 Player가 서로를 `shared_ptr`로 참조하는 구조를 작성했더니 Party를 Registry에서 제거해도 메모리가 해제되지 않았습니다. 원인은 무엇이고 어떻게 수정하나요?
 
-`shared_ptr`로 관리되는 객체를 수명 연장 없이 관찰할 때 사용합니다. 양방향 Strong Reference Cycle을 끊는 역방향 참조에 주로 씁니다. 사용 전 `lock()`으로 `shared_ptr`를 얻고 결과가 유효한지 확인합니다.
+Party와 Player가 서로 Strong Reference를 보유하면 Cycle이 생겨 외부 Owner가 사라져도 서로의 Count를 유지합니다. Domain 관점에서 소유 방향을 결정합니다. Party가 Player를 shared_ptr로 소유하고, Player가 Party를 역참조할 때는 weak_ptr로 둡니다. Party 탐색이 필요하면 lock()으로 일시적 shared_ptr를 얻고 유효성을 확인합니다.
 
-### Q4. `shared_ptr` Cycle이 왜 문제인가요?
+### Q4. 48시간 연속 운영 테스트에서 게임 서버 RSS가 세션 수에 비례하지 않고 선형으로 증가했습니다. Cycle Leak이 원인인지 확인하려면 어떤 지표를 보고, 코드에서 어디를 먼저 살펴보나요?
 
-서로 Strong Count를 유지하면 외부 Owner가 모두 사라져도 Count가 0이 되지 않아 객체가 파괴되지 않고 Memory 누수가 됩니다. 소유 방향 한쪽을 `weak_ptr`로 바꿔 Cycle을 끊습니다.
+먼저 LeakSanitizer나 Heap Profiler로 Type별 Live Byte 추세를 확인합니다. Session·Party·Player처럼 순환 참조가 의심되는 Type의 Count가 세션 종료 후에도 줄지 않으면 Cycle을 의심합니다. 코드에서는 shared_ptr Member를 양방향으로 갖는 클래스를 우선 점검합니다. 해소는 소유 방향을 결정하고 역방향 참조를 weak_ptr로 교체합니다.
 
-### Q5. 게임 서버에서 Session 수명을 어떻게 관리하나요?
+### Q5. 클라이언트가 접속을 끊었는데 비동기 I/O Callback이 완료되기 전에 Session이 파괴되어 서버가 Crash했습니다. 어디서 수명 관리가 잘못된 것이고, 어떻게 재설계하나요?
 
-Registry가 `unique_ptr`로 Session을 단독 소유합니다. 비동기 I/O Callback에는 `shared_from_this()`로 Completion까지 수명을 연장합니다. Closing 이후 새 I/O 시작을 막고 Outstanding I/O가 완료되면 Registry에서 Session을 제거해 파괴합니다.
+비동기 Callback에서 Session을 Raw Pointer나 해제된 `unique_ptr`로 참조한 것이 원인입니다. Callback 등록 시점에 Session이 살아있어도 Completion 전에 Registry가 Session을 파괴하면 Dangling 접근이 됩니다. 재설계는 Session이 `enable_shared_from_this`를 상속하게 하고, Callback 등록 시 `shared_from_this()`로 수명을 Completion까지 연장합니다. 단, 이것만으로는 Closing 이후에도 Callback이 Session에 새 작업을 추가할 수 있으므로, Closing State를 확인해 새 I/O 시작을 막고 Outstanding I/O Count가 0이 된 시점에 Registry에서 제거해 파괴합니다.
 
-### Q6. RAII Destructor에서 예외를 던지면 어떻게 되나요?
+### Q6. 게임 서버의 DB Transaction Wrapper를 RAII로 설계할 때, Destructor에서 Commit이 실패한 경우를 어떻게 처리해야 할까요?
 
-다른 예외로 인한 Stack Unwinding 중에 Destructor가 예외를 던지면 `std::terminate`가 호출됩니다. 실패 가능한 정리는 명시적 `Close`·`Commit` API로 결과를 반환하고, Destructor는 예외 없이 안전한 Fallback 정리만 수행하게 설계합니다.
+Destructor에서 예외를 던지지 않는 것을 원칙으로 합니다. Stack Unwinding 중 Destructor가 예외를 던지면 std::terminate가 호출됩니다. Commit 성공 여부가 중요한 경우, 명시적 Commit() 메서드로 결과를 반환하고 호출자가 성공 여부를 처리합니다. Destructor는 Commit이 호출되지 않았거나 실패했을 때 Rollback을 시도하고, 실패해도 예외 없이 종료합니다.
 
 ## 17. 예상 꼬리질문
 
-- 소유권과 수명은 어떻게 다른가요?
-- `make_shared`와 별도 생성의 차이는 무엇인가요?
+- 비동기 Completion에서 `shared_from_this()`로 수명을 연장한 Session이 Closing 이후에도 계속 살아있다면, 어떤 조건을 먼저 확인하나요?
+- `weak_ptr`를 오래 보유한 Observer가 많을 때 `make_shared`와 `new + shared_ptr` 방식 중 메모리 관점에서 어느 쪽이 더 나은가요?
 - Container 재할당은 RAII Wrapper에 어떤 영향을 주나요?
-- `enable_shared_from_this`는 언제 필요한가요?
-- Rule of Zero를 따를 수 없는 경우는 언제인가요?
+- `enable_shared_from_this`를 상속하지 않은 클래스에서 `this`로 `shared_ptr`를 두 번 만들면 어떤 문제가 생기나요?
+- Rule of Zero를 따를 수 없어 Custom Destructor를 직접 작성할 때, Rule of Five 요구사항 중 가장 자주 빠뜨리는 항목과 그 버그는 무엇인가요?
 - `shared_ptr`의 Reference Count는 왜 Thread-safe인데 객체 접근은 아닌가요?
-- `unique_ptr`의 Custom Deleter는 성능에 어떤 영향을 주나요?
+- 게임 서버 Memory Pool에서 `unique_ptr<Packet, PoolDeleter>`를 사용하다 크기가 예상보다 2배로 늘어났습니다. Stateful Deleter가 Empty Base Optimization을 받지 못하는 조건은 무엇인가요?
 
 ## 18. 30초 모범답변
 

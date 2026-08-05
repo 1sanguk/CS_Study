@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Boxing·Unboxing이 발생하는 정확한 조건과 비용을 설명할 수 있다.
-- Generic Collection·API가 Boxing을 피하는 원리를 설명할 수 있다.
-- 숨은 Boxing 발생 패턴(Logging, Enum, Interface 변환)을 식별할 수 있다.
-- 게임 서버 Hot Path에서 Allocation Rate와 GC 영향을 판단할 수 있다.
+- 매 Tick·매 Packet처럼 고빈도 코드에서 Boxing이 발생하는 정확한 조건(Interface 대입·비Generic API·Enum Reflection)을 코드 수준에서 진단하고, Allocation Profiler로 확인해야 하는 시점을 판단할 수 있다.
+- `List<T>`·`Dictionary<K,V>` 같은 Generic Collection이 Value Type을 직접 저장해 Boxing을 피하는 원리와, 내부에서 다시 `object`로 Cast할 때 Boxing이 재발생하는 조건을 구분하고 안전한 API 선택을 결정할 수 있다.
+- Logging Hot Path·Combat Event Dispatcher·Enum Comparison처럼 숨은 Boxing이 발생하는 패턴을 진단하고, Source Generator·Generic Constraint·Typed Message 중 적절한 구조적 해결을 선택할 수 있다.
+- 고빈도 Boxing이 Gen 0 Collection 빈도·p99 지연에 미치는 영향이 임계값을 넘는 조건을 Profiler로 확인하고, Unsafe 최적화 대신 구조적 해결이 우선되는 판단 기준을 결정할 수 있다.
 
 ## 1. 개요
 
@@ -293,51 +293,65 @@ dotMemory, PerfView, BenchmarkDotNet으로 Call Stack별 Allocation Byte와 Coun
 
 ## 17. 면접 질문
 
-### Q1. Boxing과 Unboxing을 설명해 주세요.
+### Q1. Combat Event Boxing 장애 진단형
 
-Boxing은 Value Type 값을 `object` 또는 Interface 형태의 Managed Heap 객체로 감싸는 과정입니다. Unboxing은 Box 객체에서 정확한 원래 Value Type을 꺼내는 과정입니다. Boxing은 Heap Allocation과 값 복사를 만들고, Unboxing은 타입 검사 후 값을 복사합니다.
+Combat Event를 `Dictionary<string, object>`로 전달하는 시스템에서 GC Gen 0 빈도가 목표보다 3배 높게 나왔습니다. Boxing이 원인임을 어떻게 진단하고, `readonly record struct DamageEvent`로 교체하는 순서와 회귀 검증 방법은 무엇입니까?
 
-### Q2. Generic Collection이 Boxing을 피하는 이유는 무엇인가요?
+PerfView 또는 dotMemory에서 Call Stack별 Allocation을 확인해 `Boxing_Int32`·`Boxing_Single` 등의 Entry가 가장 많은 호출 경로를 탐지합니다. `Dictionary<string, object>` 생성 지점과 숫자 Field 삽입 코드를 추적합니다. 교체 순서는 `readonly record struct DamageEvent(int AttackerId, int TargetId, int Amount)`를 정의하고, 기존 Dictionary 생성 코드를 새 Struct 생성으로 교체한 뒤, 수신 측에서 Dictionary Key 조회를 구조체 Field 접근으로 변경합니다. 회귀 검증은 BenchmarkDotNet `[MemoryDiagnoser]`로 `Gen0` Allocation이 0에 가깝게 줄었는지 확인하고, dotMemory 비교 Snapshot으로 교체 전후 Boxing Allocation Count를 비교합니다.
 
-`List<int>`는 `int`를 직접 저장하는 특화 코드를 JIT가 생성해 `object` 변환 없이 Value를 다룹니다. 비Generic `ArrayList`는 모든 원소가 `object`여서 `int`를 추가할 때 Boxing이 발생합니다.
+### Q2. Logging Boxing 설계 판단형
 
-### Q3. 숨은 Boxing이 자주 발생하는 패턴은 무엇인가요?
+`_logger.LogInformation("damage={0}", damage)`가 매 Tick 수만 번 호출됩니다. Boxing 발생 여부와 Source-generated Logger로 전환하는 판단 기준을 설명하고, 전환 후 Allocation Rate 감소를 어떻게 검증합니까?
 
-비Generic Logging API(`params object[]`), Struct를 Interface 변수에 대입, Enum을 `object` API에 전달, 비Generic Equality 비교 등입니다. Source Generator Logger, Generic Constraint, `IEquatable<T>` 구현으로 피할 수 있습니다.
+`params object[]` Overload는 `damage`(int)를 Boxing하고 배열까지 Allocation합니다. 판단 기준은 Allocation Profiler에서 해당 호출이 Hot Path에 포함되는지, Level이 꺼졌을 때도 인자 평가가 일어나는지 확인합니다. Source-generated Logger로 전환하면 `[LoggerMessage(Level = LogLevel.Information, Message = "damage={Damage}")]` 어트리뷰트로 컴파일 타임 코드를 생성해 Boxing 없이 타입 안전한 Logging을 합니다. 검증은 BenchmarkDotNet `[MemoryDiagnoser]`로 Allocation Bytes 비교, PerfView로 전환 전후 `object[]` Allocation Call Stack을 비교합니다.
 
-### Q4. Boxing이 성능에 미치는 영향은 어느 수준인가요?
+### Q3. EntityId Equality Boxing 설계 판단형
 
-단발 Boxing은 보통 무시할 만합니다. 매 Tick·Packet처럼 고빈도 경로에서 수만 건 반복되면 Allocation Rate가 높아지고 Gen 0 GC 빈도와 Pause가 늘어 p99 지연에 영향을 줍니다.
+Struct `EntityId`가 `IEquatable<T>`를 구현하지 않은 상태로 `Dictionary<EntityId, Session>` Key로 사용됩니다. Boxing이 발생하는 정확한 경로와, `IEquatable<EntityId>` + `EqualityComparer<T>.Default` 적용 후 동작이 달라지는 점을 설명하십시오.
 
-### Q5. Boxed Mutable Struct를 Interface로 수정하면 어떻게 되나요?
+`IEquatable<T>` 미구현 시 `EqualityComparer<T>.Default`가 `ObjectEqualityComparer`를 선택해 `Equals(object? obj)` 경로를 사용합니다. 이 경로는 인자가 `object`이므로 Lookup마다 Boxing이 발생합니다. `IEquatable<EntityId>` 구현 후에는 `EqualityComparer<T>.Default`가 `GenericEqualityComparer`를 선택해 `Equals(EntityId other)` Typed 경로를 사용하므로 Boxing 없이 비교합니다. `GetHashCode`도 `override`해야 Dictionary 저장·조회 양쪽에서 일관된 Hash를 씁니다. 세션 수가 많은 서버에서 Lookup이 수만 번 반복되면 Boxing Allocation이 누적되므로 `IEquatable<T>` 구현은 Dictionary Key Struct의 기본 요건입니다.
 
-Box 안에 원본의 복사본이 들어가 있으므로 Interface 호출이 Box 내부 복사본을 수정해도 원본 Struct는 바뀌지 않습니다. Mutable Struct 자체가 혼동을 만들므로 작은 `readonly struct`를 권장합니다.
+### Q4. Boxing Hot Path Profiler 진단형
 
-### Q6. Unboxing 실패는 언제 발생하나요?
+서버 Tick 루프에서 Allocation Profiler를 실행했더니 `Boxing_Int32`·`Boxing_Enum` Call Stack이 전체 Allocation의 40%를 차지했습니다. 코드베이스에서 원인 패턴을 탐지하는 방법과 우선순위별 수정 순서를 제시하십시오.
 
-Box 타입과 다른 타입으로 Cast하면 `InvalidCastException`이 발생합니다. Boxed `int`를 `long`으로 바로 Unbox할 수 없습니다. `is` Pattern Matching이나 `as` 연산자로 안전하게 처리합니다.
+Call Stack에서 `Boxing_Int32` 진원지를 역추적해 `params object[]` Logging, Enum을 비Generic API에 전달하는 코드, Struct→Interface 대입 경로를 찾습니다. 탐지는 Roslyn Analyzer(`Meziantou.Analyzer`, `Roslynator`)로 `object` 파라미터에 Value Type이 전달되는 패턴을 정적 분석합니다. 수정 우선순위는 (1) 고빈도 Logging Hot Path → Source-generated Logger, (2) Enum Equality → `EqualityComparer<TEnum>.Default`, (3) Combat Event `Dictionary<string,object>` → Typed Struct/Record, (4) Struct→Interface 대입이 반복되는 경로 → Generic Constraint로 변경. 수정 후 BenchmarkDotNet `Gen0` 수치와 p99 지연 변화를 측정해 우선순위별 효과를 검증합니다.
+
+### Q5. Mutable Boxed Struct 버그 진단형
+
+Mutable Struct `HitInfo`를 `IDamageable` Interface 변수에 대입해 Interface 메서드로 `Amount`를 수정했더니 원본 `HitInfo`가 바뀌지 않는 버그가 발생했습니다. 원인을 진단하고 설계를 어떻게 수정하겠습니까?
+
+Struct를 Interface 변수에 대입하면 Boxing이 발생해 Heap에 값의 복사본이 생깁니다. Interface 메서드 호출은 Box 안의 복사본을 수정하므로 원본 `HitInfo`는 변경되지 않습니다. 진단은 `IDamageable damageable = hitInfo;` 이후 `hitInfo.Amount`가 변경 전 값임을 확인합니다. 수정 방법은 세 가지입니다. 첫째, `HitInfo`를 `readonly struct`로 만들어 수정 자체를 방지합니다. 둘째, Interface가 아닌 Generic Constraint(`where T : IDamageable`)로 Boxing을 피하고 Typed 경로에서 직접 수정합니다. 셋째, 공유 수정이 필요하면 `class`로 전환해 Reference 의미를 갖게 합니다. Mutable Struct + Interface 조합은 항상 의도치 않은 복사를 만들므로 피해야 합니다.
+
+### Q6. Generic Internal Boxing 설계 판단형
+
+"`List<int>` 내부를 Generic API로만 사용하면 Boxing이 전혀 없다"고 주장하는 동료가 있습니다. 내부 Cast 또는 LINQ 체인에서 Boxing이 생기는 구체적 시나리오와 IL 수준 확인 방법을 제시하십시오.
+
+`List<T>` 자체는 Value를 직접 저장하지만, 이를 `IEnumerable<int>`나 `IList<int>` Interface 변수에 대입하거나 `Cast<object>()`를 체인하면 Boxing이 발생합니다. LINQ에서 `list.Cast<object>().Where(...)`나 비Generic Delegate(`Action<object>`)에 Struct를 넘기면 Boxing이 생깁니다. `list.ForEach(x => Log(x))`에서 Log가 `object` Overload이면 `x`가 Boxing됩니다. IL 확인 방법은 dotnet-ildasm 또는 SharpLab(sharplab.io)에서 코드를 붙여 넣어 `box int32` Opcode가 있는지 확인합니다. BenchmarkDotNet `[MemoryDiagnoser]`로 `Gen0` 수치를 보거나, Allocation Profiler로 `Boxing_Int32` Stack이 LINQ 체인에서 발생하는지 검증합니다.
 
 ## 18. 예상 꼬리질문
 
-- Struct가 Interface를 구현하면 항상 Boxing이 발생하나요?
-- `params object[]` 대신 사용할 수 있는 패턴은 무엇인가요?
-- `EqualityComparer<T>.Default`가 Boxing을 피하는 원리는 무엇인가요?
-- BenchmarkDotNet으로 Boxing 여부를 어떻게 확인하나요?
-- JIT Devirtualization이 Boxing에 영향을 주는 경우는 언제인가요?
-- `CollectionsMarshal.AsSpan`은 어떤 상황에서 쓰나요?
-- Gen 0 GC 빈도가 높아지면 어떤 지표를 확인하나요?
+- 실시간 서버에서 Entity State를 `IFormattable`·`IComparable` 두 Interface 변수에 교대로 대입하며 매 프레임 비교·포맷을 수행하는 코드가 있습니다. Allocation Profiler에서 이 경로가 Hot Path로 잡혔을 때, Generic Constraint로 Boxing을 제거하는 리팩토링 방향과 기존 API를 Breaking Change 없이 유지하는 방법을 설명하십시오.
+- 실시간 서버에서 Skill Effect를 `object` 기반 Event Bus로 퍼뜨리다 GC Pause p99가 20ms를 초과했습니다. Typed Generic Event Dispatcher로 전환할 때 기존 Subscribe·Publish API의 Breaking Change를 최소화하는 방법은 무엇입니까?
+- `params object[]` Logging API를 Source-generated `LoggerMessage`로 마이그레이션할 때 Dynamic Format String을 쓰던 기존 호출 코드가 있습니다. 어떻게 처리합니까?
+- 신규 Combat 기능 배포 후 BenchmarkDotNet `[MemoryDiagnoser]` Gen0 수치가 배포 전 대비 2배로 늘었습니다. 변경된 코드에 `Dictionary<string, object>` 이벤트 패킹과 LINQ 체인이 동시에 추가되었을 때, Boxing Allocation과 다른 Heap Allocation을 빠르게 분리하는 진단 절차를 설명하십시오.
+- Enum 값을 `IEqualityComparer<object>` 기반 Dictionary Key로 사용하면 왜 Boxing이 발생하고, `EqualityComparer<MyEnum>.Default`로 교체하면 어떻게 달라집니까? Key Lookup p99에 차이가 날 조건은 무엇입니까?
+- Hot Path에서 모든 Boxing을 제거했는데 오히려 Gen 0 Allocation이 늘었습니다. 어떤 상황에서 이런 역효과가 생기나요?
+- 서버 업데이트 후 GC Gen 0 빈도가 갑자기 2배로 늘었고 Boxing 관련 Allocation이 의심됩니다. 재현 없이 프로덕션 상황에서 원인을 좁히는 진단 절차를 설명하십시오.
 
 ## 19. 30초 모범답변
 
-> Boxing은 Value Type을 `object`나 Interface 형태의 Heap 객체로 감싸는 과정이고, Unboxing은 정확한 원래 타입으로 꺼내는 과정입니다. Generic API와 Typed Message로 대부분의 Boxing을 구조적으로 피할 수 있습니다. 고빈도 경로의 누적 Boxing은 Gen 0 Collection 빈도를 높이므로 Profiler로 확인 후 최적화합니다.
+> Boxing은 Value Type을 Heap 객체로 감싸 Allocation을 만드는 과정입니다. 실무에서는 `Dictionary<string, object>` 이벤트 패킹, `params object[]` Logging, Struct→Interface 대입이 대표적인 숨은 발생 경로입니다. 매 Tick 수만 번 반복되면 Allocation Rate와 Gen 0 Collection 빈도가 올라가 p99 지연에 실제로 나타납니다. PerfView나 dotMemory로 `Boxing_Int32` Call Stack을 확인하고, `readonly record struct` + Source-generated Logger 같은 구조적 수정을 먼저 적용합니다.
 
 ## 20. 1~2분 확장답변
 
-> Boxing은 C# 단일 루트 타입 시스템에서 Value Type을 `object`·Interface로 다루기 위해 Managed Heap 객체로 감싸는 과정입니다. 자동으로 일어나 코드만 봐서는 발생 여부를 모를 때가 많습니다.
+> Boxing은 C# 단일 루트 타입 시스템에서 Value Type을 `object`·Interface로 다루기 위해 Managed Heap에 객체를 만들고 값을 복사하는 과정입니다. 자동으로 일어나 IL 또는 Allocation Profiler를 보기 전까지는 코드만 봐서는 모를 때가 많습니다.
 >
-> 비Generic Collection(`ArrayList`), `params object[]` Logging, Struct를 Interface 변수에 대입, Enum Reflection이 대표적인 숨은 Boxing 패턴입니다. `List<T>` 같은 Generic Collection은 Value를 직접 저장해 Boxing을 피하고 Compile Time Type Safety도 제공합니다.
+> 실무에서 가장 자주 만나는 패턴은 세 가지입니다. 첫째, Skill/Combat Event를 `Dictionary<string, object>`로 퍼뜨리는 구조에서 `damage`, `attackerId` 같은 int 필드가 모두 Boxing됩니다. 둘째, `_logger.LogInformation("hit={0}", damage)`처럼 `params object[]` Overload를 쓰면 매 호출마다 int Boxing과 배열 Allocation이 함께 발생합니다. 셋째, `IEquatable<T>`를 구현하지 않은 Struct를 Dictionary Key로 쓰면 Lookup마다 `Equals(object)` 경로를 타 Boxing이 생깁니다.
 >
-> 게임 서버에서 Combat Event를 `Dictionary<string, object>`로 전달하면 수치 필드마다 Boxing이 발생합니다. `readonly record struct DamageEvent`로 Typed Message를 만들면 Allocation 없이 전달됩니다. Source-generated Logger로 Logging Hot Path의 Boxing도 없앱니다. 최적화는 단발 제거가 아니라 Profiler로 Hot Path를 확인한 뒤 구조적으로 해결합니다.
+> 라이브 서비스에서 실제로 문제가 된 경우는 매 Tick 수만 건의 이벤트가 `Dictionary<string, object>`를 통해 전달되면서 dotMemory Allocation Rate가 600MB/s를 넘고 Gen 0 Collection이 초당 80회 이상 발생한 케이스였습니다. `readonly record struct DamageEvent`로 교체하자 Allocation Rate가 90% 이상 감소하고 p99 지연이 목표 안으로 들어왔습니다. Source-generated `[LoggerMessage]`로 Logging Hot Path도 함께 정리했습니다.
+>
+> 핵심 판단 기준은 두 가지입니다. PerfView 또는 dotMemory에서 `Boxing_Int32`·`Boxing_Enum` Call Stack이 전체 Allocation의 유의미한 비율을 차지하는지 확인하고, BenchmarkDotNet `[MemoryDiagnoser]`로 수정 전후 `Gen0` 수치를 비교합니다. Boxing 0이 목표가 아니라 p99 지연과 Allocation Rate를 실측 기준으로 구조적 해결을 우선 적용하는 것이 원칙입니다.
 
 ## 21. 핵심 요약
 

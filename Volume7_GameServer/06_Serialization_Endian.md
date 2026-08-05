@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Serialization의 목적과 Binary vs Text 형식의 Trade-off를 설명할 수 있다.
-- Endian이란 무엇이고 Network Byte Order가 Big Endian인 이유와 변환 시점을 설명할 수 있다.
-- 역직렬화 시 필요한 보안 검증 항목과 입력 신뢰 경계를 설명할 수 있다.
-- Schema 버전 호환성(Forward/Backward Compatibility)을 유지하는 방법을 설명할 수 있다.
+- 이동 Packet의 x·y 좌표를 float32로 직렬화했는데 서버와 클라이언트 시뮬레이션 결과가 Tick마다 누적 차이가 날 때, IEEE754 float 비결정론 조건을 진단하고 정수 고정소수점 전환 여부를 결정할 수 있다.
+- 신규 서버 배포 후 구 클라이언트에서 역직렬화 오류가 발생했을 때, Field 번호 재사용·Reserved 미처리·Fixture Test 누락 중 Breaking Change 원인을 특정하고 호환성 복구 설계를 결정할 수 있다.
+- 역직렬화 경계에서 NaN·배열 원소 수 초과·문자열 최대 Byte 위반을 진단하고, Packet Drop·Session 종료·Rate Limit 중 오류 유형과 빈도를 기준으로 대응 정책을 결정할 수 있다.
+- 60Hz 1만 CCU 서버에서 Protobuf Serialization CPU가 30%를 넘었을 때, Custom Binary·Protobuf·JSON 중 Payload 크기와 Parsing CPU 실측 결과를 기준으로 형식을 결정할 수 있다.
 
 ## 1. 개요
 직렬화는 객체를 전송·저장 가능한 Byte 표현으로 바꾸고 Endian은 여러 Byte 정수의 Byte 순서를 정하는 규칙이다.
@@ -191,44 +191,52 @@ Schema .proto 파일을 서버·클라이언트 공용 저장소에서 단일 �
 
 ## 8. 자주 하는 오해
 
-- **Protobuf를 쓰면 Schema 버전 관리가 필요 없다.** Field 번호 재사용이나 필수 필드 제거는 Breaking Change다. 번호를 Reserved 처리하고 삭제한 필드는 재사용하지 않아야 한다.
-- **고정 폭 숫자를 쓰면 범위 초과 걱정이 없다.** uint16으로 받은 좌표가 맵 크기를 벗어날 수 있다. 타입 범위 내에서도 논리 범위 검증이 별도로 필요하다.
-- **UTF-8로 보내면 문자열 Encoding 문제가 해결된다.** Null 종료 여부, 최대 Byte 길이, 제어 문자 처리도 명시해야 한다. 이름 필드에 제어 문자나 SQL 삽입 시도가 올 수 있다.
-- **Float를 그대로 직렬화하면 결정론적 시뮬레이션이 가능하다.** Float 연산은 FPU 설정과 컴파일러 최적화(-ffast-math 등)에 따라 결과가 달라진다. 서버 Authoritative 시뮬레이션에는 정수 고정소수점이 필요하다.
-- **Endian만 맞추면 플랫폼 간 호환성이 완전히 보장된다.** 구조체 Padding, 비트 필드 순서, `int` 크기 차이가 여전히 남는다. Field를 명시적으로 Encode·Decode해야 안전하다.
-- **역직렬화 실패 시 연결을 끊으면 그만이다.** 단순 파싱 오류인지 악의적 공격인지 구분하고, 오류 빈도를 IP별로 집계해 Rate Limit을 적용해야 한다.
-- **Zero-copy 역직렬화를 쓰면 성능이 항상 좋다.** Buffer를 Handler가 소비하기 전에 Pool로 반환하면 Dangling Pointer가 생긴다. Lifetime 관리 비용이 복사보다 클 수 있다.
-- **NaN·Infinity는 Float 연산 결과에서만 나온다.** 공격자가 NaN Byte 패턴을 직접 보낼 수 있다. 역직렬화 직후 `isfinite()` 검증이 필요하다.
+- **Protobuf를 쓰면 Schema 버전 관리가 필요 없다**: Field 번호 재사용이나 필수 필드 제거는 Breaking Change다. 번호를 Reserved 처리하고 삭제한 필드는 재사용하지 않아야 한다.
+- **고정 폭 숫자를 쓰면 범위 초과 걱정이 없다**: uint16으로 받은 좌표가 맵 크기를 벗어날 수 있다. 타입 범위 내에서도 논리 범위 검증이 별도로 필요하다.
+- **UTF-8로 보내면 문자열 Encoding 문제가 해결된다**: Null 종료 여부, 최대 Byte 길이, 제어 문자 처리도 명시해야 한다. 이름 필드에 제어 문자나 SQL 삽입 시도가 올 수 있다.
+- **Float를 그대로 직렬화하면 결정론적 시뮬레이션이 가능하다**: Float 연산은 FPU 설정과 컴파일러 최적화(-ffast-math 등)에 따라 결과가 달라진다. 서버 Authoritative 시뮬레이션에는 정수 고정소수점이 필요하다.
+- **Endian만 맞추면 플랫폼 간 호환성이 완전히 보장된다**: 구조체 Padding, 비트 필드 순서, `int` 크기 차이가 여전히 남는다. Field를 명시적으로 Encode·Decode해야 안전하다.
+- **역직렬화 실패 시 연결을 끊으면 그만이다**: 단순 파싱 오류인지 악의적 공격인지 구분하고, 오류 빈도를 IP별로 집계해 Rate Limit을 적용해야 한다.
+- **Zero-copy 역직렬화를 쓰면 성능이 항상 좋다**: Buffer를 Handler가 소비하기 전에 Pool로 반환하면 Dangling Pointer가 생긴다. Lifetime 관리 비용이 복사보다 클 수 있다.
+- **NaN·Infinity는 Float 연산 결과에서만 나온다**: 공격자가 NaN Byte 패턴을 직접 보낼 수 있다. 역직렬화 직후 `isfinite()` 검증이 필요하다.
 
 ## 9. 면접 질문
 
-### Q1. Serialization이 왜 필요하고 Binary vs Text 형식의 차이는 무엇인가요?
-같은 프로세스 메모리 표현을 다른 언어·플랫폼에 전달하려면 합의된 Byte 규약이 필요합니다. JSON 같은 텍스트는 가독성이 높고 Schema가 없어도 되지만 크기와 Parsing 비용이 큽니다. Protobuf 같은 Binary는 크기와 CPU가 작지만 Schema와 Debug 도구가 필요합니다.
+### Q1. Competitive PvP 서버에서 클라이언트와 서버의 x좌표 시뮬레이션 결과가 매 Tick 0.001씩 누적 차이가 발생합니다. Float 비결정론이 원인인지 어떻게 진단하나요?
 
-### Q2. Endian이란 무엇이고 Network Byte Order가 Big Endian인 이유는 무엇인가요?
-Endian은 멀티바이트 정수를 메모리에 저장할 때 MSB를 먼저(Big) 또는 LSB를 먼저(Little) 저장하는 규칙입니다. Network Byte Order(RFC 793 표준)는 Big Endian으로 정해져 있어 이기종 시스템 간 동일한 숫자를 주고받을 수 있습니다. 역직렬화 시 `ntohl()/ntohs()`로 Host Byte Order로 변환합니다.
+(1) **재현 조건 격리**: 같은 입력 Sequence를 서버에서 두 번 실행해 결과가 다른지 확인 — 다르면 비결정 요소(멀티스레드 실행 순서·외부 상태) 의심. (2) **Float 연산 확인**: `-ffast-math` 컴파일 옵션 제거 후 차이 감소 여부, SIMD Width 차이(SSE vs AVX) 확인. (3) **Replay 검증**: 서버 입력·RNG Seed·Tick 결과를 로그로 기록 후 재실행해 동일 결과 여부 확인. (4) **고정소수점 전환 판단 기준**: 누적 오차가 이동 Tolerance(예: 10cm)를 넘거나 Correction 빈도가 초당 3회 이상이면 좌표를 정수(mm 단위)로 직렬화하는 고정소수점으로 전환합니다.
 
-### Q3. 역직렬화 시 어떤 보안 검증이 필요한가요?
-Packet 최대 길이, 문자열·배열 원소 수 상한, Enum 범위, NaN·Infinity, Integer Overflow를 검증합니다. 역직렬화와 논리 검증을 마친 객체만 Logic Queue에 전달합니다. 오류 로그에는 토큰·좌표 같은 원문을 남기지 않습니다.
+### Q2. 신규 서버 배포 후 구 클라이언트에서 unknown_field_error가 급증했습니다. Field 번호 재사용과 Reserved 미처리 중 어떤 Breaking Change인지 어떻게 특정하나요?
 
-### Q4. Schema 버전 호환성(Backward/Forward Compatibility)을 어떻게 유지하나요?
-새 Field는 선택 항목으로 추가하고 이전 수신자가 모르는 Field를 건너뛸 수 있게 합니다. 기존 Field 번호나 의미를 재사용하지 않고 삭제한 번호는 Reserved 처리합니다. Fixture Test로 구 Packet을 신 코드가 읽고, 신 Packet을 구 코드가 읽는 케이스를 자동화합니다.
+(1) **Field 번호 재사용 확인**: 현재 .proto와 배포 전 .proto를 diff — 삭제된 Field 번호가 신 Field에 재사용됐다면, 구 클라이언트가 해당 번호를 이전 타입으로 해석해 파싱 오류 발생. (2) **Reserved 미처리 확인**: 삭제된 Field 번호가 `reserved` 선언 없이 제거됐다면, 신 서버가 구 Field를 건너뛰지 못하고 오류. (3) **Fixture Test 실행**: 구 버전 Packet 바이너리를 신 코드로 파싱해 실패하는 케이스 확인. 방어: (1) 삭제한 Field 번호는 즉시 `reserved` 처리. (2) CI에 Backward Compatibility Fixture Test를 추가해 배포 전 검증합니다.
 
-### Q5. Float를 그대로 직렬화하면 결정론적 시뮬레이션이 불가능한 이유는 무엇인가요?
-Float 연산은 FPU 설정, 컴파일러 최적화(-ffast-math), SIMD 명령어 차이로 플랫폼마다 결과가 다를 수 있습니다. 서버 Authoritative 물리 시뮬레이션에서 클라이언트와 서버가 다른 결과를 내면 계속 보정이 필요합니다. 결정론이 중요한 경우 정수 고정소수점으로 좌표를 표현합니다.
+### Q3. 이동 Packet 역직렬화에서 x=NaN이 Logic Layer까지 전파돼 Combat 좌표가 NaN으로 오염됐습니다. 어떤 단계에서 차단하나요?
 
-### Q6. Zero-copy 역직렬화의 장점과 Buffer Lifetime 주의점은 무엇인가요?
-Zero-copy는 Network Buffer를 그대로 Handler에 Span으로 넘겨 복사 비용을 없앱니다. 단, Handler가 처리를 완료하기 전에 Buffer를 Pool에 반환하면 Dangling Pointer가 됩니다. 비동기 경계를 넘기는 경우 Reference-counted Segment나 명시적 소유권 이전이 필요합니다.
+역직렬화 경계에서 Logic Layer 진입 전에 차단해야 합니다. (1) **Float 변환 직후**: `if (!isfinite(out.x) || !isfinite(out.y)) return ProtocolError` — Endian 변환 직후 수행. (2) **논리 범위 검증**: `if (out.x < MAP_MIN || out.x > MAP_MAX) return ProtocolError` — isfinite 이후 순서. (3) **오류 정책**: NaN 탐지는 Parser Bug가 아닌 악의적 시도일 가능성이 높으므로 Packet Drop + `deserialize_nan_count_by_ip` 카운터 증가. IP별 카운터가 10회/분을 넘으면 Rate Limit 적용. (4) **Logic Layer 방어**: 이미 전파됐다면 Combat System 입력에 Sanitize Guard(`if (!isfinite(x)) reject`)를 추가 배포합니다.
+
+### Q4. 60Hz 1만 CCU 서버에서 Protobuf Serialization CPU가 30%를 차지합니다. Custom Binary로 전환할 기준과 실측 방법을 설명하세요.
+
+(1) **실측**: `perf record`·VTune으로 직렬화 함수별 CPU 시간을 측정. Protobuf Encoding에서 Allocation·Varint 인코딩이 Hot Path인지 확인. (2) **Payload 크기 비교**: 이동 Packet을 Protobuf vs Custom Binary(20B 고정)로 10만 건 비교 — Bandwidth 차이 측정. (3) **전환 기준**: CPU ≥ 10% 개선 또는 Payload 크기 ≥ 30% 감소 중 하나 이상이고, Schema 변경 빈도가 낮은 Packet(이동·좌표)에만 Custom Binary 적용. (4) **비용**: 저빈도 Packet(채팅·결제)은 Protobuf를 유지해 Schema 버전 관리 비용을 줄이고, 고빈도 Packet만 Custom Binary로 전환합니다.
+
+### Q5. 채팅 메시지에 닉네임 필드(UTF-8)를 추가했는데 null 바이트 포함 닉네임이 DB 저장 오류를 유발했습니다. 역직렬화 경계에서 어떻게 방어하나요?
+
+역직렬화 경계에서 UTF-8 문자열을 검증합니다. (1) **Byte 길이 상한**: 수신 후 즉시 `if (nickname.length > 256) ProtocolError` — Unicode 코드포인트 수가 아닌 Byte 기준. (2) **Null 바이트 차단**: `if (nickname.contains('\0')) ProtocolError` — DB 문자열 종료 문자 주입 방지. (3) **UTF-8 유효성**: 유효하지 않은 UTF-8 바이트 시퀀스 거부 — 이모지·멀티바이트 문자 처리 보장. (4) **제어 문자**: ASCII 0x00~0x1F, 0x7F 차단 — SQL 주입·CRLF 주입 방지. (5) 검증 순서: Byte 길이 → UTF-8 유효성 → Null 바이트 → 제어 문자 → 논리 검증 순서를 고정합니다.
+
+### Q6. Rolling Deploy 중 신 서버와 구 서버가 50% 혼재할 때 신 클라이언트가 신 Field(field 5)를 보냈는데 구 서버가 잘못 처리했습니다. 원인과 방어 설계를 설명하세요.
+
+원인: 구 서버 .proto에 field 5가 없어 건너뛰어야 하는데, 구현이 Unknown Field를 건너뛰지 않고 ProtocolError로 처리하는 경우입니다. (1) **원인 확인**: 구 서버 `unknown_field_drop` vs `unknown_field_error` 카운터 비교. (2) **즉시 수정**: 구 서버 Parser를 Unknown Field Skip 모드로 배포(Wire Type에 따라 Varint·Length-delimited·Fixed를 건너뜀). (3) **방어 설계**: Forward Compatibility Test — CI에서 신 Packet을 구 코드가 읽는 케이스를 의무화. (4) **배포 순서**: 신 Client 배포 전에 구 서버의 Forward Compatibility를 먼저 배포해 Unknown Field를 안전하게 처리하도록 합니다.
 
 ## 10. 예상 꼬리질문
 
-- Schema .proto 파일을 서버와 클라이언트가 공유할 때 소유권과 배포 순서는 어떻게 정하나요?
-- 구조체 `memcpy` 직렬화가 UB인 이유와 안전한 대안은 무엇인가요?
-- Varint 인코딩(Protobuf)이 고정 폭보다 Length Prefix 파싱을 어렵게 만드는 이유는?
-- FlatBuffers의 Zero-copy가 Protobuf 대비 유리한 상황과 불리한 상황은 각각 언제인가요?
-- 배포 중 구 Server가 신 Field를 건너뛸 때 실수를 잡는 테스트 방법은?
-- 채팅 메시지처럼 가변 길이 문자열을 포함하는 Binary Packet의 Length 필드 설계는?
-- 직렬화 오류 로그에서 어떤 정보를 남기고 어떤 정보를 제외하나요?
+- .proto 파일을 서버·클라이언트가 서로 다른 저장소에서 관리하다 Field 번호가 달라졌습니다. 단일 소스 저장소로 전환할 때 기존 두 저장소의 불일치를 어떻게 해소하나요?
+- 구조체 memcpy 직렬화를 쓰다가 ARM 서버 도입 후 Alignment Fault가 발생했습니다. Strict Aliasing과 Alignment 문제를 동시에 피하는 안전한 방법은 무엇인가요?
+- Varint(Protobuf) 인코딩 필드가 포함된 Packet의 Max Length를 사전 계산해야 하는 이유와, Encode 전 크기 추정이 틀렸을 때 어떤 문제가 생기나요?
+- FlatBuffers로 전환 후 빌드 시간이 2배 늘었습니다. .fbs Schema 파일 증가로 인한 코드 생성 비용을 최소화하는 방법은 무엇인가요?
+- CI Fixture Test에서 구 Packet을 신 코드가 파싱하는 케이스가 통과했는데 프로덕션에서 실패했습니다. 실제 구 Packet과 Fixture의 차이를 어떻게 좁히나요?
+- 채팅 문자열 최대 Byte를 256B로 설정했는데 이모지가 많은 메시지가 코드포인트 256 기준으로 통과하고 Byte 기준으로는 초과합니다. 올바른 검증 순서와 기준을 설명해 주세요.
+- 직렬화 오류 로그에서 어떤 필드는 기록하고 어떤 필드는 제외해야 하는지 기준과 이유를 설명해 주세요.
+
+
 
 ## 11. 30초 모범답변
 

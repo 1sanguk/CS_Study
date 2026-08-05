@@ -11,8 +11,8 @@ importance: 5
 
 ## 학습 목표
 
-- 문제 조건을 Algorithm Pattern과 연결하는 과정을 설명할 수 있다.
-- 해법의 정당성을 불변식·교환 논증·점화식으로 설명할 수 있다.
+- 입력 크기·정렬·가중치·반복 여부 등 문제 조건을 분석하여, Greedy·DP·Backtracking·Graph Algorithm 중 적합한 Pattern을 판단할 수 있다.
+- Algorithm 정당성 검증 방법(Loop Invariant·교환 논증·점화식·단조성 후보 제거) 중 문제 유형에 맞는 도구를 선택하고, 증명 논리의 빠진 조건을 식별할 수 있다.
 - 시간·공간 복잡도와 입력 상한으로 실행 가능성을 판단할 수 있다.
 - 게임 서버의 실시간 Budget, 취소, 근사·사전 계산 전략을 함께 설계할 수 있다.
 
@@ -35,6 +35,34 @@ Algorithm 면접의 핵심은 외운 코드를 빠르게 적는 것이 아니다
 ```
 
 코드가 맞아도 왜 맞는지, 어떤 조건에서 실패하는지 설명하지 못하면 실무 적용 능력을 보여 주기 어렵다.
+
+## 1-1. 쉬운 예시: 조건 기반 Algorithm 선택
+
+```csharp
+// 예시: 5노드 Zone Graph, 조건에 따라 Algorithm 선택
+int V = 5;
+// Edge: (from, to, weight)
+var edges = new List<(int from, int to, int weight)>
+{
+    (0, 1, 4), (0, 2, 1), (2, 1, 2), (1, 3, 1), (3, 4, 3)
+};
+
+bool hasNegativeEdge = edges.Any(e => e.weight < 0);
+bool allSameWeight   = edges.All(e => e.weight == edges[0].weight);
+bool smallGraph      = V <= 300; // Floyd-Warshall O(V³) 허용 기준
+
+if (allSameWeight)
+    Console.WriteLine("→ BFS: 무가중 최단 O(V+E)");
+else if (!hasNegativeEdge)
+    Console.WriteLine("→ Dijkstra: 음수 없는 단일 출발 O((V+E)logV)");
+else if (smallGraph)
+    Console.WriteLine("→ Floyd-Warshall: 음수 포함 소규모 모든 쌍 O(V³)");
+else
+    Console.WriteLine("→ Bellman-Ford: 음수 Edge 단일 출발 O(VE)");
+// 출력: → Dijkstra: 음수 없는 단일 출발 O((V+E)logV)
+```
+
+Edge 가중치 조건(음수 유무, 균일 여부)과 Graph 크기를 순서대로 체크하여 BFS·Dijkstra·Floyd-Warshall·Bellman-Ford 중 하나를 결정한다. 코드를 작성하기 전에 이 분기 논리를 말로 설명하면 면접관에게 설계 사고를 명확히 전달할 수 있다. V=300 기준은 O(V³) 연산이 약 2.7×10⁷으로 한 Tick 내 허용 가능한 상한을 나타낸다.
 
 ## 2. 문제를 받으면 먼저 확인할 것
 
@@ -291,53 +319,53 @@ Algorithm별 내부 작업 지표가 원인 진단에 유용하다.
 
 - **문제 이름을 보면 Algorithm이 자동으로 정해진다**: 입력 조건과 목적 함수를 먼저 확인한다.
 - **정답 Example을 통과하면 정당성이 증명된다**: 불변식·교환·점화식 설명이 필요하다.
-- **Big-O가 같으면 실제 성능도 같다**: Cache, 상수, I/O와 Allocation이 다르다.
-- **Dijkstra는 모든 가중 Graph에 가능하다**: 음수 Edge에서 실패한다.
-- **Greedy는 가장 큰 값을 고르는 방식이다**: 안전한 선택 증명이 핵심이다.
-- **DP는 재귀에 Cache를 붙이는 것이다**: 상태·전이 설계가 핵심이다.
-- **Pruning을 하면 Backtracking이 다항 시간이 된다**: 최악 지수는 남을 수 있다.
 - **Precompute는 Runtime 비용을 없앤다**: Memory와 갱신·Version 비용으로 이동한다.
 - **최적해를 반드시 끝까지 계산해야 한다**: 제품 요구에 따라 Budget과 근사를 설계할 수 있다.
+- **면접에서 Brute Force를 말하면 능력 부족으로 보인다**: Brute Force는 정당성 기준과 최적화 방향을 제시하는 출발점이며, 바로 최적 해법으로 뛰어들면 조건 누락 위험이 있다.
+- **Algorithm을 설명할 때 코드가 없으면 답이 아니다**: 정당성과 복잡도를 논리로 설명한 뒤 코드를 짜는 순서가 더 설득력 있다. 코드만 있고 증명이 없으면 오류를 찾기 어렵다.
+- **경계 Case 테스트는 구현 완료 후 생각해도 된다**: 경계 Case(빈 입력, 단일 Vertex, Cycle, Overflow)는 설계 단계에서 Algorithm 선택과 구현 방식을 바꾸는 조건이다.
+- **입력 크기가 작으면 Algorithm 선택이 중요하지 않다**: n=10²에서 O(n³)과 O(n log n)은 차이가 작지만, 게임 서버에서 같은 코드가 n=10⁵ 입력에도 재사용될 때 설계 부채가 된다.
+- **면접에서 가장 빠른 Algorithm을 찾는 것이 목표다**: 입력 조건·실행 환경·구현 복잡도를 함께 고려한 최선의 트레이드오프를 설명하는 것이 목표다.
 
 ## 18. 면접 질문
 
-### Q1. Algorithm 문제를 해결하는 순서를 설명해 주세요.
+### Q1. 게임 서버 Matchmaking 시스템에서 플레이어 조합의 전역 최적을 구해야 하는데, 입력 수가 최대 200명이라면 어떤 Algorithm 전략을 선택하고 그 이유는 무엇인가요?
 
-입력·출력과 크기, 정렬·중복·가중치 조건을 확인합니다. 단순 해법과 복잡도를 제시하고 반복 계산이나 단조성에서 최적화 Pattern을 찾습니다. 정당성과 시간·공간을 설명한 뒤 경계·최악 입력으로 검증합니다.
+200명 조합의 전역 최적은 지수 탐색이므로 직접 계산은 불가능합니다. 먼저 역할·Region·MMR로 후보를 필터링해 유망 후보만 Backtracking으로 탐색하고, 방문 Node와 Wall-clock Budget 상한을 두어 초과 시 Best-so-far를 반환합니다. 또는 상태를 MMR 구간으로 이산화해 DP로 근사 최적을 구하거나, 반복 Query라면 유사 조합 결과를 Cache하고 콘텐츠 Version이 바뀔 때 무효화합니다. 정확도·대기 시간·Starvation을 메트릭으로 측정해 전략을 조정합니다.
 
-### Q2. Greedy, DP, Backtracking을 어떻게 구분하나요?
+### Q2. MMR 기반 Matchmaking 로직을 Greedy로 구현했더니 대기열 후반부 플레이어가 계속 매칭에서 밀리는 Starvation이 발생했습니다. 이 문제의 원인이 Greedy 선택에 있다고 판단했을 때 DP나 Backtracking으로 전환하는 기준과 트레이드오프는 무엇인가요?
 
-현재 선택을 확정해도 된다는 증명이 있으면 Greedy, 같은 상태가 반복되고 상태별 최적값을 비교하면 DP, 모든 선택을 탐색하되 불가능한 Branch를 복구하며 자르면 Backtracking입니다.
+Greedy는 현재 MMR 차이가 가장 작은 후보를 즉시 확정하므로 오래 기다린 플레이어의 대기 시간 가중치를 목적 함수에 반영하기 어렵습니다. 이 경우 Greedy 선택이 Starvation을 구조적으로 만드는 것입니다. DP로 전환하려면 상태를 (대기열 슬롯, 누적 대기 시간, MMR 구간)으로 정의하고 대기 패널티를 포함한 점화식을 세워야 합니다. 그러나 플레이어 수가 200명 이상이 되면 상태 폭발이 발생하므로, 실무에서는 대기 시간이 임계치를 넘는 플레이어에게 MMR 허용 범위를 단계적으로 확대하는 완화 전략을 Greedy 위에 레이어로 추가하는 방식이 많습니다. Backtracking은 Tick Budget 안에서 Best-so-far를 반환하는 방식으로 사용하되, 완화 단계마다 탐색 공간이 달라지므로 Budget 초과 Fallback 정책을 API 계약으로 명시해야 합니다. 정확도·대기 시간·Starvation 비율을 메트릭으로 측정해 어느 전략이 실제 운영 목표를 충족하는지 검증합니다.
 
-### Q3. Graph 최단 경로 Algorithm을 어떻게 선택하나요?
+### Q3. Zone 기반 MMORPG에서 NPC 경로 탐색 장애가 보고됐습니다. Zone A에서는 경로가 정상이지만 Zone B에서는 Dijkstra가 목적지에 도달하지 못합니다. Graph 알고리즘 선택 관점에서 원인 후보를 어떻게 좁히고 어떤 Algorithm으로 교체하거나 보완하겠습니까?
 
-Weight가 모두 같으면 BFS, 음수 없는 가중치는 Dijkstra, 음수 Edge는 Bellman-Ford, 작은 Graph의 모든 쌍은 Floyd-Warshall을 검토합니다. DAG라면 위상 순서 Relaxation이 O(V+E)입니다.
+먼저 Zone B의 Graph 구조를 확인합니다. Dijkstra는 음수 Edge가 있으면 오동작하므로, 경사 이동 비용이나 버프/디버프 기반 Edge 가중치에 음수가 섞였는지 점검합니다. 음수가 없다면 불연결 Component 여부를 확인합니다. Navigation Mesh 갱신 중 Edge가 누락됐거나 동적 장애물 처리로 일부 Vertex가 제거된 상태일 수 있습니다. 또한 Dijkstra의 Priority Queue에서 이미 확정된 Vertex를 재처리하는 버그로 거리가 INF로 남는 경우도 있으므로, 방문 완료 Check 로직을 검토합니다. 음수 Edge가 확인되면 Bellman-Ford로 교체하거나 음수 비용 Edge를 제거·재설계합니다. 불연결이라면 Zone 진입 가능 여부를 사전 검증하는 연결성 Check를 추가합니다. 교체 전후 동일 입력에서 경로 길이와 Vertex 방문 수를 비교하는 Regression Test를 실행하고, Tick당 처리 Node 수와 p99 지연을 모니터링합니다.
 
-### Q4. 정당성은 어떻게 설명하나요?
+### Q4. 팀원이 구현한 Greedy 스케줄링 코드가 일부 입력에서 최적이 아닌 결과를 냈습니다. Greedy 선택의 정당성을 어떻게 검증하고, 반례를 찾는 접근 방식은 무엇인가요?
 
-반복 불변식, 교환 논증, DP 점화식과 귀납, 후보 제거의 단조성 중 문제에 맞는 도구를 사용합니다. 버린 후보에 답이 없고 종료 상태가 요구 답임을 설명합니다.
+교환 논증으로 검증합니다. Greedy 선택을 포함하지 않는 최적해를 가정하고, 해당 선택을 Greedy 선택으로 교환했을 때 결과가 나빠지지 않음을 보입니다. 나빠진다면 Greedy가 틀린 것입니다. 반례 탐색은 n=2~4의 소규모 입력에서 Brute Force 결과와 Greedy 결과를 비교하는 Property Test로 시작합니다. 반례가 나오면 어떤 선택 조건이 빠졌는지 확인하고, 조건을 보완하거나 DP로 전환 여부를 판단합니다.
 
 ### Q5. 실시간 서버에서 지수 Algorithm을 어떻게 다루나요?
 
 후보와 깊이 상한, 강한 Pruning과 유망 순서를 사용합니다. Node·시간 Budget과 Cancellation을 두고 초과 시 Best-so-far, 근사, 이월·거절 같은 Fallback을 정의합니다.
 
-### Q6. 사전 계산을 선택하는 기준은 무엇인가요?
+### Q6. Zone 간 최단 이동 경로를 런타임마다 Dijkstra로 계산하다가 서버 CPU가 급등하는 장애가 발생했습니다. 사전 계산으로 전환하기로 결정했다면 구체적으로 무엇을 사전 계산하고, 어떤 조건에서 이 Cache를 무효화하겠습니까?
 
-입력이 거의 고정이고 Query가 많아 Build 비용을 분할 상환할 수 있을 때 고려합니다. Matrix·Table Memory, 변경 빈도, Version·무효화와 Warm-up 비용을 함께 비교합니다.
+Zone 간 Graph가 콘텐츠 패치 외에 거의 바뀌지 않는다면 Floyd-Warshall로 모든 쌍 최단 거리 Matrix를 빌드 타임에 계산해 메모리에 올립니다. 런타임 조회는 O(1)이 되어 CPU 급등 문제를 해결할 수 있습니다. 무효화 조건은 Map 콘텐츠 Version 변경(Zone 추가·삭제·Edge 비용 변경)과 이동 능력(비행·수중 이동 등) 조건이 달라지는 캐릭터 상태 변화입니다. Cache Key에 Map Version과 이동 조건 Hash를 포함하지 않으면 다른 문제의 답을 재사용하게 됩니다. 운영 관점에서는 Matrix 크기(Zone 수²×거리 값 Byte), Warm-up 시간, 패치 배포 시 재계산 시간을 측정해 허용 가능한지 확인합니다. Zone 수가 수천 개로 늘면 O(V³) 빌드 비용과 O(V²) 메모리가 문제가 되므로, 이 경우에는 Landmark 기반 근사 계산으로 전환하고 정확도 허용 범위를 API 계약으로 명시합니다.
 
-### Q7. 구현 후 무엇을 검증하나요?
+### Q7. 게임 서버 경로 탐색 Algorithm을 교체했는데 일부 Zone에서 경로가 반환되지 않는 장애가 발생했습니다. 원인 후보를 어떻게 좁히고 검증하나요?
 
-빈 입력, 경계·중복·Overflow, 도달 불가·Cycle과 여러 정답을 테스트합니다. Brute Force와 작은 Random Case를 비교하고 실제 최대 입력에서 시간·Memory와 p99를 측정합니다.
+먼저 경로가 반환되지 않는 Zone의 공통 특성을 확인합니다. 불연결 Component, 음수 Edge, 자기 Loop, Cycle 여부를 점검합니다. 다음으로 해당 Zone의 입력을 최소 재현 케이스로 줄여 Algorithm을 직접 실행하고 방문 순서·Relaxation 결과를 로그로 확인합니다. 경계 Case(단일 Vertex, 목적지가 시작점과 동일, INF 초기값)를 순서대로 테스트합니다. 교체 전 Algorithm과 동일 입력에서 출력을 비교하는 Regression Test도 실행합니다.
 
 ## 19. 예상 꼬리질문
 
-- 평균·최악·분할 상환 복잡도는 어떻게 다른가요?
-- BFS와 Dijkstra의 확정 시점은 어떻게 다른가요?
-- Binary Search와 Sliding Window에 필요한 단조성은 무엇인가요?
-- DP 공간 최적화가 경로 복원에 어떤 영향을 주나요?
-- MST와 최단 경로 Tree는 어떻게 다른가요?
-- 위상 정렬 결과의 유일성은 어떻게 판단하나요?
+- Dynamic Array Push가 분할 상환 O(1)이라는 것을 게임 서버 엔티티 Pool 설계에서 활용한다면 재할당 급등 구간을 어떻게 예측하고 사전 할당 전략을 세우겠습니까?
+- Matchmaking Queue에서 BFS 방식으로 가장 먼저 발견된 조합을 확정했더니 MMR 편차가 큰 매칭이 자주 발생합니다. Dijkstra 방식으로 전환해 가중 최적 조합을 찾을 때 확정 시점 기준이 어떻게 바뀌고 어떤 추가 비용이 생기나요?
+- NPC 순찰 경로 탐색에 Binary Search를 응용해 도달 가능 거리 임계값을 구하려 합니다. 탐색 대상 Predicate가 단조성을 만족하는지 어떻게 검증하고, 만족하지 않을 때 대안 접근은 무엇인가요?
+- Zone 연결 Graph에서 MST로 서버 간 통신 비용을 최소화하는 것과 Dijkstra로 특정 Zone 간 지연을 최소화하는 것이 실제 운영에서 충돌하는 사례를 설명하고, 어느 기준을 우선할지 판단하는 방법을 설명해 주세요.
 - Timeout 후 부분 결과의 정확성을 어떻게 계약하나요?
+- 게임 서버에서 Algorithm 선택 후 실제 성능이 기대와 다를 때 가장 먼저 측정하는 지표는 무엇인가요?
+- Matchmaking에서 Budget 초과로 Best-so-far를 반환했는데 플레이어 불만이 급증했습니다. 근사 품질의 허용 하한을 정하고 API 계약으로 명시하는 방법은 무엇인가요?
 
 ## 20. 30초 모범답변
 

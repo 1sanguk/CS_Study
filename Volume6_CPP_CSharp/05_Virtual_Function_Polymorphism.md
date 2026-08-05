@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Virtual Function의 vtable/vptr 동작과 동적 Dispatch 원리를 설명할 수 있다.
-- Virtual Destructor가 필요한 이유와 Constructor/Destructor 안 Virtual 호출 제약을 설명할 수 있다.
-- 동적 다형성, 정적 다형성, Composition의 선택 기준을 설명할 수 있다.
-- 게임 서버의 Handler·Skill Effect 다형성 설계에 Virtual Function을 적용할 수 있다.
+- Base Pointer·Reference 호출이 vptr·vtable을 통해 실제 타입의 Override로 Dispatch되는 경로를 추적하고, `final` 지정과 실제 타입 노출이 Devirtualization을 허용하는 조건을 판단할 수 있다.
+- 다형 삭제가 발생하는 Base Class에서 Virtual Destructor가 필요한 경우와 Protected Non-virtual Destructor로 외부 삭제를 제한해야 하는 경우를 구분하여 설계 결정을 내릴 수 있다.
+- 타입 집합이 열려 있는지 고정되어 있는지, 새 타입 추가와 새 연산 추가 중 어느 축으로 확장되는지에 따라 Virtual Interface·`variant`+Visitor 중 적합한 설계를 선택할 수 있다.
+- Packet Handler Registry에서 Hot Reload 중 실행 중인 Handler의 수명을 Epoch로 보호해야 하는 조건과, Skill Effect Tick에서 Virtual 호출과 분산 Allocation이 Cache Miss를 누적시키는 상황을 진단하고 ECS·Type별 배열 전환 시점을 판단할 수 있다.
 
 ## 1. 개요
 
@@ -310,7 +310,7 @@ struct IAIState
 ## 15. 자주 하는 오해
 
 - **`override`를 안 붙여도 Override가 된다**: Signature가 하나라도 다르면 새 Virtual을 만든다. `override`는 이를 Compile-time에 검출한다.
-- **Base Destructor가 Virtual이 아니어도 `delete`하면 된다**: Base Pointer로 Derived를 삭제하면 Derived Destructor가 호출되지 않아 Undefined Behavior가 된다.
+- **Base Class가 Pure Virtual Function만 있는 Interface면 vptr 비용이 없다**: Pure Virtual만 있는 Abstract Class도 vptr가 각 객체에 추가된다. Interface를 `unique_ptr<Base>`로 보관하면 객체마다 포인터 크기의 vptr 비용이 생긴다.
 - **Virtual Function은 항상 Overhead가 크다**: 실제 Hot Path 병목은 Cache Miss와 Allocation인 경우가 많다. 추측하지 말고 Profile 먼저다.
 - **Constructor에서 Virtual을 호출하면 Derived Override가 실행된다**: Construction 중에는 Derived 부분이 아직 생성되지 않아 Base Override가 실행된다.
 - **`dynamic_cast` 실패는 예외가 난다**: Pointer에 대한 `dynamic_cast` 실패는 nullptr를 반환한다. 예외는 Reference에 대한 실패 시 `std::bad_cast`다.
@@ -319,51 +319,51 @@ struct IAIState
 
 ## 16. 면접 질문
 
-### Q1. Virtual Function의 동작 원리를 설명해 주세요.
+### Q1. Handler Registry에서 ICommandHandler를 `unique_ptr<Base>`로 보관하고, Hot Reload 중 기존 Handler를 교체할 때 실행 중인 요청의 수명을 어떻게 보호하겠습니까?
 
-Compiler는 Virtual Function이 있는 Class에 vtable을 생성하고 각 객체에 vptr를 추가합니다. Base Pointer로 호출하면 vptr가 가리키는 vtable에서 함수 주소를 찾아 간접 호출합니다. 실제 타입의 Override가 실행됩니다.
+Registry가 Handler를 `unique_ptr<ICommandHandler>`로 소유합니다. Hot Reload 시 Registry 전체를 새 버전으로 교체하되, Epoch 카운터나 `shared_ptr` Snapshot으로 진행 중인 Dispatch가 완료될 때까지 기존 Handler가 소멸되지 않도록 보호합니다. Dispatch 시작 전 Epoch를 읽고 완료 후 Epoch 변경을 감지해 재시도하거나, Snapshot을 `shared_ptr`로 유지해 진행 중 요청이 완료된 뒤 자동 소멸시킵니다.
 
-### Q2. Virtual Destructor가 필요한 이유는 무엇인가요?
+### Q2. 멀티스레드 서버에서 Session을 `Base*`로 Worker에 전달하는 설계에서 Base Destructor가 Non-virtual인 채로 배포됐습니다. 어떤 장애 패턴이 발생하고, 어떻게 진단합니까?
 
-Base Pointer로 Derived 객체를 `delete`할 때 Base Destructor가 Virtual이 아니면 Derived Destructor가 호출되지 않아 Derived 자원이 정리되지 않고 Undefined Behavior가 됩니다. 다형 삭제가 발생하는 Base Class는 반드시 Virtual Destructor가 필요합니다.
+Base Pointer로 delete 시 Derived Destructor가 호출되지 않아 Derived 멤버(소켓, 버퍼 등)가 정리되지 않고 Undefined Behavior가 됩니다. 증상은 자원 누수, Valgrind·ASan의 Invalid Free, 간헐적 크래시입니다. 진단은 `static_assert(std::has_virtual_destructor<Base>::value)`로 Compile Time에 탐지하거나, Sanitizer로 잘못된 Delete를 감지합니다. Base를 외부에서 delete하는 모든 경로를 확인하고 Virtual Destructor를 추가하거나 Protected Non-virtual로 외부 삭제를 막습니다.
 
-### Q3. Override와 Overload를 비교해 주세요.
+### Q3. 배포 후 신규 Packet Handler가 예상 동작을 하지 않는 버그가 발생했습니다. `override` 미표기로 인해 Base Virtual을 재정의하지 않고 새 함수를 만든 경우, 어떻게 탐지하고 재발을 방지합니까?
 
-Override는 Derived가 Base의 Virtual Function을 같은 Signature로 재정의하는 것입니다. `override`를 표기해 Compiler가 검사합니다. Overload는 같은 Scope에서 이름은 같지만 Parameter가 다른 함수 집합을 만드는 것으로 Compile Time에 해결됩니다.
+`override` 미표기 시 Signature 차이(const 누락, Parameter 타입 불일치 등)로 인해 Base의 Virtual을 숨기는 새 함수가 생성됩니다. Base Pointer 호출 시 Base의 기본 구현이나 빈 Pure Virtual이 실행됩니다. 탐지는 `-Wall -Woverride` 또는 Clang의 `-Wsuggest-override`로 경고를 확인합니다. 재발 방지는 모든 Override에 `override`를 필수 표기하도록 Code Review와 Static Analysis(clang-tidy)를 적용합니다.
 
-### Q4. Virtual Function의 비용은 어느 수준인가요?
+### Q4. Skill Effect를 수십만 Entity Tick에서 `vector<unique_ptr<ISkillEffect>>`로 Virtual Dispatch하다 p99 지연이 16ms 목표를 초과했습니다. Cache Miss와 Virtual Dispatch 중 어느 것이 병목인지 어떻게 구분하고, 전환 기준은 무엇입니까?
 
-간접 호출 한 번, vptr 크기, Inlining 불가 비용이 있습니다. 하지만 실제 Hot Path에서는 흩어진 Heap 객체의 Cache Miss와 Allocation이 더 큰 병목이 될 수 있습니다. 추측하지 않고 Profile한 뒤 필요하면 ECS나 Type별 배열 처리를 고려합니다.
+perf stat 또는 VTune으로 cache-misses와 branch-misses를 측정합니다. Cache Miss가 높으면 분산 Allocation이 원인이고, Branch Miss가 높으면 Virtual Dispatch 예측 실패가 원인입니다. Cache Miss가 지배적이면 Type별 Contiguous Array로 전환해 메모리 지역성을 회복합니다. Virtual Dispatch 비용 자체가 크면 `final` 힌트로 Devirtualization을 유도하거나 ECS로 전환합니다. 전환 기준은 실제 p99와 Profiler 데이터이며 추측으로 교체하지 않습니다.
 
-### Q5. 동적 다형성 대신 `std::variant`를 쓸 때는 언제인가요?
+### Q5. 새 Packet 타입이 한 달에 한 번 추가되는 서버와, Enemy AI Type이 기획 확정 후 고정인 시스템이 있습니다. 각각 Virtual Interface와 `variant`+Visitor 중 어느 것을 선택하고 그 근거는 무엇입니까?
 
-타입 집합이 고정되어 있고 새 연산을 자주 추가할 때 `variant`+Visitor가 더 명확합니다. Virtual Interface는 타입 집합이 열려 있고 새 타입을 자주 추가할 때 적합합니다. 상황에 따라 두 가지를 혼용할 수 있습니다.
+Packet Handler는 타입 집합이 계속 확장되므로 새 Derived Class를 추가할 때 기존 코드를 수정하지 않는 Virtual Interface(Open-closed)가 적합합니다. Enemy AI는 타입이 고정이고 새 연산(공격, 추적, 패턴 등)을 자주 추가한다면 `variant`+Visitor가 연산 추가 시 모든 타입을 한곳에서 처리하게 해 누락을 방지합니다. 혼용 시에는 경계가 명확해야 하며, 한 타입이 두 방식으로 처리되면 유지보수가 복잡해집니다.
 
-### Q6. Constructor 안에서 Virtual을 호출하면 어떻게 되나요?
+### Q6. BaseSession Constructor에서 `OnConnect()` Virtual을 호출했는데 DerivedSession의 Override가 실행될 것을 기대했지만 BaseSession::OnConnect가 실행됐습니다. 어떻게 재설계하겠습니까?
 
-Construction 중에는 Derived 부분이 아직 생성되지 않으므로 현재 Class의 Override가 호출됩니다. Derived Override로 Dispatch되지 않습니다. Destructor 안도 동일하게 이미 파괴된 Derived 부분에 Dispatch되지 않습니다.
+Construction 중 vptr는 현재 Class를 가리키므로 Base Constructor에서 Virtual 호출은 Derived Override로 Dispatch되지 않습니다. 재설계 방법은 두 가지입니다. 첫째, Factory 함수나 `Init()` 메서드를 별도로 두어 객체 생성 완료 후 호출합니다. 둘째, Template Method 패턴으로 Base의 비가상 공통 흐름 안에 Derived가 구현할 Hook을 Pure Virtual로 두고, 외부에서 객체 생성 후 명시적으로 호출합니다. Constructor에서 Virtual 호출 패턴은 전부 제거합니다.
 
 ## 17. 예상 꼬리질문
 
-- Pure Virtual Function과 Abstract Class의 관계는 무엇인가요?
-- `final`이 성능에 영향을 줄 수 있는 이유는 무엇인가요?
-- Protected Non-virtual Destructor를 사용하는 경우는 언제인가요?
-- Object Slicing을 방지하는 방법은 무엇인가요?
-- Liskov Substitution 원칙이 깨지는 예를 들 수 있나요?
-- Template과 Virtual을 함께 쓸 때 주의할 점은 무엇인가요?
-- Base Class의 Contract는 어떻게 문서화하나요?
+- Handler Registry에 등록된 ICommandHandler가 Session Reference를 내부에 캐싱했을 때 Session 종료 후 어떤 수명 버그가 발생하고, 어떻게 설계를 수정합니까?
+- Skill Effect 구조를 Virtual Interface에서 ECS Type별 배열로 전환할 때 기존 `override`로 구현된 특수 Effect 10개를 이전하는 순서와 회귀 검증 방법은 무엇입니까?
+- 게임 서버 Hot Path에서 `dynamic_cast` Downcast가 매 Frame 수천 번 호출되는 것이 발견됐습니다. Visitor 패턴 또는 Virtual Double Dispatch로 교체할 때 Trade-off는 무엇입니까?
+- Monster AI State를 Virtual Interface로 구현하다 State 전환 중 Enter() 또는 Exit() 내에서 또 State를 바꾸는 재진입 버그가 발생했습니다. 어떻게 방어합니까?
+- ICommandHandler Base에 새 Pure Virtual을 추가했을 때 Handler 구현이 100개를 넘는 Codebase에서 누락된 Override를 Compile Time에 모두 탐지하는 방법은 무엇입니까?
+- `vector<unique_ptr<Entity>>`에서 특정 Entity 타입만 일괄 처리하는 요구가 생겼을 때 `dynamic_cast`로 순회하는 방식과 Type별 별도 Vector를 유지하는 방식 중 어느 상황에서 어느 쪽을 선택합니까?
+- 서비스 중 Handler Registry를 Hot Reload로 교체했는데 구 Handler 소멸 후 Worker Thread에서 이미 꺼낸 포인터로 접근해 Segfault가 발생했습니다. 이 버그를 재현하는 최소 시나리오와 Epoch·`shared_ptr` Snapshot 중 어느 방식으로 수정하겠습니까? 각 방식의 동기화 비용 차이는 무엇입니까?
 
 ## 18. 30초 모범답변
 
-> Virtual Function은 vptr·vtable을 통해 Base Pointer 호출을 실제 타입의 Override로 Dispatch합니다. Base Pointer로 삭제하는 Class는 Virtual Destructor가 필요합니다. 확장성에 유리하지만 Cache Miss가 많은 수십만 Entity Tick에서는 ECS나 Type별 배열 처리도 측정해 비교합니다.
+> Virtual Function은 vptr·vtable 간접 호출로 Base Pointer 요청을 실제 타입의 Override로 Dispatch합니다. Base Pointer로 delete하는 Class는 Virtual Destructor가 없으면 Derived 멤버가 정리되지 않아 ASan에서 Invalid Free로 잡힙니다. Packet Handler처럼 확장이 열려 있으면 Virtual Interface가 맞고, Enemy AI처럼 타입이 고정이면 `variant`+Visitor가 연산 누락을 Compile Time에 잡아줍니다. 수십만 Entity Tick에서 p99가 튀면 Cache Miss인지 Virtual Dispatch인지 perf stat으로 구분하고 Profile 데이터 없이 교체하지 않습니다.
 
 ## 19. 1~2분 확장답변
 
-> Virtual Function은 객체의 vptr가 가리키는 vtable에서 함수 주소를 찾는 간접 호출로 동적 Dispatch를 구현합니다. Base Pointer로 Derived를 삭제하려면 Base Destructor가 Virtual이어야 하며, Constructor와 Destructor 안의 Virtual 호출은 현재 Class의 Override만 실행됩니다.
+> Virtual Function은 vptr·vtable 간접 호출로 동적 Dispatch를 구현합니다. 실수가 생기는 지점이 세 곳입니다. 첫째, Base Pointer로 delete할 때 Virtual Destructor가 없으면 Derived 멤버(소켓, 버퍼)가 정리되지 않아 Valgrind·ASan에서 Invalid Free로 잡힙니다. 둘째, `override` 미표기 시 Signature 불일치로 새 함수가 생기고 Base의 빈 기본 구현이 실행되는데, `-Wsuggest-override`와 clang-tidy로 Compile Time에 잡습니다. 셋째, Constructor 안에서 Virtual 호출 시 vptr가 Base를 가리키므로 Derived Override가 실행되지 않습니다. Factory나 `Init()` 메서드로 분리합니다.
 >
-> 상속은 Base 계약을 만족하는 "is-a" 관계에 사용하고, 재사용만이 목적이면 Composition을 씁니다. Derived가 Base를 기대하는 코드에 완전히 대체 가능해야 한다는 Liskov Substitution을 지켜야 합니다.
+> 설계 선택은 타입 집합의 개방성으로 결정합니다. Packet Handler처럼 타입이 계속 추가되면 Virtual Interface가 Open-closed를 지킵니다. Enemy AI처럼 타입이 고정이고 연산을 자주 추가하면 `variant`+Visitor가 새 연산 추가 시 모든 타입 처리를 한 `visit` 안에서 강제해 누락을 방지합니다.
 >
-> 게임 서버에서 Packet Handler를 Virtual Interface로 Registry에 등록하면 새 Handler 추가 시 Dispatch 코드를 수정하지 않아도 됩니다. 단 수십만 Entity의 매 Tick Virtual 호출은 Cache Miss가 누적되므로 Profile 후 ECS나 Type별 배열 처리와 비교합니다.
+> 성능 측면에서, 수십만 Entity Tick에서 p99가 16ms 목표를 초과하면 perf stat으로 cache-misses와 branch-misses를 측정합니다. Cache Miss가 지배적이면 분산 Heap Allocation이 원인이므로 Type별 Contiguous Array나 ECS로 전환합니다. Virtual Dispatch 예측 실패가 크면 `final`로 Devirtualization을 유도합니다. 추측으로 교체하지 않고 Profile 데이터가 먼저입니다.
 
 ## 20. 핵심 요약
 

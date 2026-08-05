@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Blocking과 Non-blocking I/O의 차이와 대규모 연결에서 Non-blocking이 필요한 이유를 설명할 수 있다.
-- epoll Level-triggered vs Edge-triggered 차이와 Partial Read/Write 처리 방법을 설명할 수 있다.
-- I/O Thread와 Logic Thread를 분리해야 하는 이유와 Send Queue Backpressure 설계를 설명할 수 있다.
-- Readiness 모델(epoll)과 Completion 모델(IOCP)의 Buffer 소유권 차이를 설명할 수 있다.
+- Event Loop CPU가 배포 직후 40%→95%로 급등했을 때, I/O Thread 내 동기 호출·Logic 오프로드 누락·EAGAIN 반복 중 병목 위치를 지표로 특정하고 분리 전략을 결정할 수 있다.
+- epoll Edge-triggered 서버에서 특정 클라이언트 응답이 수백 ms 지연될 때, EAGAIN까지 읽지 않은 Event 누락인지 Partial Write EPOLLOUT 미등록인지 진단하고 수정 방향을 결정할 수 있다.
+- Send Queue 64KB 상한 초과 시 위치 Snapshot 덮어쓰기·낮은 우선순위 Drop·연결 종료 중 메시지 종류와 게임 규칙을 기준으로 Backpressure 정책을 결정할 수 있다.
+- IOCP 서버에서 Overlapped Buffer 조기 해제로 메모리 오염이 발생했을 때, Completion Event와 Buffer Lifetime을 연동하는 설계와 epoll Readiness 방식의 소유권 차이를 기준으로 수정 방향을 결정할 수 있다.
 
 ## 1. 개요
 Blocking I/O는 작업 완료까지 호출 Thread가 기다리고 Non-blocking I/O는 즉시 가능한 결과나 미완료를 반환한다.
@@ -186,43 +186,44 @@ Send Queue 상한(예: 64KB)을 넘으면 위치 Snapshot 같은 상태 메시�
 
 ## 8. 자주 하는 오해
 
-- **Non-blocking I/O를 쓰면 항상 처리량이 높아진다.** Event Loop 안에서 DB 조회나 파일 I/O를 동기로 호출하면 Single Thread 병목이 생겨 오히려 Blocking보다 나빠진다.
-- **Single Thread Event Loop는 동시성 문제가 없다.** 외부 콜백, Signal Handler, 공유 전역 변수 접근에서 Race가 여전히 발생한다. 특히 Timer 콜백이 다른 Thread에서 호출되는 경우가 있다.
-- **Readiness Event가 오면 완전한 Packet이 도착했다.** Readiness는 "지금 읽을 바이트가 있다"는 신호이며 완전한 Frame이 왔다는 보장이 아니다. Accumulation Buffer와 Framing이 여전히 필요하다.
-- **Non-blocking recv가 -1이면 항상 오류다.** `errno == EAGAIN || errno == EWOULDBLOCK`은 오류가 아니라 "지금 읽을 데이터 없음"이다. 정상적으로 루프를 탈출하고 다음 Event를 기다려야 한다.
-- **IOCP Completion Event가 오면 Buffer가 안전하다.** Completion이 오기 전에 Buffer를 해제하면 메모리 오염이 발생한다. Overlapped 구조체와 Buffer는 Completion까지 살아 있어야 한다.
-- **epoll Edge-triggered에서 한 번만 읽어도 된다.** ET에서는 상태 변화 시 한 번만 알린다. EAGAIN까지 반복해서 읽지 않으면 다음 데이터가 올 때까지 Event를 받지 못한다.
-- **Partial Write는 잘 발생하지 않는다.** 커널 Send Buffer가 가득 찼을 때 `send`는 일부만 전송하고 반환한다. 반환값을 확인해 남은 데이터를 Send Queue에 유지해야 한다.
+- **Non-blocking I/O를 사용하면 처리량이 항상 더 높아진다.** Event Loop 안에서 DB 조회나 파일 I/O를 동기로 호출하면 Single Thread 병목이 생겨 오히려 Thread-per-connection보다 나빠진다.
+- **Single Thread Event Loop는 동시성 문제가 없다.** 외부 콜백, Signal Handler, 공유 전역 변수 접근에서 Race가 여전히 발생한다. Timer 콜백이 다른 Thread에서 호출되는 경우도 있다.
+- **Readiness Event가 오면 완전한 Packet이 도착했다.** Readiness는 "지금 읽을 바이트가 있다"는 신호이며 완전한 Frame 보장이 아니다. Accumulation Buffer와 Framing이 여전히 필요하다.
+- **Non-blocking recv가 -1을 반환하면 항상 오류다.** `errno == EAGAIN || errno == EWOULDBLOCK`은 "지금 읽을 데이터 없음"으로 정상 신호다. 루프를 탈출하고 다음 Event를 기다려야 한다.
+- **IOCP Completion Event가 오면 Buffer를 바로 해제해도 된다.** Completion이 오기 전에 Buffer를 해제하면 메모리 오염이 발생한다. Overlapped 구조체와 Buffer는 Completion까지 살아 있어야 한다.
+- **epoll Edge-triggered에서 한 번만 읽으면 충분하다.** ET에서는 상태 변화 시 한 번만 알린다. EAGAIN까지 반복해서 읽지 않으면 다음 데이터가 올 때까지 Event를 받지 못한다.
+- **Partial Write는 잘 발생하지 않으므로 처리하지 않아도 된다.** 커널 Send Buffer가 가득 찼을 때 `send`는 일부만 전송하고 반환한다. 반환값을 확인해 남은 데이터를 Send Queue에 유지해야 한다.
+- **Thread-per-connection 방식은 Non-blocking 방식보다 항상 열등하다.** 관리 서버처럼 연결 수가 수십~수백 개에 불과한 환경에서는 코드 단순성이 오히려 유리하다. 연결 수와 I/O 특성을 측정한 뒤 선택해야 한다.
 
 ## 9. 면접 질문
 
-### Q1. Blocking과 Non-blocking I/O의 차이와 대규모 연결에서 Non-blocking이 필요한 이유는?
-Blocking `recv`는 데이터가 없으면 호출 Thread를 기다리게 합니다. 연결마다 Thread를 배치하면 수만 연결 시 Stack 메모리와 Context Switch 비용이 증가합니다. Non-blocking은 데이터 없으면 `EAGAIN`을 반환해 Thread가 다른 연결의 Event를 처리할 수 있습니다.
+### Q1. I/O Thread의 Event Loop CPU 사용률이 배포 직후 40%→95%로 급등했습니다. 병목 위치를 어떤 순서로 진단하나요?
+먼저 `perf record -g` 또는 `async-profiler`로 Hot Function을 확인합니다. ParseAndDispatch가 지배적이면 I/O Thread 내 무거운 Logic이 원인이므로 Logic Queue 오프로드를 점검합니다. epoll_wait 호출 비율이 낮고 다른 시스템 콜이 많다면 Redis·DB 동기 호출을 의심합니다. EAGAIN 반환 횟수 지표가 급증하면 Burst 트래픽으로 루프 비용이 과다한 상황이므로 per-session 처리 상한을 도입합니다.
 
-### Q2. epoll Level-triggered와 Edge-triggered의 차이는 무엇인가요?
-Level-triggered(LT)는 FD가 준비 상태인 동안 계속 Event를 알립니다. Edge-triggered(ET)는 상태 변화 시 한 번만 알립니다. ET에서는 EAGAIN까지 모두 읽어야 다음 데이터 도착 시 Event를 받을 수 있습니다. ET는 불필요한 wakeup이 적지만 구현이 더 복잡합니다.
+### Q2. epoll Edge-triggered 서버에서 특정 클라이언트 응답이 수백 ms 지연됐습니다. EAGAIN까지 읽지 않은 Event 누락인지 어떻게 확인하나요?
+해당 FD의 recv 루프에 로그를 추가해 마지막 EAGAIN 반환 시각과 다음 epoll_wait Event 도착 시각의 차이를 측정합니다. EAGAIN 없이 루프를 탈출한 기록이 있으면 중간에 break가 삽입됐거나 0 바이트 반환을 EOF로 오해한 것입니다. Level-triggered로 임시 전환해 같은 지연이 사라지는지 확인하면 ET Event 누락임을 확정할 수 있습니다.
 
-### Q3. Partial Read/Write 상황을 어떻게 처리하나요?
-`recv`는 요청한 것보다 적은 바이트를 반환할 수 있습니다. Accumulation Buffer에 쌓고 완전한 Frame이 모일 때까지 대기합니다. `send`도 마찬가지로 일부만 전송하면 남은 offset을 Session의 Send Queue에 저장하고, 다음 EPOLLOUT Event에서 이어서 전송합니다.
+### Q3. 10만 CCU 서버에서 특정 Session의 Send Queue가 64KB 상한에 반복 도달합니다. 위치 Snapshot과 인벤토리 변경에 서로 다른 Backpressure를 어떻게 설계하나요?
+Session별 Send Queue를 우선순위별로 분리합니다. 위치 Snapshot처럼 최신 상태만 의미 있는 메시지는 Drop-oldest 정책으로 새 값이 오면 이전 Entry를 덮어씁니다. 인벤토리 변경·결제 확인처럼 모든 이벤트가 중요한 메시지는 별도 큐에 보관하고 상한 초과 시에도 Drop하지 않습니다. 총 Send Queue가 64KB를 초과하면 연결 종료를 Slow Consumer 지표와 함께 기록합니다.
 
-### Q4. I/O Thread에서 무거운 로직을 수행하면 어떤 문제가 생기나요?
-I/O Thread가 DB 조회나 경로 탐색을 동기로 수행하면 그 시간 동안 다른 모든 연결의 Event 처리가 지연됩니다. Single Thread Event Loop이 10ms 동안 블로킹되면 1만 연결 모두에 10ms 지연이 전파됩니다. 무거운 작업은 제한된 Logic Queue로 오프로드해야 합니다.
+### Q4. IOCP 서버에서 Overlapped Buffer를 Completion 전에 해제해 메모리 오염이 발생했습니다. Buffer Lifetime을 안전하게 관리하는 설계를 설명하세요.
+Overlapped 구조체와 Buffer를 같은 할당 블록에 묶어 소유권을 Completion에 위임합니다. `WSARecv` 등록 시 Buffer 참조 카운트를 1 증가시키고 Completion Port에서 통지를 받은 뒤에만 해제합니다. epoll Readiness 방식과 달리 IOCP는 Kernel이 I/O를 수행하는 동안 Buffer를 점유하므로 앱에서 임의로 해제하면 안 됩니다. Completion을 기다리지 않고 Session을 종료할 경우 CancelIoEx 호출 후 Completion 통지를 받아 Buffer를 정상 해제해야 합니다.
 
-### Q5. Send Queue Backpressure를 어떻게 설계하나요?
-Session별 Send Queue에 Byte 상한(예: 64KB)을 두고, 초과 시 메시지 종류에 따라 다른 정책을 적용합니다. 위치 Snapshot처럼 최신 값만 의미 있는 메시지는 오래된 것을 덮어씁니다. 인벤토리 변경처럼 모든 이벤트가 중요한 메시지는 대기열에 유지하거나 상한 초과 시 연결을 끊습니다.
+### Q5. I/O Thread에서 Redis 조회를 동기로 호출하다 Event Loop 지연이 50ms를 초과해 1만 Session 전체에 영향을 줬습니다. Logic 오프로드 설계를 설명하세요.
+I/O Thread는 Byte 이동과 Packet Framing만 담당하고, 완전한 Packet이 파싱되면 (Session ID, Packet) 쌍을 Logic Queue에 전달합니다. Logic Thread Pool이 Redis 조회 등 무거운 작업을 처리하고 결과를 Session의 Send Queue에 넣습니다. Logic Queue 깊이와 처리 지연을 Prometheus Histogram으로 수집해 오프로드 미완료 구간을 탐지합니다. I/O Thread에서 허용하는 처리 시간 예산(예: 1ms)을 설정하고 초과 시 알람을 발생시킵니다.
 
-### Q6. Readiness 모델(epoll)과 Completion 모델(IOCP)의 Buffer 소유권 차이는?
-epoll Readiness는 "이제 읽을 수 있다"고 알리고 앱이 직접 `recv`를 호출합니다. Buffer는 앱이 소유하고 `recv` 호출 시점에만 필요합니다. IOCP Completion은 `WSARecv`에 Buffer를 등록하고 I/O 완료 후 Buffer와 함께 통지합니다. Overlapped Buffer는 Completion Event가 올 때까지 해제하면 안 됩니다.
+### Q6. 비동기 I/O 진행 중 Session이 Timeout으로 종료됐을 때, 등록된 IOCP Overlapped 작업과 epoll 이벤트를 안전하게 취소하는 방법을 설명하세요.
+IOCP는 `CancelIoEx`로 진행 중인 Overlapped 작업을 취소하고 ERROR_OPERATION_ABORTED Completion을 기다린 뒤 Buffer를 해제합니다. epoll은 `epoll_ctl(EPOLL_CTL_DEL)`로 FD를 감시 목록에서 제거하고 Socket을 닫으면 이미 반환된 이벤트 외에 추가 통지를 막을 수 있습니다. Session 상태를 Closing으로 전환 후 Completion 통지나 이벤트 핸들러가 실행될 때 Session이 이미 Closing인지 확인해 이중 해제를 방지합니다.
 
 ## 10. 예상 꼬리질문
 
-- `epoll_wait` 반환 후 여러 Event를 처리하는 순서가 성능에 영향을 주나요?
-- Reactor 패턴과 Proactor 패턴의 차이는 무엇인가요?
-- `io_uring`이 epoll 대비 유리한 상황은 언제인가요?
-- Session별 Send Queue에서 Head-of-Line Blocking을 어떻게 줄이나요?
-- Non-blocking I/O에서 Timeout을 어떻게 구현하나요?
-- Event Loop이 CPU 100%일 때 병목을 어떻게 찾나요?
-- 연결이 끊겼을 때 진행 중인 비동기 I/O Callback을 어떻게 안전하게 취소하나요?
+- epoll_wait가 반환한 100개 이벤트 중 읽기와 쓰기가 혼재할 때, 쓰기를 먼저 처리하면 Send Queue 크기에 어떤 영향을 주나요?
+- Event Loop를 4개 Thread로 병렬화했는데 같은 Session 이벤트가 두 Thread에서 동시에 처리되는 버그가 발생했습니다. Connection-to-Thread 고정 없이 어떻게 방지하나요?
+- io_uring Submission Queue에 10만 건을 등록했는데 Kernel이 처리 완료 전에 추가 등록하면 SQ Full 오류가 발생합니다. Backpressure를 어떻게 설계하나요?
+- Non-blocking send에서 EAGAIN이 반환될 때 EPOLLOUT을 등록하지 않으면 어떤 현상이 발생하고, 필요하지 않을 때 EPOLLOUT을 그대로 두면 어떤 문제가 생기나요?
+- Session별 Send Queue에서 1MB 대형 Packet이 Head에 쌓여 100B 소형 Packet이 수백 ms 지연되는 Head-of-Line Blocking이 발생했습니다. Chunking 없이 해결하는 방법은 무엇인가요?
+- Event Loop CPU 100% 상황에서 perf record로 Hot Function을 찾았더니 ParseAndDispatch가 지배적이었습니다. Logic Queue 오프로드 외에 I/O Thread 내에서 먼저 시도할 수 있는 최적화는 무엇인가요?
+- IOCP Completion Thread 수를 2→32로 늘렸더니 처리량이 오히려 감소했습니다. False Sharing과 Lock 경합 중 어느 쪽이 원인인지 진단하는 방법과 최적 Thread 수 결정 기준을 설명하세요.
 
 ## 11. 30초 모범답변
 

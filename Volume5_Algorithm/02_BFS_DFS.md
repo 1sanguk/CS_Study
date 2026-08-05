@@ -11,9 +11,9 @@ importance: 5
 
 ## 학습 목표
 
-- BFS와 DFS의 탐색 순서와 자료구조를 설명할 수 있다.
+- Graph 문제에서 최단 경로가 필요하면 BFS, 모든 경로·연결 확인이 필요하면 DFS를 선택하는 기준을 판단할 수 있다.
 - Graph·Grid에서 방문 처리와 시간·공간 복잡도를 분석할 수 있다.
-- BFS가 비가중 최단 경로를 보장하는 이유와 적용 조건을 설명할 수 있다.
+- Edge 가중치와 Graph 형태를 보고 BFS·Dijkstra·0-1 BFS 중 어느 알고리즘이 최단 경로를 보장하는지 선택할 수 있다.
 - 경로 복원, 연결 요소, Cycle 탐지와 게임 월드 탐색에 적용할 수 있다.
 
 ## 1. 개요
@@ -264,6 +264,42 @@ Town ─ Field ─ Dungeon
 Queue는 Town에서 1 Hop, 2 Hop 순서로 확장
 ```
 
+```java
+// BFS: Zone 최단 이동 경로 탐색 (모든 Edge 비용 = 1)
+int bfsShortestPath(Map<Integer, List<Integer>> adj, int start, int target) {
+    Queue<Integer> queue = new LinkedList<>();
+    Set<Integer> visited = new HashSet<>();
+    queue.offer(start);
+    visited.add(start);  // 방문 표시는 Queue에 넣을 때
+    int distance = 0;
+    while (!queue.isEmpty()) {
+        int size = queue.size();
+        for (int i = 0; i < size; i++) {
+            int cur = queue.poll();
+            if (cur == target) return distance;
+            for (int next : adj.getOrDefault(cur, List.of())) {
+                if (!visited.contains(next)) {
+                    visited.add(next);
+                    queue.offer(next);
+                }
+            }
+        }
+        distance++;
+    }
+    return -1;
+}
+
+// DFS: 연결 여부 확인 (재귀)
+boolean dfsConnected(Map<Integer, List<Integer>> adj, int cur, int target, Set<Integer> visited) {
+    if (cur == target) return true;
+    visited.add(cur);
+    for (int next : adj.getOrDefault(cur, List.of())) {
+        if (!visited.contains(next) && dfsConnected(adj, next, target, visited)) return true;
+    }
+    return false;
+}
+```
+
 Portal별 이동 시간이 다르면 최소 Hop과 최소 시간이 다르므로 Dijkstra가 필요하다. “최단”의 비용 정의를 먼저 확인한다.
 
 ### 맵 연결 검증
@@ -291,49 +327,71 @@ Portal별 이동 시간이 다르면 최소 Hop과 최소 시간이 다르므로
 
 ## 14. 자주 하는 오해
 
-- **BFS는 모든 가중 Graph의 최단 경로를 구한다**: 동일 Edge 비용에서 최소 Hop만 보장한다.
+- **BFS는 항상 DFS보다 메모리를 적게 사용한다**: BFS는 같은 Level의 모든 노드를 Queue에 보관하므로 넓은 Graph(Branching Factor가 큰 경우)에서 메모리가 O(V)까지 증가한다. DFS는 현재 경로의 Stack만 유지하므로 깊이 D에서 O(D). 좁고 깊은 Graph에서는 DFS가 오히려 메모리 효율적이다. 넓고 얕은 Graph에서는 BFS가 불리하다.
 - **DFS가 먼저 찾은 경로가 최단이다**: 탐색 순서에 따른 한 경로일 뿐이다.
 - **방문 표시는 Queue에서 꺼낼 때 해도 같다**: 중복 Enqueue로 Memory와 작업이 커질 수 있다.
 - **BFS와 DFS는 항상 O(V+E)다**: 인접 리스트 기준이며 행렬에서는 O(V²)가 될 수 있다.
 - **재귀 DFS는 Memory O(1)이다**: 호출 Stack이 깊이에 비례한다.
-- **Tree 탐색에는 방문 배열이 항상 필요하다**: 부모로 되돌아가지 않는 Tree 순회는 생략 가능하지만 일반 Graph에는 필요하다.
+- **BFS와 DFS의 탐색 결과는 구현 방식에 무관하게 항상 동일하다**: 재귀 DFS와 명시적 Stack DFS는 이웃 처리 순서가 다를 수 있어 방문 순서가 달라진다. 인접 목록 순서도 결과에 영향을 준다. 순서가 결정적이어야 한다면 이웃을 정렬하거나 처리 순서를 명시해야 한다.
 - **BFS Queue는 최대 한 Level 크기뿐이다**: 처리 중 다음 Level도 함께 들어 있어 Frontier 규모를 넉넉히 봐야 한다.
 
 ## 15. 면접 질문
 
-### Q1. BFS와 DFS를 비교해 주세요.
+### Q1. 게임 서버 Zone 이동 탐색에서 Portal 비용이 모두 1일 때와 가중치가 다를 때 BFS·Dijkstra·0-1 BFS 선택 기준은?
 
-BFS는 Queue로 가까운 Level부터 탐색하고 비가중 최소 Hop을 보장합니다. DFS는 Stack이나 재귀로 한 경로를 깊게 탐색해 Cycle, 연결 요소, 위상 정렬 등에 자연스럽습니다. 인접 리스트에서는 둘 다 O(V+E)입니다.
+**30초 모범답변**: 모든 간선 비용이 동일하면 BFS로 충분(O(V+E)). 비용이 0·1 두 종류뿐이면 0-1 BFS(Deque). 일반 양수 가중치면 Dijkstra. 음수 있으면 Bellman-Ford.
 
-### Q2. BFS가 비가중 최단 경로를 보장하는 이유는 무엇인가요?
+**1~2분 모범답변**: 게임 서버의 Zone Portal은 대부분 비용이 1이므로 BFS가 기본 선택. 그러나 이동 피로도나 레벨 제한을 비용으로 모델링하면 가중치가 생긴다. 비용이 0과 1뿐(예: 같은 Zone 내 이동=0, Portal 이동=1)이면 Deque 기반 0-1 BFS로 O(V+E) 유지. 피로도가 다양한 양수값이면 PriorityQueue 기반 Dijkstra로 O((V+E) log V). 알고리즘 선택 기준은 가중치 범위이며, 먼저 가중치 유무→음수 여부→0·1 여부 순으로 판단.
 
-FIFO Queue로 거리 d인 Vertex를 모두 처리한 뒤 d+1을 처리합니다. Vertex가 처음 발견된 경로보다 짧은 경로가 있다면 더 이전 Level에서 발견됐어야 하므로 첫 방문 거리가 최소입니다.
+### Q2. BFS Frontier가 단일 Tick Budget을 초과할 만큼 폭증할 때 탐색 범위를 어떻게 제한하는가?
 
-### Q3. 방문 표시는 언제 해야 하나요?
+**30초 모범답변**: Budget 기반 탐색 중단(방문 노드 수 제한), 또는 탐색을 여러 Tick으로 분할하는 Incremental BFS 사용. 탐색 결과를 Cache해 동일 출발지 재탐색 방지.
 
-일반 BFS에서는 Queue에 넣을 때 표시합니다. 꺼낼 때 표시하면 여러 부모가 같은 Vertex를 중복으로 Enqueue할 수 있습니다. DFS도 탐색 진입 시 표시해 Cycle 반복을 막습니다.
+**1~2분 모범답변**: BFS Frontier는 최악 O(V) — 게임 서버에서 Zone 수가 수천 개면 단일 Tick(16ms)에 처리 불가. 대응 전략: (1) Max Depth 제한 — 탐색 반경을 N Hop 이내로 제한해 Frontier 크기 상한 설정 (2) Incremental BFS — BFS 상태(Queue·visited)를 유지하며 Tick마다 일정량만 처리, 결과는 비동기로 전달 (3) Precomputed Paths — 정적 맵이면 서버 시작 시 Zone 간 최단 거리를 AllPairs BFS로 사전 계산해 캐싱. 동적 맵(Zone 연결 변경)이면 변경된 구역만 재계산하는 Incremental 방식 적용.
 
-### Q4. BFS와 DFS의 공간 복잡도를 비교해 주세요.
+### Q3. 대규모 게임 서버에서 수백 개의 플레이어 요청이 동시에 Zone 탐색을 수행할 때, 요청별로 독립적인 방문 상태가 필요한 이유는 무엇이고 공유 방문 배열을 사용했을 때 어떤 장애가 발생하는가?
 
-둘 다 최악 O(V)입니다. BFS는 넓은 Frontier에서 Queue가 커지고 DFS는 깊은 Chain에서 Stack이나 재귀 깊이가 커집니다. 입력 형태에 따라 실제 Peak가 다릅니다.
+**30초 모범답변**: 공유 방문 배열을 사용하면 요청 A의 방문 표시가 요청 B의 탐색 경로를 잘못 차단한다. 잠금 없이 사용하면 Race Condition으로 일부 Zone이 탐색에서 누락되거나 결과가 오염된다. 각 요청은 독립적인 visited 구조를 가져야 하며, 재사용하려면 Generation 카운터나 Thread-Local 구조가 필요하다.
 
-### Q5. 실제 최단 경로는 어떻게 복원하나요?
+**1~2분 모범답변**: 공유 방문 배열의 문제는 두 가지다. (1) 논리적 오염: 요청 A가 Zone 5를 방문 표시한 상태에서 요청 B가 탐색하면 Zone 5를 이미 방문된 것으로 판단해 올바른 경로를 건너뛴다. (2) Race Condition: 멀티 스레드 환경에서 visited[zone] 읽기·쓰기가 원자적이지 않으면 두 요청이 같은 Zone을 동시에 방문하거나 방문 기록이 유실된다.
 
-Vertex를 처음 발견할 때 `parent[next] = current`를 저장합니다. 목적지부터 Parent를 따라 시작점까지 역추적하고 결과를 뒤집습니다.
+해결 방안: 요청별로 `new boolean[V]`를 할당하면 독립성은 보장되지만 초당 수백 건 요청 시 GC 압박이 문제가 된다. Generation 카운터 방식은 전역 배열 하나에 `int[] visitGen`을 두고 현재 요청 ID와 비교한다 — 초기화 없이 O(1)로 방문 여부를 확인. Thread-Local 배열은 스레드당 한 번 할당 후 재사용하되 요청 시작 시 Generation만 증가시킨다. Generation이 int 최대값에 도달하면 전체 배열을 0으로 초기화하고 Generation을 1로 재설정하는 안전 경로가 필요하다.
 
-### Q6. 방향 Graph의 Cycle을 DFS로 어떻게 찾나요?
+### Q4. 메모리가 제한된 환경에서 BFS가 DFS보다 불리한 경우와 DFS의 Stack Overflow 위험을 동시에 회피하는 설계는?
 
-미방문, 현재 경로, 완료 상태를 구분합니다. DFS 중 현재 경로에 있는 GRAY Vertex로 향하는 Edge를 만나면 Back Edge이므로 Cycle입니다.
+**30초 모범답변**: BFS는 넓은 Graph에서 Queue 크기가 O(V)까지 증가해 메모리 부담. DFS 재귀는 깊은 Graph에서 Stack Overflow. 두 위험을 동시에 피하려면 명시적 Stack을 쓰는 반복 DFS 또는 Depth 제한 DFS(IDDFS) 사용.
+
+**1~2분 모범답변**: 구체적 선택: (1) 반복 DFS — 시스템 Call Stack 대신 자체 Stack(ArrayDeque)으로 DFS 구현, Stack Overflow 위험 제거. BFS처럼 전체 Frontier를 보관하지 않아 메모리 O(D). (2) IDDFS(Iterative Deepening DFS) — 깊이 한계를 점진적으로 늘리며 DFS 반복. BFS의 최단 경로 보장 + DFS의 O(D) 메모리. 단점은 중복 방문으로 시간 오버헤드. (3) Bidirectional BFS — 출발지·목적지 양쪽에서 동시 탐색해 Frontier 크기를 절반으로 줄임. 트레이드오프는 구현 복잡도 증가.
+
+### Q5. 퀘스트 의존성 그래프에서 특정 퀘스트가 영구 삭제됐을 때, 해당 퀘스트에 의존하는 모든 후속 퀘스트를 BFS로 추출하고 플레이어에게 완료 불가 알림을 보내야 한다. 이 탐색이 실패하거나 불완전한 결과를 내는 조건은?
+
+**30초 모범답변**: 의존성 그래프가 방향 그래프일 때 삭제된 퀘스트를 시작점으로 BFS를 돌리면 영향받는 하위 퀘스트를 전부 추출할 수 있다. 실패 조건은 (1) 의존성 Edge가 역방향으로 저장돼 있지 않아 후속 탐색이 불가능한 경우 (2) 그래프에 Cycle이 있어 무한 순회가 발생하는 경우 (3) 삭제 시점과 탐색 시점 사이에 새 의존성이 추가되어 결과가 불완전한 경우다.
+
+**1~2분 모범답변**: 의존성 그래프에서 "삭제된 퀘스트 → 영향받는 퀘스트" 방향으로 BFS를 하려면 역방향 인접 리스트(in-edge 기준)가 사전 구성되어 있어야 한다. 정방향만 저장했다면 전체 그래프를 순회해 영향받는 퀘스트를 찾아야 하므로 O(V+E) 비용이 불가피하다.
+
+실패 시나리오: (1) Cycle 존재 — 퀘스트 A가 B에 의존하고 B가 다시 A에 의존하는 잘못된 데이터가 있으면 BFS visited 처리 없이는 무한 루프 발생. (2) 동시 수정 — 탐색 중 다른 트랜잭션이 의존성 Edge를 추가하면 탐색 시작 당시의 스냅샷 기준이 아닌 혼합된 상태로 결과가 나온다. 해결: 그래프 스냅샷을 트랜잭션 단위로 잠금 후 탐색하거나 탐색 결과를 적용 전에 현재 상태와 diff로 검증한다. (3) 알림 중복 — BFS 결과가 같은 퀘스트를 여러 경로로 도달할 수 있으므로 visited 없이 탐색하면 플레이어에게 동일 알림이 중복 발송된다.
+
+### Q6. 길드 동맹 네트워크에서 순환 동맹(A→B→C→A)을 방지하려고 DFS Cycle 탐지를 도입했다. 동맹 신청이 실시간으로 들어오는 환경에서 DFS Cycle 탐지가 잘못된 결과를 내거나 허용해서는 안 되는 순환 동맹을 통과시키는 상황은?
+
+**30초 모범답변**: DFS Cycle 탐지는 탐색 시점의 그래프 스냅샷을 기준으로 동작한다. 실시간 환경에서는 (1) 두 동맹 신청이 동시에 처리될 때 각각 Cycle 없음으로 판정되지만 둘 다 적용하면 Cycle이 생기는 TOCTOU 문제, (2) DFS 중 다른 스레드가 Edge를 추가해 탐색 중인 그래프가 변경되는 Race Condition이 발생한다.
+
+**1~2분 모범답변**: 순수 DFS Cycle 탐지는 단일 스레드 정적 그래프 가정에서 동작한다. 동적 환경에서의 실패 패턴:
+
+(1) TOCTOU: 길드 X→Y 신청과 Y→X 신청이 10ms 차이로 동시에 들어온다. 두 요청이 각각 DFS를 돌릴 때는 모두 Cycle 없음. 두 Edge를 모두 적용하면 X→Y→X Cycle 완성. 해결: 동맹 추가를 직렬화하는 분산 Lock(예: Redis SETNX)이나 Optimistic Locking으로 Edge 추가 전 버전을 확인.
+
+(2) 스냅샷 불일치: DFS 탐색 시작 후 완료 전에 다른 트랜잭션이 Edge를 추가하면 탐색이 변경 전 그래프를 기준으로 완료되어 잘못된 허용 판정. 해결: 탐색 전 그래프를 Immutable 스냅샷으로 복사하거나 Read Lock을 유지하며 탐색.
+
+(3) 대규모 그래프에서의 성능 문제: 길드 수가 10만 개면 매 동맹 신청마다 O(V+E) DFS는 응답 시간 SLA를 초과한다. 대안: Union-Find로 연결 여부를 O(α(V))에 확인하고 Cycle 탐지도 O(α(V))로 처리. 단, Edge 삭제가 필요하면 Union-Find는 쓸 수 없어 DFS 또는 오프라인 재계산으로 돌아가야 한다.
 
 ## 16. 예상 꼬리질문
 
-- 인접 행렬에서 BFS 복잡도는 왜 O(V²)인가요?
-- Multi-Source BFS는 어떻게 초기화하나요?
-- 0-1 BFS는 일반 BFS와 무엇이 다른가요?
-- 재귀 DFS를 반복으로 바꿀 때 방문 순서가 달라지는 이유는 무엇인가요?
-- 연결 요소 개수는 어떻게 구하나요?
-- 양방향 BFS가 유리한 조건은 무엇인가요?
-- 방문 배열 초기화 비용을 줄이는 방법은 무엇인가요?
+- 게임 Zone 맵을 인접 행렬로 표현한 서버에서 Zone 수가 10,000개로 늘어났을 때 BFS 탐색이 실시간 Tick 안에 처리 불가능해지는 시점과 인접 리스트로 전환하는 판단 기준은?
+- 게임 서버에서 여러 Spawn Point를 동시에 활성화할 때 단일 BFS로 처리하지 않고 Spawn Point별로 BFS를 따로 실행하면 어떤 문제가 생기는가?
+- Zone 내 이동 비용이 0, Portal 이동 비용이 1인 게임 맵에서 Dijkstra를 그대로 쓰면 어떤 성능 문제가 생기고, 0-1 BFS는 어떤 조건에서 그 비용을 제거하는가?
+- 퀘스트 의존성 검증 서버에서 재귀 DFS로 Cycle을 탐지하다 Stack Overflow가 발생했다. 반복 DFS로 교체할 때 기존 GRAY/BLACK 상태 관리를 어떻게 유지해야 하는가?
+- 길드 네트워크에서 연결 요소를 BFS로 관리하다 멤버 탈퇴로 Edge가 빈번히 삭제될 때 연결 요소를 매번 전체 재계산하는 방식의 한계와 대안은?
+- 게임 월드에서 두 플레이어 간 최단 Zone 경로를 구할 때 단방향 BFS 대신 양방향 BFS를 적용하면 실제로 탐색 비용이 줄어드는 조건은? Portal 구조가 단방향(방향 Graph)일 때는 어떤 문제가 생기는가?
+- 초당 수백 건의 Zone 탐색 요청을 처리하는 게임 서버에서 요청마다 O(V) 방문 배열을 초기화하면 어떤 병목이 생기는가? Generation 카운터 방식을 적용할 때 Overflow 시 안전하게 처리하는 방법은?
 
 ## 17. 30초 모범답변
 

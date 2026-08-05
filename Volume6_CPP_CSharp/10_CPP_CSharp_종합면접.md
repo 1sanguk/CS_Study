@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- C++의 RAII·소유권과 C#의 GC·Dispose를 비용까지 연결해 비교할 수 있다.
-- 각 언어의 수명 관리와 비동기 실행 모델의 Trade-off를 설명할 수 있다.
-- 면접에서 자주 연결되는 언어 쟁점(Leak, Move, Async, Boxing 등)에 답할 수 있다.
-- 게임 서버 파이프라인에서 C++·C# 설계 선택을 비교해 설명할 수 있다.
+- C++ 서버에서 RSS가 지속 증가할 때 Heap Profiler와 Sanitizer가 탐지하지 못하는 Dangling·Use-after-free 패턴과 탐지 가능한 패턴을 구분하고, 어떤 도구 조합(AddressSanitizer·LeakSanitizer·Heap Profiler)과 코드 경로 검토 순서를 선택할지 판단할 수 있다.
+- C# 서버에서 세션 종료 후 RSS가 줄지 않을 때 GC Retention(Static·Event·Closure)과 Native 자원 미해제 중 어느 쪽인지 Memory Dump의 Root Path·Allocation Rate·Finalizer Queue 지표로 구분하고, 적합한 해제 패턴(명시적 Unsubscribe·WeakReference·IDisposable)을 결정할 수 있다.
+- 비동기 경계에서 C++의 Buffer Move RAII와 C#의 ArrayPool try/finally 패턴 중 Task 취소·예외 발생 시 자원이 누출되는 조건을 코드 경로 수준에서 진단하고, 수명 보장 설계(IMemoryOwner<byte>·Span 경계 제한·RAII Move Scope)를 결정할 수 있다.
+- 게임 서버 Tick p99 Spike가 이벤트 패치 후 발생했을 때, C++ 서버(dynamic_cast 추가·new 빈번)와 C# 서버(LINQ 체인·Gen 0 빈도 증가) 각각에서 어떤 진단 지표(VTune Cache Miss·dotnet-counters Allocation Rate·GC Pause)로 병목을 확인하고 조치 우선순위를 판단할 수 있다.
 
 ## 1. 개요
 언어 면접의 핵심은 C++의 명시적 수명·소유권과 C#의 관리 메모리·비동기 실행 모델을 비용까지 연결해 설명하는 것이다.
@@ -246,51 +246,67 @@ C# 서버: Allocation Rate·Boxing 경로, Gen별 GC Pause·Promoted Bytes, Thre
 
 - **C++은 빠르고 C#은 느리다**: 잘못된 C++ 코드(Allocation 과다, Lock 경합, Cache Miss)는 잘 설계된 C# 코드보다 느릴 수 있다. 언어보다 설계와 측정이 성능을 결정한다.
 - **GC가 있으면 메모리를 신경 쓰지 않아도 된다**: GC는 관리 메모리만 회수한다. Socket 미해제, Static Retention, Allocation Rate 폭증은 GC가 해결하지 않는다.
-- **C++에서 `shared_ptr`는 모든 수명 문제의 해결책이다**: Cycle, Atomic Count 비용, 숨은 수명 연장이 있다. `unique_ptr`와 값 소유를 우선한다.
 - **`async`/`await`는 성능을 자동으로 개선한다**: I/O 대기 중 Thread를 반환할 뿐이며 CPU 비용·Lock 경합·잘못된 소유권은 그대로다.
-- **C#의 `struct`는 항상 Stack에 있어 GC 부담이 없다**: Class Field의 Struct는 Heap에 있다. Boxing 시에도 Heap에 올라간다.
-- **Pool을 사용하면 항상 성능이 좋아진다**: Pool은 Peak Memory를 유지하고 반환 누락·상태 Reset 비용이 있다. Profile로 실제 병목인지 확인해야 한다.
 - **C++은 RAII만 있으면 메모리가 안전하다**: RAII를 올바르게 구현해도 잘못된 포인터 산술, Thread간 공유, Lifetime Extension이 있다. Sanitizer로 검증한다.
+- **두 언어의 비동기 Continuation 실행 위치는 항상 같다**: C++ Coroutine은 기본 Executor가 없어 Caller 문맥에서 Resume되고, C#의 `async`/`await`는 `SynchronizationContext`·`ConfigureAwait`에 따라 Completion 실행 Thread가 결정된다. 두 모델은 다르다.
+- **C# `using`을 쓰면 GC가 즉시 Managed Memory를 회수한다**: `using`은 `Dispose`를 호출할 뿐이다. Managed Memory 회수는 GC 스케줄에 따라 비결정적으로 일어난다. Socket·Buffer 반환과 GC는 별개다.
+- **두 언어의 Exception 비용은 정상 경로에서도 동일하다**: C++은 Zero-cost Exception 모델로 throw가 없으면 추가 비용이 거의 없다. C#은 try/catch 블록 자체의 JIT 비용이 있고 Exception 생성 시 Stack Trace 캡처 비용이 발생한다. 정상 경로 비용도 다르다.
 
 ## 20. 면접 질문
 
-### Q1. C++의 RAII와 C#의 `IDisposable`·`using`을 비교해 주세요.
+### Q1. C++ 게임 서버 배포 후 30분 내 RSS가 500MB → 2GB로 급증했습니다. Heap Profiler에서 Session 객체 수는 정상이지만 Chunk Pool In-use 블록이 지속 증가합니다. 어떤 패턴을 먼저 의심하고, AddressSanitizer가 탐지하지 못하는 조건은 무엇인가요?
 
-RAII는 자원을 객체 Scope에 묶어 Destructor에서 정리합니다. 예외·Early Return 모든 경로에서 결정적으로 자원이 해제됩니다. C#의 `using`도 비슷한 Scope Pattern을 제공하지만 메모리 회수는 GC에, 자원 반환은 `Dispose`에 맡깁니다. 공통 원칙은 "자원 수명을 명시하라"는 것입니다.
+Pool에서 대여한 블록을 반환하지 않는 누수 패턴을 먼저 의심합니다. 비동기 I/O 완료 전에 소유 객체가 파괴되거나 예외 경로에서 반환이 누락되는 경우가 흔합니다. AddressSanitizer는 이미 반환된 메모리를 재접근하는 UAF를 잡지만, Pool 내부에서 논리적으로 보유 중인 블록은 OS 관점에서 여전히 유효한 주소라 탐지되지 않습니다. 확인 절차: Pool In-use 카운터와 반환 콜백 경로의 콜스택을 로그하고, Valgrind Massif 또는 TCMalloc Heap Profiler로 할당 호출 경로를 추적합니다. 반환 누락이 확정되면 RAII Guard(unique_ptr + Custom Deleter 또는 RAII Scope 래퍼)로 모든 경로에서 반환을 보장합니다.
 
-### Q2. C++과 C#에서 메모리 Leak이 발생하는 원인 차이를 설명해 주세요.
+### Q2. C# 서버에서 세션이 종료된 지 10분 뒤에도 해당 Session 객체가 GC 수집되지 않아 dotnet-dump로 확인하니 Timer Callback과 Event Handler가 Session Reference를 유지하고 있습니다. WeakReference와 명시적 Unsubscribe 중 어느 쪽을 적용하고, 각각의 한계는 무엇인가요?
 
-C++에서는 `delete`·`free` 누락, Double Free, Use-after-free 같은 수동 관리 오류가 주 원인입니다. C#에서는 GC가 관리 메모리를 자동 회수하지만 Static Dictionary 미제거, Event Subscriber 미해제, Closure Capture 등 Root에서 계속 도달 가능한 객체는 수집되지 않습니다. 이를 Managed Retention 또는 논리적 Leak이라 합니다.
+명시적 Unsubscribe를 우선합니다. Timer를 `IDisposable`로 래핑하고 세션 종료 시점에 `Cancel()`·`Dispose()`로 제거하며, Event는 종료 시 `-=`로 구독 해제합니다. `WeakReference<Session>`은 Subscribe·Unsubscribe 없이 구독자 측에서 약한 참조만 유지하면 자동으로 수집됩니다. 단 Callback 호출 시 `TryGetTarget` 실패 시 처리 경로가 필요합니다. Timer Callback이 여전히 CPU를 소비하므로 Timer 자체 취소는 WeakReference로는 해결되지 않습니다. 종료 순서 보장이 필요하면 명시적 Unsubscribe + `CancellationToken` 전파 조합이 안전합니다. 확인 도구: dotnet-dump `gcroot <address>`로 Root Path 추적, dotnet-counters `gc-heap-size`·`gen-2-gc-count` 모니터링.
 
-### Q3. C++ Move Semantics와 C# Value Type 복사의 차이는 무엇인가요?
+### Q3. C++ 비동기 서버에서 `std::unique_ptr<Buffer>` Scope 종료로 Buffer가 해제됐는데 완료 핸들러가 해당 주소를 읽어 간헐적 데이터 손상이 발생합니다. AddressSanitizer가 이를 탐지 못하는 조건은 무엇이고, 수명을 보장하는 수정 방법은 무엇인가요?
 
-C++ Move는 자원 소유권을 이전하고 원본을 Unspecified 상태로 만들어 Deep Copy 비용을 피합니다. C# Value Type 복사는 항상 독립 복사본을 만듭니다. C#에는 `ref`·`in`으로 큰 Struct를 참조로 전달할 수 있지만 소유권 이전 개념은 없습니다.
+비동기 I/O가 완료되기 전에 소유 `unique_ptr`가 파괴된 Use-after-free 패턴입니다. AddressSanitizer는 해당 주소가 Pool에서 재사용된 경우 UAF를 탐지하지만, 메모리가 아직 OS에 반환되지 않아 접근 권한이 유효하면 탐지에 실패합니다. 수정 방법: (1) Buffer를 `shared_ptr<Buffer>`로 소유하고 완료 핸들러 람다가 `shared_ptr` 사본을 Capture하도록 변경해 수명을 완료까지 연장합니다. (2) 또는 Proactor 패턴에서 완료 핸들러가 반환할 때까지 Buffer 소유권이 이전된 상태(Move)를 유지하는 RAII Scope를 설계합니다. 코드에 `span<byte>`를 비동기 경계 너머로 전달하지 않는 규칙을 Clang Tidy 또는 코드리뷰 체크리스트에 추가합니다.
 
-### Q4. 두 언어에서 비동기 I/O를 설계할 때 공통 원칙은 무엇인가요?
+### Q4. C# Packet 파이프라인에서 `ArrayPool<byte>.Shared.Rent()`로 대여한 Buffer를 `await` 이후에도 `Span<byte>`로 참조하다 다른 Task가 같은 Buffer를 대여받아 데이터가 오염됐습니다. `try/finally` 반환과 `IMemoryOwner<byte>` 중 어느 쪽을 선택하고, `Span<T>`를 `await` 경계에서 사용 금지해야 하는 이유는 무엇인가요?
 
-I/O 완료까지 Buffer와 Context 수명을 보장하고, 취소 신호를 하위 작업까지 전파하며, 완료 후 자원을 정리하는 것입니다. C++에서는 Coroutine·RAII로, C#에서는 `async`/`await`·`CancellationToken`·`using`으로 구현됩니다. "어느 Executor에서 Completion이 실행되고 Buffer가 언제까지 유효한가"가 핵심입니다.
+`IMemoryOwner<byte>`를 `using`으로 관리하는 방식을 선택합니다. `try/finally`로 반환 시점을 명시해도 `await` 이후에 `Span`을 다시 얻어 사용하는 것을 막지 못합니다. `IMemoryOwner<byte>`를 `using`으로 래핑하면 Scope 종료 시 단 한 번 반환되고, `Memory<byte>`로 `await` 경계를 넘깁니다. `Span<T>`는 `ref struct`이므로 컴파일러가 `async` 메서드 내 사용을 금지합니다. `Memory<T>`는 힙에 위치 가능하므로 `await` 전후에 안전하게 전달됩니다. 민감 데이터가 있다면 `Return(clearArray: true)`로 반환 전 Zero-fill합니다. Roslyn Analyzer나 코드리뷰에서 `ArrayPool.Rent` 후 `await` 경계 전에 `Return` 누락 패턴을 탐지합니다.
 
 ### Q5. 게임 서버에서 Tick State 보호를 두 언어에서 어떻게 다르게 접근하나요?
 
 C++에서는 World를 `unique_ptr`·값으로 Tick Thread가 소유하고 다른 Thread가 직접 접근하지 않도록 Message Queue를 씁니다. C#에서는 World를 `class`로 단일 Thread가 읽고 I/O Completion Handler는 `Channel<T>`·`ConcurrentQueue`에 메시지를 넣습니다. 양쪽 모두 Tick 경계에서만 State를 변경한다는 원칙은 동일합니다.
 
-### Q6. "C++은 빠르고 C#은 느리다"는 단순화의 문제점은 무엇인가요?
+### Q6. C++ RAII 기반 Buffer 소유권 설계를 C# `ArrayPool` + `IAsyncDisposable`로 마이그레이션할 때, 비동기 완료 전 반환 실수를 설계 수준에서 방지하는 방법을 제안하세요.
 
-성능은 언어 선택보다 메모리 접근 패턴, Allocation, Lock 경합, Cache 효율이 결정합니다. C++ 코드도 Allocation이 많거나 Lock이 경쟁하면 잘 설계된 C# 코드보다 느릴 수 있습니다. 두 언어 모두 p99 Latency와 Profiler를 근거로 최적화해야 합니다.
+핵심은 "Buffer 수명이 Task 수명과 결합"되도록 강제하는 것입니다. (1) `IMemoryOwner<byte>`를 `IAsyncDisposable` Session 객체가 소유하고 `await using` Scope 안에서만 Memory 접근을 허용합니다. (2) Buffer를 직접 노출하지 않고 `ReadOnlyMemory<byte>` 또는 Parsed Message 구조체만 상위 레이어에 전달해 원본 Buffer Reference를 외부에서 보유하지 못하게 합니다. (3) `CancellationToken` 취소 시 `try/finally`에서 `IMemoryOwner.Dispose()`가 호출되도록 구조화합니다. (4) C++ 마이그레이션 검증: C++에서 `unique_ptr` Move로 소유권 이전이 명확했던 경계마다 C# 쪽에서 `IMemoryOwner` 전달 또는 Dispose 위임 지점이 대응되는지 코드 리뷰 체크리스트를 만들어 확인합니다.
 
 ## 21. 예상 꼬리질문
 
-- C++에서 Span과 C#의 `Span<T>`·`ReadOnlySpan<T>`는 어떻게 비슷하고 다른가요?
-- C++ Coroutine과 C# `async`/`await`의 동작 차이는 무엇인가요?
-- Game Engine이 C++을 주로 쓰는 이유는 무엇인가요?
-- C# Server에서 GC Pause를 줄이는 방법은 무엇인가요?
-- 두 언어에서 Thread-safe 싱글톤을 어떻게 구현하나요?
-- C++에서 Null Pointer와 C#의 Null Reference의 차이는 무엇인가요?
-- 두 언어의 Exception 처리 비용을 비교해 주세요.
+- C++ 서버에서 Session·Player 간 `shared_ptr` Cycle이 있어 Session 종료 후에도 수집되지 않습니다. Cycle을 Memory Dump 없이 확인하는 방법과, `weak_ptr`로 전환할 때 어느 쪽 참조를 `weak`로 바꾸는 기준은 무엇인가요?
+- C# 서버 운영 중 `GC.Collect(2)`를 명시 호출하는 코드를 발견했습니다. 이 호출이 p99를 줄이는 조건과 오히려 Full GC Pause를 악화시키는 조건을 각각 설명하고, dotnet-counters로 판단하는 방법을 말씀해 주세요.
+- C++ 서버에서 `std::vector<Packet>` Move 후 동일 Vector에 `push_back`을 호출하면 어떤 결과가 나오고, 이 버그를 런타임 전에 탐지하는 설계 방법은 무엇인가요?
+- C# 서버에서 `IAsyncDisposable` 구현의 `DisposeAsync` 중 예외가 발생했을 때 `await using` Scope에서 자원이 어떻게 처리되는지, 그리고 Dispose 전 예외와 Dispose 중 예외 각각에서 자원 정리가 보장되는 조건을 설명해 주세요.
+- C++ 게임 서버에서 64B 미만 소형 객체 Allocation이 초당 100만 회 발생할 때 `jemalloc` 교체와 Custom Pool 설계 중 어느 쪽을 먼저 검토하는 판단 기준과, 효과를 perf/VTune으로 측정하는 방법을 말씀해 주세요.
+- C# 서버에서 32코어 환경에 Server GC를 적용했는데 GC Heap 수가 CPU 코어 수와 동일하게 늘어 메모리가 급증했습니다. Container CPU Limit에 따라 GC Heap 수를 제한하는 설정과, `GCHeapHardLimit` 도입 기준을 설명해 주세요.
+- C++과 C# 서버 각각에서 핸들러 Hot Reload(패치 없이 설정·로직 교체) 구현 시, 진행 중인 요청이 이전 핸들러를 참조하는 동안 파괴되지 않도록 수명을 보장하는 방법을 언어별로 비교해 주세요. (C++: `shared_ptr` Snapshot·Epoch, C#: Reference Snapshot·`Interlocked.Exchange`)
 
 ## 22. 30초 모범답변
 
-> C++은 RAII와 Smart Pointer로 결정적 수명을 표현하고, C#은 GC로 관리 메모리를 자동 회수합니다. 두 언어 모두 Socket·File은 개발자가 적시에 닫아야 하며, 비동기 취소와 수명은 직접 설계해야 합니다. 언어보다 Allocation 패턴·Lock 경합·Cache 효율이 성능을 결정하므로 p99를 기준으로 Profiler로 측정합니다.
+**Q1 (C++ Pool 누수 진단):**
+> Pool In-use 블록 급증은 반환 누락 패턴이 가장 흔합니다. 비동기 완료 전 소유 객체 파괴 또는 예외 경로 반환 누락을 먼저 의심합니다. RAII Custom Deleter로 모든 경로 반환을 강제하고, Valgrind Massif·Heap Profiler로 할당 콜스택을 확인합니다. AddressSanitizer는 Pool 내부 유효 주소 재사용을 탐지하지 못합니다.
+
+**Q2 (C# GC Retention 원인 구분):**
+> dotnet-dump `gcroot`로 Root Path를 확인합니다. Timer·Event의 경우 명시적 Unsubscribe + `CancellationToken` 전파를 우선하고, `WeakReference`는 Timer 취소 없이 Callback만 무력화할 때 보조로 씁니다. dotnet-counters `gc-heap-size` 추이와 함께 봅니다.
+
+**Q3 (C++ Buffer 수명 UAF):**
+> `Span<byte>`를 비동기 경계 너머로 전달한 UAF입니다. `shared_ptr<Buffer>`로 완료 핸들러가 수명을 연장하거나, Proactor 패턴으로 완료 시점까지 Buffer 소유권 이전(Move)을 유지합니다. AddressSanitizer는 Pool 미반환 주소 재접근을 탐지 못합니다.
+
+**Q4 (C# ArrayPool await 경계):**
+> `IMemoryOwner<byte>`를 `await using`으로 관리하고, `Memory<T>`로 `await` 경계를 넘깁니다. `Span<T>`는 `ref struct`라 컴파일러가 `async` 메서드 내 `await` 이후 사용을 차단합니다. 민감 데이터는 `Return(clearArray: true)`로 Zero-fill합니다.
+
+**Q5 (Tick State 보호):**
+> C++은 `unique_ptr`·값으로 Tick Thread 단독 소유, C#은 `class`로 단일 Thread 읽기. 양쪽 모두 I/O Completion은 `Channel<T>`·Message Queue로 전달하고 Tick 경계에서만 State를 변경합니다.
+
+**Q6 (C# 마이그레이션 설계):**
+> `IMemoryOwner<byte>`를 `IAsyncDisposable` Session이 소유하고 `await using` Scope 안에서만 접근합니다. 상위 레이어에는 `ReadOnlyMemory<byte>` 또는 Parsed 구조체만 전달해 Buffer Reference 누출을 막습니다.
 
 ## 23. 1~2분 확장답변
 
@@ -299,6 +315,10 @@ C++에서는 World를 `unique_ptr`·값으로 Tick Thread가 소유하고 다른
 > C#은 GC가 도달 불가 Managed 객체를 비결정적으로 회수합니다. 세대 분리로 짧은 수명 객체를 효율적으로 처리하지만 GC Pause와 Boxing이 Latency에 영향을 줍니다. Socket·File은 `IDisposable`·`using`으로 결정적으로 닫습니다. Static Retention과 Event 미해제는 GC가 해결하지 못하는 논리적 Leak입니다.
 >
 > 게임 서버에서 두 언어 모두 Tick State를 단일 Thread가 소유하고 I/O Completion은 Message Queue로 전달하는 패턴을 씁니다. 비동기 경계에서 Buffer 수명을 보장하고 취소를 하위 작업까지 전파하는 원칙도 동일합니다. 성능은 언어가 아니라 설계와 실측 지표가 결정합니다.
+>
+> C++ 진단에서는 AddressSanitizer + LeakSanitizer 조합으로 UAF·Leak을 잡고, Valgrind Massif·Heap Profiler로 할당 콜스택을 추적하며, VTune·perf로 Cache Miss·Lock Contention과 p99 Tick을 함께 봅니다.
+>
+> C# 진단에서는 dotnet-counters로 Allocation Rate·GC Pause·ThreadPool Queue를 실시간 모니터링하고, PerfView·dotnet-trace로 CPU·GC 이벤트를 기록하며, dotnet-dump `gcroot`로 Retention Root를 확인합니다. BenchmarkDotNet으로 Hot Path 개선 효과를 측정합니다.
 
 ## 24. 핵심 요약
 

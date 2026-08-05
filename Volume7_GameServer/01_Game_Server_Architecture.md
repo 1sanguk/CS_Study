@@ -10,9 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- 핵심 정의와 등장 이유를 설명할 수 있다.
-- 데이터·상태 흐름과 Trade-off를 설명할 수 있다.
-- 게임 서버 운영과 장애 대응에 적용할 수 있다.
+- Stateful Game Instance 노드에서 CPU·Memory가 임계값을 초과하거나 Tick p99가 기준을 벗어날 때 신규 Room 배치를 중단하고 Drain해야 하는 시점 기준과, Sticky Routing이 Hot Spot을 유발하는 조건을 진단해 조치 우선순위를 판단할 수 있다.
+- Login→Matchmaking→Game→Persistence 흐름에서 응답 손실 후 재시도로 아이템·재화 중복 처리가 발생할 때, Idempotency Key·Version 조건부 갱신·Outbox 중 Authority 경계와 재처리 허용 여부를 기준으로 적합한 패턴을 결정할 수 있다.
+- Game Instance 예고 없는 재시작 시 Memory 상태 복구를 위해 Snapshot 주기 저장·Event Log·주기 DB Flush 중 RPO·RTO 요구사항을 기준으로 어느 방식을 조합할지 판단하고, 복구 불가 범위를 설계 결정으로 명시할 수 있다.
+- Tick p99가 특정 이벤트 이후 급등했을 때 Connection 수·Queue Depth·Packet Drop·DB Latency·GC Pause 지표 중 어느 것이 원인인지 순서대로 좁히고, Network I/O와 Logic Thread 분리가 실제로 도움이 되는 조건을 판단할 수 있다.
 
 ## 1. 개요
 게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다.
@@ -134,40 +135,113 @@ Game Server Architecture은 정상 경로만 구현해서는 운영 준비가 �
 
 Game Server Architecture에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
-## 4. 쉬운 예시
-초기 협동 게임은 Login과 Lobby를 한 서비스로 두고 Match Room만 상태 서버로 분리할 수 있다. CCU가 늘어 Chat Fan-out이 병목이 되면 그때 Chat을 별도 확장한다. 분리 기준은 유행하는 구조가 아니라 독립적인 부하와 장애 경계다.
+## 4. 쉬운 예시: Room 배치와 Idempotency
+
+**Room 배치 — Admission Control 의사코드**
+
+```python
+# Matchmaker가 Game Server에 Room 배치 요청
+def allocate_room(server_id, room_id, idempotency_key):
+    server = server_registry[server_id]
+    if server.cpu > 0.80 or server.tick_p99_ms > 20:
+        raise ServerOverloaded("Drain 대상: 신규 Room 거절")
+    
+    # 중복 요청 방지 (Idempotency Key)
+    if idempotency_key in processed_keys:
+        return existing_result[idempotency_key]  # 이전 결과 반환
+    
+    room = server.create_room(room_id)
+    processed_keys[idempotency_key] = room
+    return room
+```
+
+**Tick Loop — I/O와 Logic 분리**
+
+```
+Network I/O Thread          Logic Tick Thread (16ms)
+─────────────────           ────────────────────────
+recv(packet)         →  [bounded Queue]  →  dequeue
+                                             process
+send(response)       ←  [response Queue] ←  enqueue
+```
+
+I/O Thread가 World State를 직접 수정하지 않고 Message Queue로만 전달한다. Queue 상한 초과 시 새 패킷을 Drop하거나 Client를 Disconnect해 Tick이 밀리지 않게 한다.
 
 ## 5. 비슷한 개념과 비교
-단순 Monolith는 호출과 Transaction이 명확하지만 독립 확장에 한계가 있다. 역할 분리는 장애 격리와 배포 자유도를 높이는 대신 Network 실패와 데이터 정합성 비용을 추가한다.
+
+| 구분 | Monolith | 역할 분리 (서비스 분리) |
+|------|---------|-------------|
+| 배포 단위 | 전체 함께 | 서비스별 독립 |
+| 확장 방법 | 전체만 확장 | 병목 서비스만 확장 |
+| 장애 격리 | 어려움 (한 버그가 전체 영향) | 서비스별 격리 |
+| 통신 비용 | 함수 호출 (0 hop) | Network Hop (왕복 비용 증가) |
+| 정합성 | Local Transaction | 분산 Transaction·Idempotency 필요 |
+| 운영 복잡도 | 낮음 | Trace·Discovery·배포 파이프라인 필요 |
+| 적합한 시기 | 초기·소규모·CCU 안정기 | 독립 부하·장애 경계가 명확한 시점 |
 ## 6. 장점과 단점
-Game Server Architecture을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 Authority 경계, Stateful 배치와 Gateway 용량 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
+
+### 역할 분리 아키텍처의 장점
+
+- 독립 확장: 병목 서비스(Matchmaking·Chat)만 선택적으로 Scale-out
+- 장애 격리: Chat 장애가 Game Room Tick에 영향을 주지 않도록 경계 분리
+- 배포 자유도: Game Server를 내리지 않고 Login·Ranking 서버만 배포
+- Authority 명확화: 상태 소유자를 명시해 불일치·충돌 감소
+
+### 역할 분리 아키텍처의 단점
+
+- Network Hop 증가: 서비스 간 호출마다 왕복 비용 발생, p99 누적 증가
+- 분산 정합성 비용: Idempotency Key·Outbox·Reconciliation 설계 부담
+- 운영 복잡도: Trace·Service Discovery·Circuit Breaker·다중 배포 파이프라인 필요
+- Stateful 이전 불가: Room 메모리 상태는 다른 Instance로 Live 이전이 어려움
 ## 7. 게임 서버·백엔드 실무 예시
 로그인 API는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다. 서버 Directory와 Drain 절차로 배포 중 새 매치를 막는다.
 
 Game Server Architecture 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- 게임 서버는 항상 Stateful해야 한다고 생각한다. 로그인, 매치메이킹, API 서버는 Stateless로도 충분하며 수평 확장에 유리하다.
-- Authoritative 서버를 두면 치팅이 완전히 불가능하다고 생각한다. 검증 범위와 비용을 설계해야 하며 완벽한 차단은 없다.
-- 분산 아키텍처를 도입하면 지연이 사라진다고 생각한다. 서비스 간 hop이 늘어날수록 네트워크 왕복 비용이 증가한다.
-- Service Discovery가 있으면 장애가 자동 복구된다고 생각한다. 자동 등록·해제는 Health Check 및 Circuit Breaker와 별도로 설계해야 한다.
-- Room을 분리하면 모든 동기화 문제가 사라진다고 생각한다. 월드 이벤트, 친구 목록, 글로벌 채팅 등 Room 간 상호작용은 여전히 설계가 필요하다.
+
+- **게임 서버는 항상 Stateful해야 한다**: Login·Matchmaking·API는 요청마다 DB·Cache에서 상태를 읽는 Stateless 구조로 수평 확장이 쉽다. Stateful은 실시간 전투처럼 Memory 상태 유지가 필수인 곳에만 적용한다.
+- **Authoritative 서버를 두면 치팅이 완전히 불가능하다**: 서버가 최종 Authority여도 클라이언트 입력 속도·범위 검증 설계가 필요하다. 협력 치팅, API 직접 호출, 인가 우회는 별도로 막아야 한다.
+- **서비스를 분리하면 지연이 줄어든다**: 서비스 Hop이 늘어날수록 Network 왕복 비용이 누적된다. 분리의 이득은 독립 확장·장애 격리이며, Tick 지연 감소가 목적이라면 분리는 오히려 역효과다.
+- **Service Discovery가 있으면 장애가 자동 복구된다**: Service Discovery는 Health Check 기반 라우팅 제외만 처리한다. Timeout·Retry·Circuit Breaker·진행 중 작업 Drain·상태 복구는 별도로 설계해야 한다.
+- **Room을 분리하면 모든 동기화 문제가 사라진다**: 글로벌 채팅·친구 목록·Cross-Room 이벤트·랭킹처럼 Room 간 상호작용은 여전히 일관성 설계가 필요하다.
+- **CCU가 늘면 Game Server 수만 늘리면 된다**: Server를 늘려도 공유 DB·Hot Key·Gateway·Matchmaking 중앙 서비스가 새 병목이 된다. CPU·Queue·DB Connection·p99를 함께 측정해야 한다.
+- **Heartbeat 응답이 오면 서버가 정상이다**: Heartbeat는 Process 생존만 확인한다. Tick 처리량 저하, Queue 포화, Memory 임박, GC Pause 급증은 별도 지표(dotnet-counters·perf·p99 Tick)로 확인해야 한다.
 ## 9. 면접 질문
-### Q1. 핵심 개념을 설명해 주세요.
-게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다.
-### Q2. 왜 필요한가요?
-서로 다른 부하·상태·장애 특성을 분리해 확장과 배포, 장애 격리를 가능하게 한다.
-### Q3. 실무에서는 어떻게 적용하나요?
-로그인 API는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다. 서버 Directory와 Drain 절차로 배포 중 새 매치를 막는다.
-### Q4. 장애 시 무엇을 확인하나요?
-Game Server Architecture 관점에서는 상태 소유자, Queue와 Buffer, Sequence, Timeout, Drop·Retry와 p99를 확인한다.
+
+### Q1. Game Server 1대에서 CPU 95%·Tick p99 80ms가 지속됩니다. 해당 노드에 Room이 300개 있고 Matchmaker가 계속 새 Room을 배치하고 있습니다. Drain 시점 기준과 절차, 기존 Room을 다른 노드로 이전할 수 없는 근본 이유는 무엇인가요?
+
+Drain 트리거를 CPU 80% 또는 Tick p99 20ms 초과로 설정하고, 해당 임계값을 넘는 순간 Matchmaker의 신규 Room 배치 요청을 거절합니다. 기존 300개 Room은 Match가 끝날 때까지 정상 처리하고 종료 후 Process를 재시작하거나 교체합니다. 기존 Room을 Live 이전할 수 없는 이유는 Memory의 Player·Monster·Physics 상태가 다른 Process 주소 공간에 있어 TCP 소켓과 함께 원자적으로 이전하는 표준 방법이 없기 때문입니다. 이전 가능한 설계는 Room 상태를 Redis나 DB에 직렬화하고 Client에게 재접속을 요청하는 방식이나, Match 중단 허용 범위와 RPO를 먼저 결정해야 합니다.
+
+### Q2. Login→Game 서버 흐름에서 아이템 지급 요청 응답이 손실돼 Login 서버가 재시도하니 아이템이 중복 지급됐습니다. Idempotency Key를 어느 계층에 적용해야 하고, Game 서버 측에서 중복을 막는 설계는 무엇인가요?
+
+Idempotency Key(requestId)를 호출자(Login 서버)가 UUID로 생성해 요청에 포함합니다. Game 서버는 처리 전에 Redis 또는 DB에 `requestId`를 기록하고, 동일 Key가 이미 존재하면 이전 결과를 그대로 반환합니다. 처리와 Key 저장은 동일 DB Transaction에 묶거나, Outbox 패턴으로 이벤트와 Key 기록을 함께 커밋합니다. Key TTL은 재시도 최대 Window(예: 5분)보다 길게 설정합니다. 주의: Key 저장 성공·처리 실패 시 부분 상태가 남을 수 있어 Version 조건부 갱신(Compare-and-Swap)을 함께 사용하면 안전합니다.
+
+### Q3. 실시간 Battle Room 서버가 예고 없이 재시작됐습니다. 진행 중인 Match 상태를 복구하는 방법을 설계하세요. Snapshot과 Event Log 방식의 RPO·RTO 차이와, 어떤 조건에서 어느 쪽을 선택하나요?
+
+Snapshot 방식은 N초마다 전체 Room 상태를 DB/Redis에 직렬화합니다. RPO는 Snapshot 주기(예: 5초), RTO는 마지막 Snapshot 로드 시간입니다. 단순하지만 Snapshot 간 이벤트가 유실됩니다. Event Log 방식은 매 Tick 또는 매 상태 변경마다 이벤트를 Append-only로 기록합니다. RPO는 최근 이벤트(수십 ms), RTO는 Replay 시간이며 이벤트 수에 비례합니다. 선택 기준: PvP Battle처럼 단 1Tick 유실도 허용 불가한 경우 Event Log 방식 + Replay, 협동 PvE처럼 5초 롤백이 허용되면 Snapshot. 실무에서는 Snapshot + Event Log 조합으로 Snapshot 기점에서 Log Replay를 수행해 RPO와 RTO를 균형 맞춥니다.
+
+### Q4. Matchmaking 서버가 Game Server에 Room 생성 요청 후 타임아웃이 발생했습니다. Matchmaking은 Room을 '생성됨'으로 표시했고 Client가 접속을 시도합니다. 어떤 데이터 불일치가 생기고, 방지 설계는 무엇인가요?
+
+Room이 실제로 생성됐는지 알 수 없는 상태에서 '생성됨'으로 표시하면, (1) Room이 미생성됐으나 Client가 접속을 시도해 연결 실패, (2) Room이 생성됐으나 Matchmaking이 재시도해 Room이 중복 생성되는 두 불일치가 발생합니다. 방지 설계: (1) Idempotency Key로 중복 생성 방지, (2) Matchmaking이 타임아웃 후 Room 상태를 조회(Query)해 확인 후 결정, (3) Room 상태를 Pending→Created→Active 3단계로 분리하고 Created 확인 전까지 Client 접속을 허용하지 않음. 결국 "응답 없음 = 실패"가 아닌 "응답 없음 = 불확실"로 처리해야 합니다.
+
+### Q5. 단일 Game Server Process에서 Network I/O Thread와 Logic Tick Thread를 분리했을 때, I/O Thread가 World State를 직접 수정하면 어떤 문제가 생기나요? Message Queue 설계의 핵심 결정 사항을 설명하세요.
+
+I/O Thread가 World State를 직접 수정하면, Tick Thread가 같은 State를 읽는 순간 Data Race가 발생합니다. 결과적으로 플레이어 위치·HP 등이 Tick 중간에 변경돼 물리·전투 계산이 일관성 없는 상태로 실행됩니다. Lock으로 보호하면 Tick마다 경합이 생겨 p99가 올라갑니다. Message Queue 설계 핵심: (1) **Queue 크기**: Tick 1회 처리량 × 최대 허용 Tick 지연 수로 상한 설정(예: 16ms Tick × 10 = 160ms 분량), (2) **Drop 정책**: 가득 찬 경우 해당 Client를 Disconnect 또는 최신 패킷만 유지(Position 갱신은 누적 불필요), (3) **Backpressure**: I/O Thread가 Queue Full 시 수신 패킷을 Drop해 Tick Thread 과부하 방지. Queue는 단방향(I/O→Tick, Tick→I/O)으로 두 방향 모두 설계해야 합니다.
+
+### Q6. 배포 시 진행 중인 Game Room이 있는 서버에 새 Binary를 올려야 합니다. Blue-Green과 Rolling 배포 각각에서 Room Session 처리 방법과, Protocol·Schema 버전 호환성 보장 방법을 설명하세요.
+
+Blue-Green: 새 Version의 Green 서버를 준비하고 새 Match만 Green으로 라우팅합니다. Blue 서버의 기존 Room이 모두 종료될 때까지 두 Version을 동시 운영합니다. 단순하지만 서버 리소스 2배 필요, Room이 오래 지속되면 Blue 수명도 길어집니다. Rolling: 노드 한 대씩 Drain(신규 Room 배치 중단) → 기존 Room 종료 대기 → Binary 교체 → 복귀 순서로 진행합니다. 리소스는 절약되나 두 Version이 동시에 운영되는 기간이 생깁니다. Protocol 호환성: Client↔Server 패킷 Schema에 Version 필드를 포함해, Server는 구 Version 패킷도 파싱하고 신규 필드는 Optional로 추가합니다. 두 Server Version이 공유 Redis·DB Schema를 동시에 쓰므로 Column 추가는 허용, Column 삭제·Type 변경은 다음 배포로 분리합니다.
 
 ## 10. 예상 꼬리질문
-- Authority 경계의 최종 소유자는 어디에 두나요?
-- Stateful 배치 처리에서 중복과 역순은 어떻게 구분하나요?
-- Gateway 용량의 상한을 넘으면 어떤 요청부터 제한하나요?
-- Service Discovery 장애를 어떻게 재현하고 복구를 검증하나요?
-- Room Partition 관련 p99가 증가하면 어떤 지표를 함께 보나요?
+
+- Sticky Routing으로 Room을 특정 Game Server에 고정했는데 해당 서버에 Heavy Room이 집중돼 CPU 90%가 됐습니다. 다른 서버로 Room을 이전할 수 없다면 단기적으로 부하를 줄이는 방법과, 이 상황을 사전에 방지하는 Admission Control 설계는 무엇인가요?
+- Game Instance가 Tick 중에 DB 쓰기를 동기 호출했더니 p99가 100ms → 300ms로 급등했습니다. Tick 경로에서 DB 호출을 제거하는 방법과, Match 종료 결과를 안전하게 Persistence 서비스로 전달하는 설계를 설명해 주세요.
+- Zone Partition에서 플레이어가 Zone 경계를 넘을 때 두 Game Server가 동시에 해당 플레이어를 Authority로 갖는 순간을 없애려면 Transfer 과정을 어떻게 설계해야 하나요?
+- Matchmaking 서버가 Scale-out으로 Pod가 2대→10대로 늘었을 때, 기존 대기열이 Pod별로 분산되면 어떤 중복 매칭이 발생하나요? 공유 Redis Queue로 해결할 때의 한계와 대안을 설명해 주세요.
+- 로그인 서버에서 JWT Stateless 검증만 사용하는데 강제 로그아웃(ban·kick) 기능이 필요합니다. Stateless 검증으로 즉각 ban이 불가능한 이유와, Token Revocation 구현 시 Redis Denylist 방식의 부하와 TTL 설정 기준을 설명해 주세요.
+- Correlation ID를 Login→Matchmaking→Game→Persistence 전 흐름에 전파했을 때, 특정 플레이어의 아이템 중복 지급 장애를 재현하기 위해 최소한 어떤 로그 항목과 메트릭을 남겨야 하나요?
+- Game Server 배포 중 Rolling Drain을 진행하는데 특정 Room이 2시간 이상 지속되고 있습니다. 이 Room을 더 기다릴지 강제 종료할지 결정하는 기준과, 강제 종료 시 플레이어에게 보상을 지급하는 흐름을 설계해 주세요.
 ## 11. 30초 모범답변
 > 게임 서버 아키텍처는 기능 분리보다 상태 소유권과 실패 경계를 정하는 일입니다. 독립 확장이 필요한 책임만 분리하고 통신 실패와 운영 비용을 함께 설계합니다. 로그인 API는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다.
 
@@ -175,11 +249,16 @@ Game Server Architecture 관점에서는 상태 소유자, Queue와 Buffer, Sequ
 > 게임 서버 아키텍처는 기능 분리보다 상태 소유권과 실패 경계를 정하는 일입니다. 독립 확장이 필요한 책임만 분리하고 통신 실패와 운영 비용을 함께 설계합니다. 설계에서는 상태 소유권, 입력 검증과 Message 순서를 먼저 정합니다. Network I/O와 Logic 실행을 분리하되 Queue에 상한과 Backpressure를 둡니다. 게임 서버에서는 평균 처리량보다 Tick과 Packet 지연의 p99, 재접속과 배포 시나리오까지 검증해야 합니다.
 
 ## 13. 핵심 요약
-- 게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다.
-- 상태 소유권과 입력 검증이 핵심이다.
-- 순서·Timeout·재처리를 정의한다.
-- Queue와 Buffer에는 상한이 필요하다.
-- 운영에서는 p99와 Overload를 관찰한다.
+
+- 게임 서버 아키텍처의 핵심은 기능 분리보다 Authority 경계·State 소유권·장애 격리 경계다.
+- Stateful Game Instance는 Memory 상태를 유지해 Tick 지연을 최소화하지만 장애 시 Live 이전이 어렵다.
+- 서비스 분리는 독립 확장·배포·장애 격리 이득이 Network Hop·정합성 비용보다 클 때 선택한다.
+- 분산 호출은 Timeout·중복·부분 실패가 기본 상태다. Idempotency Key·Outbox·Reconciliation이 필요하다.
+- Tick 경로에 동기 DB 호출을 넣지 않는다. I/O와 Logic Thread를 Message Queue로 분리한다.
+- Admission Control(CPU·p99 임계값 기반 Drain)로 Hot Spot Instance 보호와 신규 배치 차단을 자동화한다.
+- 배포 시 Blue-Green 또는 Rolling Drain으로 진행 중인 Room Session을 보호하고, Protocol Schema는 전후 호환을 유지한다.
+- 관찰 가능성: Connection·CCU·Tick p99·Queue Depth·DB Latency·p99를 Correlation ID로 단일 흐름으로 추적한다.
+- 평균 처리량이 아닌 p99·p99.9를 Traffic 타임라인과 함께 보고 Tail Latency와 Tick Spike를 진단한다.
 
 ## 한 줄 정리
 > 게임 서버 아키텍처는 기능 분리보다 상태 소유권과 실패 경계를 정하는 일입니다. 독립 확장이 필요한 책임만 분리하고 통신 실패와 운영 비용을 함께 설계합니다.

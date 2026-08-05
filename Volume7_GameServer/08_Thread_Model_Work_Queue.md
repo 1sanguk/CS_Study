@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- I/O Thread와 Logic Worker를 분리해야 하는 이유와 역할 경계를 설명할 수 있다.
-- Room Owner 모델로 공유 상태 Lock을 없애는 원리를 설명할 수 있다.
-- Bounded Work Queue의 필요성과 가득 찼을 때의 Backpressure 정책을 설명할 수 있다.
-- roomId Partition으로 Packet 순서를 보장하는 방법과 오래된 작업을 폐기하는 방법을 설명할 수 있다.
+- Logic Worker에서 DB 조회·경로 탐색 동기 호출이 발생해 Tick p99가 급등했을 때, I/O Thread-Logic Worker 역할 경계 위반 여부를 지표로 특정하고 오프로드 설계를 결정할 수 있다.
+- 특정 Room의 Work Queue만 지속적으로 가득 찰 때, Hot Room 원인인지 Worker 부족인지 진단하고 전용 Worker 격리 또는 Partition 재분할 중 조치를 결정할 수 있다.
+- Bounded Work Queue가 가득 찼을 때, 로그인 거부·비핵심 Drop·Producer Rate Limit 중 메시지 종류와 게임 규칙을 기준으로 Backpressure 정책을 결정할 수 있다.
+- Disconnect 후 재접속된 Session에 오래된 Work Queue 항목이 적용되는 버그가 발생했을 때, sessionGeneration과 packetSequence 비교로 폐기 조건을 설계하고 수정 방향을 결정할 수 있다.
 
 ## 1. 개요
 스레드 모델은 I/O와 게임 Logic을 어떤 Thread가 소유할지 정하고 Work Queue는 생산자와 소비자 사이 작업을 전달한다.
@@ -186,36 +186,37 @@ Queue 상한, Worker별 처리 p99, Drop 수, Queue 대기 시간을 지표로 �
 - **Queue에 넣은 순서대로 실행이 보장된다.** Priority Queue나 다중 Consumer 구조에서는 삽입 순서와 실행 순서가 다를 수 있다. Sequence 번호로 순서를 별도로 검증해야 한다.
 - **무제한 Queue는 부하 증가를 흡수해 좋다.** 무제한 Queue는 부하를 숨기다가 메모리를 소진하고 오래된 요청을 뒤늦게 실행한다. 상한과 빠른 거부가 안전하다.
 - **Graceful Shutdown 시 Queue를 즉시 비워도 된다.** 저장·결제·랭킹 업데이트 같은 중요 작업은 Drain이 필요하다. 반면 위치 Snapshot 같은 비핵심 작업은 버려도 된다.
+- **roomId Partition이면 여러 Room이 관련된 작업도 단일 Worker에서 처리할 수 있다.** PvP 전투처럼 Room A와 Room B 상태가 동시에 필요한 작업은 단일 Partition으로 처리할 수 없다. Cross-room 작업은 Lock 또는 별도 Coordinator 설계가 필요하다.
 
 ## 9. 면접 질문
 
-### Q1. I/O Thread와 Logic Worker를 왜 분리해야 하나요?
-I/O Thread가 DB 조회나 경로 탐색 같은 무거운 Logic을 처리하면 같은 Thread가 담당하는 수천 연결의 I/O 이벤트가 모두 지연됩니다. I/O Thread는 Byte 이동과 Framing만 담당하고 완전한 Packet을 Bounded Work Queue에 넣어 Logic Worker로 오프로드합니다.
+### Q1. Logic Worker의 Tick p99가 배포 후 20ms→80ms로 급등했습니다. 어디서부터 병목을 진단하나요?
+먼저 Worker별 처리 시간 Histogram(Prometheus)으로 어느 Worker가 높은지 확인합니다. 특정 Worker만 높다면 해당 Partition의 Hot Room이 원인이므로 roomId별 처리 시간을 집계합니다. 전체 Worker가 높다면 I/O Thread에서 오프로드되지 않은 동기 호출이 섞인 것을 의심해 `perf record`로 Hot Function을 확인합니다. DB Pool 고갈이면 Active Connection 수와 Wait 시간 지표를 추가로 확인합니다.
 
-### Q2. Room Owner 모델이 Lock을 줄이는 원리를 설명해 주세요.
-`hash(roomId) % workerCount`로 같은 Room의 모든 작업을 특정 Worker에 고정합니다. 그 Worker만 Room 상태를 수정하므로 Room 내부 처리에서 Lock이 필요 없습니다. Room 간 상호작용은 Message Queue로 전달합니다.
+### Q2. 8 Worker 서버에서 Worker 0의 Queue만 5분 이상 지속적으로 1,000개 상한에 도달합니다. Hot Room인지 Worker 부족인지 어떻게 진단하나요?
+Worker 0이 담당하는 roomId 목록별 처리 시간을 수집합니다. 특정 Room 하나가 전체 Worker 0 처리 시간의 80% 이상을 점유하면 Hot Room으로 판단하고 해당 Room을 전용 Worker로 격리합니다. 처리 시간이 여러 Room에 고르게 분산돼 있으면 Partition 불균형 문제이므로 Consistent Hashing이나 Load-aware Rebalance를 검토합니다.
 
-### Q3. Bounded Work Queue가 필요한 이유와 가득 찼을 때 어떻게 처리하나요?
-무제한 Queue는 부하를 숨기다가 메모리를 소진하고 오래된 요청을 뒤늦게 실행합니다. Bounded Queue는 가득 차면 빠르게 거부해 생산자에게 신호를 줍니다. 메시지 종류에 따라 신규 로그인 거부, 비핵심 상태 Drop, Producer Rate Limit 중 적절한 정책을 선택합니다.
+### Q3. 10만 CCU 서버에서 Work Queue Full로 신규 로그인이 거부되는 상황이 발생했습니다. 로그인·위치 갱신·결제 완료를 서로 다르게 처리하는 Backpressure 설계를 설명하세요.
+Queue를 중요도별로 분리합니다. 결제 완료·아이템 지급처럼 손실 불가한 메시지는 별도 큐에 보관하고 가득 차도 Drop하지 않습니다. 신규 로그인은 Queue Full 시 클라이언트에게 503을 반환해 재시도를 유도합니다. 위치 Snapshot처럼 최신 값만 의미 있는 메시지는 Drop-oldest 정책으로 큐 내 이전 항목을 덮어씁니다. Drop 수를 메시지 종류별로 분리 집계해 어느 큐가 병목인지 운영 지표로 확인합니다.
 
-### Q4. Queue Partition으로 Packet 순서를 어떻게 보장하나요?
-`roomId % workerCount`로 같은 Room의 Packet을 같은 Worker Queue에 넣으면 단일 Consumer가 삽입 순서대로 처리합니다. 작업 항목에 `sessionGeneration`과 `packetSequence`를 포함해 Queue 대기 중 Disconnect·재접속이 발생해도 오래된 작업을 폐기합니다.
+### Q4. Disconnect 후 5초 만에 재접속한 Session에 이전 Work Queue 항목의 이동 처리가 적용돼 새 위치가 오염됐습니다. 어떻게 수정하나요?
+WorkItem에 `sessionGeneration` 필드를 추가해 Enqueue 시점의 Session 세대 번호를 기록합니다. Worker가 Dequeue 후 처리하기 전에 현재 Session의 Generation과 비교해 불일치하면 폐기합니다. 재접속 시 Generation을 1 증가시키면 Queue에 남아 있는 이전 세대 항목은 자동으로 무효화됩니다. `packetSequence`도 함께 비교해 같은 Session 내 역순 처리도 방지합니다.
 
-### Q5. Logic Worker 수를 Core 수보다 많이 늘리면 왜 성능이 떨어지나요?
-CPU-bound 작업에서 Thread 수가 Core 수를 초과하면 Context Switch 비용이 증가하고 L1/L2 Cache가 경쟁하며 처리량이 감소합니다. Blocking DB 작업이 있으면 DB Connection 수에 맞는 별도 Pool로 격리하되 Worker 수를 DB Connection 수보다 지나치게 많이 두면 대기만 늘어납니다.
+### Q5. CPU 32코어 서버에서 Logic Worker를 64개로 늘렸더니 Tick p99가 오히려 50% 증가했습니다. 원인과 최적 Worker 수 결정 방법을 설명하세요.
+CPU-bound 작업에서 Thread 수가 Core 수의 2배를 넘으면 Context Switch 비용과 L1/L2 Cache 경쟁이 급증합니다. `perf stat`으로 cache-misses와 context-switches 지표를 비교해 원인을 확인합니다. CPU-bound Logic Worker는 Core 수 근처(예: 28~32)에서 시작해 Tick p99를 측정하며 조정합니다. DB 조회처럼 Blocking이 있는 Worker는 별도 Pool(DB Connection 수의 1~2배)로 격리합니다.
 
-### Q6. Graceful Shutdown 시 Work Queue를 어떻게 정리하나요?
-새 작업 수락을 먼저 막고 저장·결제·랭킹 업데이트 같은 필수 Queue를 Drain합니다. 위치 Snapshot·로그 같은 비핵심 Queue는 버립니다. Worker가 종료 신호를 받으면 현재 작업을 완료하고 종료합니다. 종료 Timeout 내에 Drain이 완료되지 않으면 강제 종료하고 미처리 항목을 로깅합니다.
+### Q6. 배포 중 Graceful Shutdown 시 Work Queue Drain이 5분을 초과해 서비스가 중단됐습니다. Drain 시간을 단축하면서 중요 작업을 보호하는 설계를 설명하세요.
+Graceful Shutdown 시작 시 신규 작업 수락을 먼저 차단합니다. 메시지를 중요도별로 분류해 결제·저장 큐는 완료될 때까지 Drain하고 위치 Snapshot·로그 큐는 즉시 버립니다. Drain Timeout(예: 30초)을 설정하고 초과 시 남은 중요 항목을 DB나 Outbox에 저장 후 강제 종료합니다. 다음 서버 기동 시 Outbox에서 미완 항목을 재처리합니다.
 
 ## 10. 예상 꼬리질문
 
-- Hot Room이 생겼을 때 부하를 분산하는 방법은 무엇인가요?
-- Priority Queue에서 낮은 우선순위 작업이 굶는(Starvation) 문제를 어떻게 해결하나요?
-- Room 간 전투처럼 여러 Room이 관련된 작업을 어떻게 처리하나요?
-- Queue 대기 시간이 갑자기 증가했을 때 병목을 어떻게 찾나요?
-- Worker 예외가 발생했을 때 Room 상태를 어떻게 복구하나요?
-- `async/await`와 Thread Pool 기반 Work Queue의 실질적인 차이는 무엇인가요?
-- Tick-driven Logic과 Event-driven Work Queue를 어떻게 통합하나요?
+- Hot Room을 전용 Worker로 격리했는데 해당 Room의 인원이 빠져나가 부하가 줄었습니다. 격리 해제 시 기존 Worker로 재통합하는 절차와 이 과정에서 발생할 수 있는 순서 역전을 어떻게 방지하나요?
+- Priority Queue 기반 Work Queue에서 결제 완료 메시지만 처리하다 위치 갱신 메시지가 30초 이상 대기하는 Starvation이 발생했습니다. Aging으로 우선순위를 올릴 때 몇 초 기준으로 적용하나요?
+- Room A 공격자와 Room B 방어자 간 PvP 판정이 필요합니다. roomId Partition으로는 양쪽 상태를 동시에 접근할 수 없어 설계를 변경해야 합니다. Coordinator 방식과 두 Room Lock 순서 고정 방식 중 어느 쪽을 선택하나요?
+- Work Queue Dequeue 후 WorkItem 처리 도중 Worker Thread가 패닉으로 종료됐습니다. 해당 항목은 이미 Queue에서 빠진 상태입니다. 재처리 보장을 위해 어떤 설계를 추가해야 하나요?
+- 4 Worker Partition에서 특정 Room ID 범위가 항상 Worker 0으로 몰려 Partition 편차가 3배 이상 발생합니다. Consistent Hashing 도입 시 기존 Room의 Worker 이동과 In-flight 작업을 어떻게 처리하나요?
+- Bounded Queue Full 상태에서 Drop 메트릭 없이 운영하다 로그인 실패율이 급등한 후에야 발견했습니다. Drop 조기 탐지를 위해 어떤 알람 기준(임계값·시간 창)을 권장하나요?
+- Logic Worker가 DB Write를 동기로 호출하다 Deadlock이 발생해 Worker 전체가 고착됐습니다. Worker가 고착 상태인지 감지하는 Watchdog 설계와 자동 복구 절차를 설명하세요.
 
 ## 11. 30초 모범답변
 

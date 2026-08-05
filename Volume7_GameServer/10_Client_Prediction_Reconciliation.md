@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Client Prediction의 목적과 입력 Sequence 기반 동작 원리를 설명할 수 있다.
-- Reconciliation 절차(권위 상태 적용 → Pending 제거 → 미확인 입력 재실행)를 단계별로 설명할 수 있다.
-- 서버가 클라이언트의 최종 좌표를 그대로 적용하지 않는 이유와 검증 방법을 설명할 수 있다.
-- 예측 적합 대상과 부적합 대상의 구분 기준을 설명할 수 있다.
+- Correction 거리·빈도 지표가 급증했을 때, Float 결정론 불일치·Tick Rate 차이·Collision 순서 불일치 중 원인을 진단하고 Reconciliation 파라미터 조정 방향을 결정할 수 있다.
+- 서버가 클라이언트의 최종 좌표를 적용하면 Wall Hack·Speed Hack이 허용되는 이유를 기준으로, 이동 방향·최대 속도·지형 충돌·Cooldown 독립 검증 설계를 결정할 수 있다.
+- Correction Threshold 값이 너무 크거나 작을 때 Cheat 허용·Jitter 오탐이 발생하는 조건을 기준으로, 실측 RTT Jitter p95 기반 임계값 설정 방법을 결정할 수 있다.
+- 구매·보상·Match 결과를 Prediction했다가 서버가 거부했을 때 롤백 UX가 더 나빠지는 이유를 기준으로, 예측 대상과 서버 확인 후 확정 대상을 결정할 수 있다.
 
 ## 1. 개요
 Client Prediction은 서버 응답 전 자신의 입력 결과를 즉시 보여 주고 Reconciliation은 권위 서버 상태와 차이를 수정하는 방식이다.
@@ -186,33 +186,33 @@ void OnServerSnapshot(ServerState state) {
 
 ## 9. 면접 질문
 
-### Q1. Client Prediction의 목적과 동작 원리를 설명해 주세요.
-RTT 동안 서버 응답을 기다리면 조작감이 나빠집니다. Client Prediction은 자신의 입력을 로컬에서 즉시 실행해 화면에 반영하고, 같은 입력을 Sequence와 함께 서버로 전송합니다. 서버는 독립적으로 판정하고 최종 상태를 권위로 사용합니다.
+### Q1. FPS 서버에서 Correction 이벤트가 갑자기 초당 50회 이상으로 급증했습니다. 어떤 순서로 원인을 진단하나요?
+먼저 서버와 클라이언트 Tick Rate가 일치하는지 확인합니다. 클라이언트가 60Hz, 서버가 20Hz라면 입력 Duration 불일치로 Replay 결과가 누적 편차를 낳습니다. 다음으로 Float Simulation에 `-ffast-math` 같은 비결정론적 최적화가 적용됐는지 확인합니다. 마지막으로 Correction 거리가 큰 이벤트의 Sequence를 추적해 특정 클라이언트만 편중됐는지 확인합니다. 편중됐다면 해당 클라이언트의 RTT Jitter가 비정상적으로 높거나 Cheat를 의심합니다.
 
-### Q2. Reconciliation 절차를 단계별로 설명해 주세요.
-서버 Snapshot이 도착하면 세 단계로 처리합니다. 1단계: 서버 권위 상태를 클라이언트에 즉시 적용합니다. 2단계: `lastProcessedSeq` 이하의 확인된 입력을 Pending Queue에서 제거합니다. 3단계: 남은 미확인 입력을 순서대로 재실행해 현재 예측 상태를 재구성합니다. 차이가 작으면 Visual Smoothing, 크면 즉시 교정합니다.
+### Q2. 클라이언트가 이동 최종 좌표를 직접 보내도록 변조하면 어떤 공격이 가능하고, 서버는 어떻게 방어해야 하나요?
+좌표만 검증하면 Speed Hack(한 Tick에 수십 미터 이동), Wall Hack(벽 관통 이동), Teleport(임의 위치 순간 이동) 공격이 가능합니다. 서버는 최종 좌표 대신 이동 방향·버튼·Duration을 받아 독립 시뮬레이션으로 위치를 계산합니다. 최대 이동 속도(예: 10m/Tick)와 서버 시간 Window(예: 50ms±10ms)를 초과하면 검증 실패 처리합니다. 클라이언트 Timestamp도 서버 수신 시각 기준 ±100ms 범위로 제한합니다.
 
-### Q3. 서버가 클라이언트의 최종 좌표를 그대로 적용하지 않는 이유는?
-클라이언트 코드는 수정·패치 가능하므로 좌표를 조작할 수 있습니다. 서버는 이동 방향·버튼·Duration을 받아 최대 속도·가속도·지형 충돌·Cooldown을 독립 시뮬레이션으로 검증합니다. 클라이언트 Timestamp도 조작 가능하므로 서버 시간 기준 Window로 제한합니다.
+### Q3. Correction Threshold를 0.1m로 설정했더니 한국-일본 간 RTT 80ms 환경에서 플레이어가 계속 순간이동하는 현상이 발생했습니다. 어떻게 조정하나요?
+RTT 80ms에서 Jitter p95가 약 ±20ms라면, 20ms × 이동 속도(5m/s) ≈ 0.1m로 정상 이동 오차가 Threshold와 같습니다. Threshold를 RTT Jitter p95 기반 0.25m로 늘리고, 그 이하 차이는 Visual Smoothing(Lerp 0.3f)으로 처리합니다. FPS처럼 높은 정확도가 필요하면 0.15m로 타협하고 Correction 빈도를 지표로 수집해 오탐 비율을 모니터링합니다. MMORPG는 조작감보다 안정성을 중시하므로 0.5m까지 허용할 수 있습니다.
 
-### Q4. 입력 손실 시 Pending Queue를 어떻게 처리하나요?
-Unreliable 채널에서 최근 입력 2~3개를 Packet에 중복 포함해 손실을 보상합니다. 서버는 Sequence로 중복을 제거합니다. Pending 입력에 시간·개수 상한을 두고 오래 확인되지 않으면 재동기화를 요청하거나 연결 품질 UI를 표시합니다.
+### Q4. UDP 환경에서 입력 Packet 15%가 손실될 때 Reconciliation이 의도치 않은 순간이동을 일으킵니다. 어떻게 방어하나요?
+최근 입력 2~3개를 각 Packet에 중복 포함해 단일 손실을 복구합니다. 서버는 Sequence로 중복을 제거합니다. Pending 입력에 개수 상한(예: 30개)과 시간 상한(예: 500ms)을 두고 초과 시 서버에 전체 상태 재동기화를 요청합니다. 재동기화 빈도가 분당 3회를 초과하면 연결 품질 UI를 표시하고 Reliable 채널로 전환을 검토합니다.
 
-### Q5. 예측에 적합한 대상과 부적합한 대상의 기준은 무엇인가요?
-자기 이동·무기 반동처럼 즉시 피드백이 가치 있고 되돌리기 쉬운 상태는 예측 대상입니다. 구매·보상·Match 결과처럼 되돌리기 어렵거나 다른 플레이어 상태처럼 미래 입력을 모르는 경우는 예측하지 않고 서버 확인 후 확정합니다.
+### Q5. 아이템 구매 Prediction을 구현했더니 서버가 잔액 부족으로 거부했을 때 UI가 구매 성공 → 실패 순서로 뒤집혀 사용자 불만이 증가했습니다. 이 설계의 문제점과 해결 방안을 설명하세요.
+구매처럼 되돌리기 어려운 상태 변경을 Prediction하면 서버 거부 시 Rollback UX가 오히려 더 나빠집니다. 아이템 구매·보상·Match 결과는 서버 확인 후에만 UI를 업데이트하는 Wait-for-Ack 방식이 안전합니다. UX를 개선하려면 실제 확정 전에 "처리 중" 스피너나 낙관적 UI를 보여주되, 실패 시 자연스러운 취소 애니메이션으로 처리합니다. 자기 이동·무기 반동처럼 즉시 피드백이 가치 있고 되돌리기 쉬운 상태만 Prediction합니다.
 
-### Q6. Correction Threshold는 어떻게 설정하나요?
-Threshold가 너무 크면 소폭 Cheat 이동을 허용하고, 너무 작으면 정상 Jitter에 자꾸 화면이 튑니다. 실제 네트워크 환경에서 RTT·Jitter를 측정해 Jitter의 95퍼센타일 오차보다 약간 큰 값으로 시작합니다. 장르별 허용 오차도 다릅니다. FPS는 작고 MMORPG는 상대적으로 크게 설정합니다.
+### Q6. Pending Queue에 100개 이상 미확인 입력이 쌓였을 때 매 Snapshot마다 Replay 비용이 급증합니다. 어떻게 Replay 비용을 제한하나요?
+Pending Queue 상한을 30~50개로 설정해 그 이상은 오래된 항목부터 제거하고 서버 재동기화를 요청합니다. Replay 시 모든 입력을 전체 시뮬레이션하는 대신 이동 Snapshot만 Replay하고 복잡한 Physics는 서버 값을 그대로 적용합니다. Snapshot 주기를 20Hz에서 10Hz로 줄이면 Replay 횟수 자체가 감소하지만 Correction 지연이 늘어납니다. Pending 수가 30개를 초과하는 Session을 Prometheus로 집계해 네트워크 품질 이상 징후를 탐지합니다.
 
 ## 10. 예상 꼬리질문
 
-- Rollback Netcode가 Client Prediction + Reconciliation과 다른 점은 무엇인가요?
-- 클라이언트와 서버가 다른 Tick Rate를 사용할 때 Reconciliation이 어렵게 되는 이유는?
-- 발사 효과를 먼저 보여주고 Hit 판정은 서버에서 처리할 때 UX를 어떻게 설계하나요?
-- 재접속 시 Pending Queue를 어떻게 처리하나요?
-- Prediction Replay 횟수가 많을 때 CPU 부하를 어떻게 줄이나요?
-- Reconciliation 후에도 위치가 계속 튄다면 어떤 원인을 먼저 확인하나요?
-- 다수의 플레이어가 같은 공간에 있을 때 Prediction 오차가 누적되는 이유는?
+- Rollback Netcode를 적용했더니 60fps 게임에서 프레임당 최대 8개 Rollback-Resimulation이 발생해 CPU가 160% 수준으로 올라갔습니다. Rollback 깊이 상한을 몇 프레임으로 설정하는 게 적절한가요?
+- 클라이언트 60Hz와 서버 20Hz가 혼용될 때 클라이언트 Replay에서 입력 Duration을 어떻게 조정해야 서버 시뮬레이션 결과와 최대한 일치하나요?
+- 총알 발사 이펙트를 Prediction으로 즉시 보여주고 Hit 판정은 서버에서 처리할 때, 서버가 Hit 거부 응답을 100ms 후에 보내면 클라이언트에서 이펙트를 어떻게 처리하나요?
+- 재접속 후 서버가 권위 상태를 전송했는데 Pending Queue에 미확인 입력 50개가 남아 있습니다. 이 입력들을 모두 Replay하면 안 되는 이유는 무엇인가요?
+- Correction 빈도가 갑자기 3배로 증가했는데 RTT는 변화 없습니다. 서버 측 Simulation 변경(예: Physics 라이브러리 업데이트)이 원인인지 빠르게 확인하는 방법은 무엇인가요?
+- CORRECTION_THRESHOLD를 0.1m로 설정했는데 속도 부스트 아이템 사용 중에는 오탐 Correction이 자주 발생합니다. 이동 상태별로 Threshold를 다르게 적용하는 설계를 어떻게 구현하나요?
+- 여러 플레이어가 좁은 공간에서 충돌할 때 각 클라이언트의 Prediction 상태가 서로 다른 충돌 결과를 표시합니다. 서버 권위를 적용해도 Jitter가 남는 이유는 무엇이고 완화 방법은 무엇인가요?
 
 ## 11. 30초 모범답변
 

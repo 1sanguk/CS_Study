@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- ThreadPool·Task·async/await의 역할과 동작 원리를 설명할 수 있다.
-- I/O-bound 비동기와 CPU-bound 병렬 작업의 차이를 설명할 수 있다.
-- Sync-over-async Deadlock, ThreadPool Starvation, `async void` 위험을 설명할 수 있다.
-- 게임 서버의 Tick State 보호와 I/O Completion 수명 설계를 설명할 수 있다.
+- Tick p99 Spike가 ThreadPool Starvation에서 비롯된 것인지, Blocking I/O 호출인지 Profiler 지표(ThreadPool Queue Length·Thread Count·Wait Time)로 구분하고, Starvation을 유발한 코드 경로를 특정할 수 있다.
+- I/O-bound 작업에서 `await`가 Thread를 반환하는 조건과, CPU-bound 작업에 `await`·`Task.Run`을 잘못 적용했을 때 Thread 낭비가 발생하는 패턴을 진단하고, 게임 서버 I/O·Tick 분리 설계에서 적합한 방식을 결정할 수 있다.
+- 단일 Thread Context에서 Sync-over-async가 Deadlock을 유발하는 정확한 조건과, ThreadPool Thread가 Blocking으로 소진되어 Starvation이 발생하는 경로를 코드 수준에서 진단하고, `async all the way` 전파 경계를 판단할 수 있다.
+- Session 종료 시 Outstanding Task·Capture된 Closure·CancellationToken 전파가 연결되지 않아 자원이 유지되는 패턴을 진단하고, 종료 순서와 정리 불변식을 설계 결정할 수 있다.
 
 ## 1. 개요
 
@@ -299,51 +299,79 @@ await Task.WhenAll(tasks);
 
 ## 19. 면접 질문
 
-### Q1. `async`/`await`의 동작 원리를 설명해 주세요.
+### Q1. 게임 서버 Tick p99가 정상 5ms에서 특정 구간에서만 200ms로 급등하는 현상이 있습니다. dotnet-counters로 ThreadPool Thread Count가 100개를 넘고 Queue Length가 쌓이는 것을 확인했습니다. ThreadPool Starvation이 원인임을 확정하는 절차와 Starvation을 유발한 Blocking 코드 경로를 특정하는 방법을 설명하십시오.
 
-`async` Method는 Compiler가 State Machine으로 변환합니다. `await` 대상이 미완료이면 현재 상태를 저장하고 Thread를 반환합니다. I/O 완료 시 Continuation이 ThreadPool에 예약되어 나머지 코드가 실행됩니다. `async` 자체는 Thread를 만들지 않습니다.
+ThreadPool Starvation은 Worker Thread가 `.Result`·동기 I/O·`Thread.Sleep`으로 Blocking되어 새 Work Item을 처리할 Thread가 부족해진 상태입니다. dotnet-counters에서 Thread Count 급증과 Queue Length 누적이 동시에 나타나면 Starvation을 의심합니다. PerfView의 ThreadPool 이벤트나 dotnet-trace의 Thread Wait Stack에서 어떤 코드가 Thread를 잡고 있는지 Call Stack을 확인합니다. Blocking 호출을 async로 교체하거나 제거하는 것이 근본 해결입니다.
 
-### Q2. ThreadPool Starvation은 어떻게 발생하나요?
+### Q2. DB에서 Player 데이터를 로드한 I/O Completion Handler가 `_players[id] = data;`로 Tick State를 직접 수정하고 있습니다. 현재 어떤 Race Condition이 발생하고, Bounded Queue를 통해 Tick 경계에서 State를 적용하도록 재설계할 때 Game Thread와 I/O Worker Thread 간 데이터 흐름을 어떻게 설계합니까?
 
-ThreadPool Worker가 `.Result`·`.Wait()`·동기 I/O·`Thread.Sleep`으로 장시간 Blocking되면 새 작업을 처리할 Thread가 부족해집니다. Runtime이 Thread를 추가하는 동안 Tail Latency가 급등합니다. 해결은 Blocking 제거와 `async all the way`입니다.
+I/O Worker가 Tick State를 직접 수정하면 Game Thread와 Data Race가 발생합니다. Player가 반만 초기화된 상태에서 Tick이 읽을 수 있습니다. I/O Completion은 Bounded Channel이나 Queue에 메시지를 넣고, Game Thread가 Tick 경계에서 Queue를 소비해 State를 변경하면 Lock 없이 단일 소유권을 유지할 수 있습니다.
 
-### Q3. I/O-bound와 CPU-bound 비동기의 차이는 무엇인가요?
+### Q3. 내부 Library가 `.GetAwaiter().GetResult()`로 async Task를 동기 대기하는 코드가 ASP.NET Core 서버 Request Handler async 체인에 포함되어 간헐적으로 Deadlock이 발생했습니다. Deadlock이 발생하지 않는 환경과 발생하는 환경의 차이와, `ConfigureAwait(false)` 추가 vs 호출 체인 전체를 async로 전환 중 어느 것이 근본 해결인지 판단하십시오.
 
-I/O-bound는 `await`로 대기 중 Thread를 반환해 소수 Thread로 많은 동시 작업을 처리합니다. CPU-bound는 `await`를 붙여도 CPU 사용이 줄지 않습니다. CPU 계산은 `Task.Run`으로 Worker에 이동하되 전체 CPU 비용은 그대로이며 Core 수를 초과하면 경쟁이 생깁니다.
+Deadlock은 Continuation이 특정 Thread로 돌아와야 하는데 그 Thread가 `.GetResult()`로 대기 중일 때 발생합니다. ASP.NET Core는 기본 SynchronizationContext가 없어 Deadlock이 드물지만, Custom Middleware나 일부 환경에서 Context가 있으면 발생합니다. `ConfigureAwait(false)`는 Context Capture를 막지만 Library 코드의 모든 await에 적용해야 하는 취약한 해결입니다. 근본 해결은 Sync-over-async 자체를 제거하고 async all the way로 전환하는 것입니다.
 
-### Q4. `async void`는 왜 위험한가요?
+### Q4. 100만 개 Player ID를 DB에서 일괄 로드하는 `await Task.WhenAll(ids.Select(LoadAsync))` 코드가 실행 중 DB Connection Pool 고갈로 TimeoutException이 발생했습니다. `SemaphoreSlim`으로 병렬도를 제한할 때 최적 동시 수를 결정하는 기준과 일부 Task Timeout 시 나머지를 계속할지 중단할지의 Fallback 설계를 설명하십시오.
 
-호출자가 반환 Task를 받을 수 없어 완료·예외를 관찰할 수 없습니다. 예외가 나면 `UnobservedTaskException`으로 Application이 종료될 수 있습니다. Event Handler 이외에는 항상 `async Task`를 사용합니다.
+병렬도는 DB Connection Pool 크기와 서버 Core 수 중 작은 값을 기준으로 여유를 두고 설정합니다. SemaphoreSlim(32)처럼 시작해 BenchmarkDotNet이나 부하 테스트로 실측하고 조정합니다. Timeout 시 Fallback은 partial success를 허용할지 전체 중단할지를 비즈니스 요구에 따라 결정합니다. partial success라면 실패 ID를 수집해 재시도 큐에 넣고, 전체 중단이라면 CancellationTokenSource.Cancel()로 나머지 Task에 취소 신호를 전파합니다.
 
-### Q5. Sync-over-async Deadlock은 어떻게 생기나요?
+### Q5. Session 종료 후에도 Session 객체가 60초 이상 Memory에 유지되는 것을 dotnet-dump로 발견했습니다. async Task가 Session을 Closure로 Capture하고 있는 것이 원인임을 Dump에서 확인하는 방법과, `CancellationTokenSource`로 취소를 전파하고 `WhenAll`로 Outstanding Task를 관찰하는 정리 패턴을 설명하십시오.
 
-단일 Thread Context에서 `await`가 Continuation을 원래 Thread로 돌려보내야 하는데 그 Thread가 `.Result`로 대기 중이면 서로 진행하지 못합니다. `ConfigureAwait(false)`로 Context Capture를 피하거나 호출 Chain 전체를 `async`로 바꿔 해결합니다.
+dotnet-dump에서 gcroot <Session 주소>로 Retention Path를 추적하면 async State Machine이 Session을 캡처한 경로가 나옵니다. 정리 패턴은 Session 종료 시 `_cts.Cancel()`로 취소를 전파하고 `await Task.WhenAll(_outstandingTasks)`로 모든 Task가 완료될 때까지 기다린 뒤 자원을 해제합니다. Task 목록은 시작 시 등록하고 완료 시 제거하는 방식으로 관리합니다.
 
-### Q6. 게임 서버에서 `async`와 Game Tick을 어떻게 설계하나요?
+### Q6. `async void` Event Handler에서 던진 예외가 `UnhandledExceptionEventArgs.IsTerminating = true`로 프로세스를 종료시키는 장애가 발생했습니다. `async void` 위험을 Roslyn Analyzer로 사전에 탐지하는 방법과, Event 구독 패턴에서 `async Task`로 교체하기 어려운 경우의 예외 처리 래퍼 설계를 설명하십시오.
 
-DB·HTTP I/O는 `async`로 처리하되 Tick State는 단일 Game Thread가 소유합니다. I/O Completion Handler는 Bounded Queue에 메시지를 넣고 Game Thread가 Tick 경계에서 Queue를 소비해 상태를 변경합니다. Task에서 직접 State를 수정하면 동기화 없이 Race가 생깁니다.
+`async void`의 예외는 SynchronizationContext.Post로 던져져 UnhandledException으로 처리됩니다. Roslyn Analyzer `AsyncFixer` 또는 `Microsoft.VisualStudio.Threading.Analyzers`로 `async void` 사용을 빌드 시 탐지할 수 있습니다. Event Handler 패턴에서 교체가 어렵다면 래퍼로 try/catch 후 예외를 로깅하거나 Fault Channel에 전달하는 방식으로 프로세스 종료를 막습니다.
 
 ## 20. 예상 꼬리질문
 
-- `ConfigureAwait(false)`는 언제 필요하고 언제 불필요한가요?
-- `ValueTask`와 `Task`의 차이와 선택 기준은 무엇인가요?
-- `CancellationToken.ThrowIfCancellationRequested()`는 어느 빈도로 호출하나요?
-- `Task.WhenAny`로 Timeout을 구현할 때 생기는 문제는 무엇인가요?
-- `Channel<T>`를 사용하는 이유는 무엇인가요?
-- `SemaphoreSlim`으로 병렬도를 제한하는 패턴을 설명해 주세요.
-- Session 종료 시 Outstanding Task를 어떻게 정리하나요?
+- ThreadPool Starvation 발생 시 `ThreadPool.SetMinThreads`로 최솟값을 높이면 Spike가 줄어들지만 Blocking 원인이 남아 있는 경우 어떤 부작용이 생기고, 근본 원인 특정을 위해 우선 확인하는 지표와 도구는 무엇입니까?
+- `Task.WhenAny(workTask, Task.Delay(5000))`로 Timeout을 구현했을 때 Delay가 먼저 완료되면 workTask가 Background에서 계속 실행됩니다. Resource 누수를 방지하는 실제 취소 연결 패턴과 workTask가 취소를 무시하는 경우의 처리 방법을 설명하십시오.
+- `ValueTask<T>`를 Cache·`Task.WhenAll`·여러 번 await에 사용하면 어떤 버그가 생기고, Hot Path에서 `Task<T>` 대신 `ValueTask<T>`를 채택하는 실측 기준(동기 완료 비율·Allocation 감소폭)은 무엇입니까?
+- Bounded `Channel<T>`에서 Producer 속도가 Consumer를 초과할 때 `BoundedChannelFullMode.Wait`·`DropOldest`·`DropNewest` 중 게임 서버 실시간 위치 갱신 메시지에 어느 것을 선택하고, 선택 기준과 Drop 시 모니터링 지표는 무엇입니까?
+- CPU-bound 압축 Task를 `Task.Run`으로 ThreadPool에 넣었는데 Core 수 대비 Task가 과도해 Context Switch가 급증했습니다. `Parallel.ForEachAsync(DegreeOfParallelism)`·Dedicated Thread Pool·`SemaphoreSlim` 중 어느 방식으로 병렬도를 제한하고, 각 방식이 적합한 조건은 무엇입니까?
+- Graceful Shutdown 중 `CancellationToken`을 전파했는데 일부 Task가 취소를 무시하고 계속 실행됩니다. `token.ThrowIfCancellationRequested()` 누락 외에 취소 신호를 무시하는 패턴은 무엇이고, Shutdown Timeout 초과 시 강제 종료 설계는 어떻게 합니까?
+- `Task.WhenAll`로 여러 DB 쿼리를 병렬 실행 중 하나가 Exception을 던졌을 때 `AggregateException.InnerExceptions`가 아닌 첫 번째 예외만 보는 코드에서 나머지 Task 실패가 숨겨지는 이유와, 모든 Task 예외를 관찰하는 패턴을 설명하십시오.
 
 ## 21. 30초 모범답변
 
-> `async`/`await`는 I/O 대기 중 Thread를 반환하고 완료 시 Continuation을 예약해 소수 Thread로 많은 동시 연결을 처리합니다. `.Result`·`.Wait()`로 async를 동기 대기하면 Deadlock이나 ThreadPool Starvation이 생기므로 호출 Chain 전체를 async로 전파합니다. 게임 서버에서 I/O Completion은 Bounded Queue에 메시지를 넣고 Game Thread가 Tick 경계에서 State를 변경합니다.
+**Q1 — ThreadPool Starvation 진단**
+> ThreadPool Starvation은 Worker Thread가 `.Result`·동기 I/O·`Thread.Sleep`으로 Blocking되어 새 Work Item을 처리할 Thread가 부족해진 상태입니다. dotnet-counters에서 Thread Count 급증과 Queue Length 누적이 동시에 나타나면 Starvation을 의심합니다. PerfView의 ThreadPool 이벤트나 dotnet-trace의 Thread Wait Stack에서 어떤 코드가 Thread를 잡고 있는지 Call Stack을 확인합니다. Blocking 호출을 async로 교체하거나 제거하는 것이 근본 해결입니다.
+
+**Q2 — Tick State Race Condition 재설계**
+> I/O Worker가 Tick State를 직접 수정하면 Game Thread와 Data Race가 발생합니다. Player가 반만 초기화된 상태에서 Tick이 읽을 수 있습니다. I/O Completion은 Bounded Channel이나 Queue에 메시지를 넣고, Game Thread가 Tick 경계에서 Queue를 소비해 State를 변경하면 Lock 없이 단일 소유권을 유지할 수 있습니다.
+
+**Q3 — Sync-over-async Deadlock 근본 해결**
+> Deadlock은 Continuation이 특정 Thread로 돌아와야 하는데 그 Thread가 `.GetResult()`로 대기 중일 때 발생합니다. ASP.NET Core는 기본 SynchronizationContext가 없어 Deadlock이 드물지만, Custom Middleware나 일부 환경에서 Context가 있으면 발생합니다. `ConfigureAwait(false)`는 Context Capture를 막지만 Library 코드의 모든 await에 적용해야 하는 취약한 해결입니다. 근본 해결은 Sync-over-async 자체를 제거하고 async all the way로 전환하는 것입니다.
+
+**Q4 — SemaphoreSlim 병렬도 제한과 Fallback**
+> 병렬도는 DB Connection Pool 크기와 서버 Core 수 중 작은 값을 기준으로 여유를 두고 설정합니다. SemaphoreSlim(32)처럼 시작해 BenchmarkDotNet이나 부하 테스트로 실측하고 조정합니다. Timeout 시 Fallback은 partial success를 허용할지 전체 중단할지를 비즈니스 요구에 따라 결정합니다. partial success라면 실패 ID를 수집해 재시도 큐에 넣고, 전체 중단이라면 CancellationTokenSource.Cancel()로 나머지 Task에 취소 신호를 전파합니다.
+
+**Q5 — Session Closure Capture 진단 및 정리 패턴**
+> dotnet-dump에서 gcroot <Session 주소>로 Retention Path를 추적하면 async State Machine이 Session을 캡처한 경로가 나옵니다. 정리 패턴은 Session 종료 시 `_cts.Cancel()`로 취소를 전파하고 `await Task.WhenAll(_outstandingTasks)`로 모든 Task가 완료될 때까지 기다린 뒤 자원을 해제합니다. Task 목록은 시작 시 등록하고 완료 시 제거하는 방식으로 관리합니다.
+
+**Q6 — async void 탐지 및 래퍼 설계**
+> `async void`의 예외는 SynchronizationContext.Post로 던져져 UnhandledException으로 처리됩니다. Roslyn Analyzer `AsyncFixer` 또는 `Microsoft.VisualStudio.Threading.Analyzers`로 `async void` 사용을 빌드 시 탐지할 수 있습니다. Event Handler 패턴에서 교체가 어렵다면 래퍼로 try/catch 후 예외를 로깅하거나 Fault Channel에 전달하는 방식으로 프로세스 종료를 막습니다.
 
 ## 22. 1~2분 확장답변
 
-> `async`/`await`는 Compiler가 State Machine으로 변환해 `await` 대상이 미완료이면 상태를 저장하고 Thread를 반환합니다. I/O 완료 시 Continuation이 ThreadPool에 예약됩니다. `async`는 새 Thread를 만들지 않으며 CPU 작업에는 CPU 비용이 그대로 있습니다.
->
-> `.Result`·`.Wait()`로 동기 대기하면 단일 Thread Context에서 Deadlock이나 ThreadPool Starvation이 생깁니다. `async void`는 예외 관찰이 불가능해 Event Handler 외에는 쓰지 않습니다. `Task.WhenAll`에 무제한 Task를 넣으면 Resource가 소진되므로 `SemaphoreSlim`으로 병렬도를 제한합니다.
->
-> 게임 서버에서 DB·HTTP I/O는 async로 처리하되 Tick State는 단일 Game Thread가 소유합니다. I/O Completion이 Bounded Queue에 메시지를 넣으면 Game Thread가 Tick 경계에서 소비합니다. Session 종료 시 `CancellationToken`으로 취소를 전파하고 Outstanding Task를 `WhenAll`로 관찰한 뒤 정리합니다.
+**Q1 — ThreadPool Starvation 진단**
+> 먼저 dotnet-counters의 `ThreadPool Thread Count`와 `ThreadPool Queue Length`를 실시간으로 모니터링합니다. Thread Count가 CPU Core 수 대비 과도하게 많고 Queue Length가 계속 쌓이면 Starvation입니다. Runtime이 Thread를 추가하지만 500ms 간격으로 하나씩 늘리므로 Latency Spike가 이 시간 동안 지속됩니다. PerfView의 Thread Time Stack 뷰 또는 dotnet-trace CPU Sampling에서 어떤 Method가 Thread를 점유하는지 확인합니다. `.Result`·`.GetAwaiter().GetResult()`·`Thread.Sleep`·동기 DB Driver 호출이 원인인 경우가 많습니다. Library 코드에 숨어 있는 경우 dotnet-trace 이벤트로 Thread Wait 이유를 추적합니다. 해결은 Blocking 호출을 async API로 교체하고 외부 Library의 비동기 오버로드를 사용하는 것입니다. 근본 해결 전 임시 조치로 `ThreadPool.SetMinThreads`로 최솟값을 높이면 Thread 추가 지연을 줄일 수 있지만 Blocking 원인을 제거해야 합니다.
+
+**Q2 — Tick State Race Condition 재설계**
+> I/O Worker Thread가 `_players[id] = data;`를 직접 쓰면 Game Thread의 읽기와 Data Race가 됩니다. Dictionary는 Thread-safe하지 않아 내부 구조가 손상될 수 있고, 손상되지 않더라도 Player 객체의 여러 필드를 순서대로 초기화하는 중에 Game Thread가 읽으면 반쯤 초기화된 상태를 보게 됩니다. 해결 설계는 I/O Completion에서 `PlayerLoginMessage` 같은 불변 DTO를 `Channel<IGameMessage>.Writer.TryWrite(msg)`로 넣고, Game Thread Tick에서 `Channel.Reader.TryRead(out var msg)`로 소비해 `Apply(msg)`를 실행하는 것입니다. Channel은 `BoundedChannel`로 크기 상한을 두어 생산 속도가 소비를 초과할 때 Backpressure를 적용합니다. 이 설계는 Tick State 소유권이 Game Thread에만 있어 Lock이 필요 없고, I/O Worker는 Channel 쓰기만 담당하므로 역할이 분리됩니다.
+
+**Q3 — Sync-over-async Deadlock 근본 해결**
+> Deadlock 조건은 두 가지입니다. 첫째, Continuation이 특정 SynchronizationContext로 Post되어야 한다. 둘째, 그 Context가 점유 중(`.GetResult()` 대기)이다. ASP.NET Core는 기본 RequestContext가 없어 Deadlock이 발생하지 않는 경우가 많지만, 일부 Custom SynchronizationContext나 테스트 환경에서는 발생합니다. `ConfigureAwait(false)`를 Library의 모든 await에 추가하면 Context를 Capture하지 않아 Deadlock을 피할 수 있지만, 하나라도 누락되면 문제가 재발합니다. 근본 해결은 Library API를 async로 바꾸고 호출 체인 전체가 `async/await`로 이어지게 하는 것입니다. 이미 배포된 Library라면 `ConfigureAwait(false)` 적용이 단기 해결이지만, 자체 코드는 Sync-over-async를 없애는 것이 장기 목표입니다. 진단은 Visual Studio 병렬 스택 뷰나 WinDbg의 !Threads·!SyncBlock으로 Thread가 어디에서 Wait 중인지 확인합니다.
+
+**Q4 — SemaphoreSlim 병렬도 제한과 Fallback**
+> 병렬도 결정 기준은 DB Connection Pool 크기, 서버 Core 수, 허용 메모리입니다. Connection Pool이 100개라면 동시 DB 쿼리는 100개를 넘으면 안 됩니다. 실제로는 Pool 여유를 남기고 50~80 정도로 시작하며 BenchmarkDotNet이나 k6 부하 테스트로 Throughput이 최대가 되는 병렬도를 찾습니다. `SemaphoreSlim(N)`을 await 전에 WaitAsync, finally에서 Release하는 패턴으로 구현합니다. Timeout·Exception Fallback은 두 가지입니다. 1) Partial Success: 실패한 ID를 `ConcurrentBag`으로 수집하고 성공 데이터로 진행, 실패 목록은 재시도 Channel에 넣습니다. 2) 전체 중단: 첫 실패 시 `CancellationTokenSource.CancelAfter(0)`로 나머지 Task에 즉시 취소 신호를 보내고 `Task.WhenAll`의 AggregateException에서 모든 실패를 로깅합니다. 비즈니스 요구가 모든 데이터가 있어야 처리 가능하다면 전체 중단, 일부 없어도 처리 가능하면 Partial Success입니다.
+
+**Q5 — Session Closure Capture 진단 및 정리 패턴**
+> dotnet-dump analyze에서 `dumpheap -type Session`으로 인스턴스 수와 주소를 확인합니다. `gcroot <address>`를 실행하면 Retention Path가 나타납니다. `async State Machine`의 필드로 Session Reference가 저장된 경로가 보이면 Closure Capture가 원인입니다. async Task가 완료되기 전까지 State Machine이 살아 있고 State Machine이 Session을 참조하면 GC가 수집하지 못합니다. 정리 패턴: Session에 `CancellationTokenSource _cts`와 `List<Task> _tasks`를 두고, async 작업 시작 시 Task를 `_tasks`에 추가합니다. 종료 시 `_cts.Cancel()`로 취소를 전파하고 `await Task.WhenAll(_tasks)`로 모든 Task 완료를 기다린 뒤 `_state = Closed`로 변경합니다. `Task.WhenAll` 자체에 Timeout을 두어 오래 걸리는 Task는 강제로 진행하고 로깅합니다. `CancellationToken`을 실제로 확인하지 않는 Task는 취소가 안 되므로 `token.ThrowIfCancellationRequested()`를 반복 지점에 삽입했는지 확인합니다.
+
+**Q6 — async void 탐지 및 래퍼 설계**
+> `async void`의 예외는 await 시점에 Faulted로 Task에 저장되지 않고 현재 SynchronizationContext.UnhandledException으로 직접 전파됩니다. ASP.NET Core에서는 ThreadPool의 Unhandled Exception Handler가 받아 프로세스를 종료시킬 수 있습니다. 사전 탐지는 Roslyn Analyzer를 사용합니다. `AsyncFixer` NuGet 패키지의 `AsyncFixer01` 규칙, 또는 `Microsoft.VisualStudio.Threading.Analyzers`의 `VSTHRD100` 규칙이 async void를 경고합니다. `.editorconfig`에서 이 규칙을 Error로 설정하면 빌드 시 실패로 막을 수 있습니다. Event Handler 패턴에서 `async void`가 불가피한 경우 래퍼를 사용합니다. 이벤트 구독을 `sender.Event += (s, e) => AsyncHelper.FireAndForget(HandleAsync(e));` 형태로 래핑하고, `FireAndForget`은 Task를 await해 예외를 catch 후 `ILogger`로 로깅하거나 Fault Channel에 넣습니다. 이렇게 하면 예외가 프로세스를 종료시키지 않으면서 관찰 가능한 형태로 처리됩니다.
 
 ## 23. 핵심 요약
 

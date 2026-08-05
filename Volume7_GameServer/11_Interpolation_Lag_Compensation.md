@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Snapshot Interpolation이 왜 필요하고 Render Time을 약간 과거로 설정하는 이유를 설명할 수 있다.
-- Interpolation과 Extrapolation의 Trade-off를 설명할 수 있다.
-- Server Rewind(Lag Compensation) 절차를 단계별로 설명할 수 있다.
-- Client Timestamp를 그대로 믿으면 안 되는 이유와 최대 Rewind Window 설정 방법을 설명할 수 있다.
+- Buffer Underrun 빈도가 급증했을 때, Jitter p95 기준 bufferMs가 부족한지 Snapshot 손실이 원인인지 진단하고 동적 조정 또는 Extrapolation 보완 전략을 결정할 수 있다.
+- FPS 서버에서 고지연 플레이어의 Hit 판정 불만이 증가했을 때, Lag Compensation Rewind Window 부족인지 Client Timestamp 변환 오류인지 진단하고 Window 조정 및 검증 강화 방향을 결정할 수 있다.
+- Rewind Window를 300ms로 확대했을 때 피해자가 은폐 후에도 반복적으로 피격당하는 민원이 증가하는 이유를 기준으로, 공격자·피해자 공정성 균형을 위한 Rewind 상한과 고지연 Match 분리 정책을 결정할 수 있다.
+- Lag Compensation Rewind 도중 현재 World 상태가 오염되는 버그가 발생했을 때, RAII 복원 누락 또는 비동기 Hitbox 접근 경합 여부를 진단하고 ScopedHitboxRestore 설계로 수정 방향을 결정할 수 있다.
 
 ## 1. 개요
 Interpolation은 과거 Snapshot 사이를 보간해 원격 객체를 부드럽게 표시하고 Lag Compensation은 과거 시점 상태를 기준으로 행동을 판정해 지연 영향을 보정한다.
@@ -191,33 +191,33 @@ Snapshot Jitter를 측정해 `bufferMs`를 동적으로 조절하고, Buffer Und
 
 ## 9. 면접 질문
 
-### Q1. Snapshot Interpolation이 왜 필요하고 Render Time을 과거로 설정하는 이유는?
-Network Snapshot은 불규칙하게 도착해 직접 렌더링하면 화면이 끊깁니다. Buffer에 Snapshot을 약간 쌓아두고 Render Time을 `현재 - buffer_ms`로 잡으면 앞뒤 두 Snapshot 사이를 보간할 수 있습니다. buffer_ms를 Jitter 95퍼센타일 기준으로 설정하면 Buffer Underrun 없이 부드러운 보간이 가능합니다.
+### Q1. 원격 플레이어 화면 끊김 민원이 증가했고 Buffer Underrun 지표가 분당 200회 이상으로 급등했습니다. 원인을 어떻게 진단하나요?
+먼저 Jitter 지표(Snapshot 도착 간격 변동)를 확인합니다. Jitter p95가 현재 bufferMs(예: 100ms)보다 크면 Buffer가 부족한 것이므로 bufferMs를 Jitter p95 × 1.2 배수로 동적 조정합니다. Jitter가 정상인데 Underrun이 발생하면 Snapshot 자체가 손실된 것을 의심합니다. 해당 구간 Packet Loss Rate를 확인하고 손실률이 5% 이상이면 Extrapolation 보완(최대 200ms)을 활성화해 짧은 손실 구간을 메웁니다.
 
-### Q2. Interpolation과 Extrapolation의 Trade-off는 무엇인가요?
-Interpolation은 이미 받은 두 Snapshot 사이를 계산하므로 안정적이지만 buffer_ms만큼 표시 지연이 생깁니다. Extrapolation은 마지막 속도·방향으로 미래를 추정해 지연을 줄이지만, 급정지나 방향 전환에서 오버슈팅이 발생합니다. Extrapolation은 단기 손실 보완에만 제한적으로 사용하고 최대 시간 후에는 멈춥니다.
+### Q2. FPS 서버에서 RTT 150ms 플레이어가 화면에서 분명히 맞췄는데 Hit 판정이 없다고 불만을 제기했습니다. Lag Compensation 설계의 어느 부분을 점검하나요?
+발사 Packet의 Client Timestamp를 RTT 추정으로 Server 시간으로 변환하는 로직을 먼저 확인합니다. RTT 추정이 Heartbeat 평균을 사용하면 Jitter가 큰 환경에서 변환 오차가 커집니다. Rewind Window 상한(예: 200ms)이 RTT 150ms보다 작으면 Hit가 Window 밖으로 잘려 나갑니다. Window를 250ms로 늘리되 Weapon Cooldown·Sequence 검증도 함께 강화해 임의 과거 선택을 차단합니다.
 
-### Q3. Server Rewind(Lag Compensation) 절차를 설명해 주세요.
-발사 Packet의 Client Timestamp를 RTT 추정으로 Server 시간으로 변환합니다. 최대 Rewind Window로 Clamp해 허용 범위의 과거 시각을 구합니다. 해당 시각의 Hitbox를 Ring Buffer에서 임시 복원하고 Ray Test를 수행합니다. 판정 후 RAII 복원으로 현재 Hitbox 상태로 돌아옵니다.
+### Q3. Rewind Window를 250ms로 늘렸더니 피해자 피격 민원이 3배 증가했습니다. 피해자 공정성을 해치지 않으면서 고지연 플레이어를 수용하는 정책을 설명하세요.
+Rewind Window를 무한정 늘리면 피해자가 은폐 후 250ms 이내에도 피격될 수 있습니다. 첫 번째로 Window 상한을 RTT p99 기준으로 Match별로 분리 적용합니다. 저지연 Match(RTT p99 < 80ms)는 Window 100ms, 고지연 Match는 150ms까지로 제한합니다. 두 번째로 RTT 150ms 초과 플레이어를 별도 고지연 서버에 라우팅해 피해자 집합 자체를 분리합니다. 보정 Hit 비율을 게임 장르별 허용 범위(FPS: 10% 이하)로 모니터링합니다.
 
-### Q4. Client Timestamp를 그대로 믿으면 어떤 문제가 생기나요?
-클라이언트가 Timestamp를 조작해 공격자에게 유리한 임의의 과거 Hitbox를 선택할 수 있습니다. RTT Heartbeat로 Server 시간을 추정하고, 발사 Packet의 Timestamp를 Server 시간 기준 최대 Rewind Window 내로 Clamp합니다. Weapon Cooldown과 Sequence 범위도 함께 검증합니다.
+### Q4. Lag Compensation Rewind 중 현재 월드 상태가 간헐적으로 오염돼 다른 플레이어 Hitbox가 과거 위치로 고착되는 버그가 발생했습니다. 어떻게 수정하나요?
+ScopedHitboxRestore가 예외 경로에서 복원을 누락하는 경우를 먼저 확인합니다. C++은 RAII 소멸자에서, C#은 `try/finally`에서 항상 현재 상태를 복원하도록 강제합니다. 비동기 판정 Thread가 Hitbox History에 동시 접근하면 복원 직후 다른 Thread가 과거 상태를 재적용할 수 있습니다. Rewind 대상 Hitbox를 Tick마다 별도 Buffer에 복사해 임시 배치하고 원본 Buffer는 수정하지 않는 방식으로 변경합니다.
 
-### Q5. Interpolation Buffer 크기는 어떻게 결정하나요?
-Jitter(Snapshot 도착 간격의 변동)를 측정해 95퍼센타일 기준으로 설정합니다. 너무 작으면 Buffer Underrun(보간할 Snapshot이 없음)으로 화면이 끊기고, 너무 크면 표시 지연이 증가해 시각과 조작 간 괴리가 커집니다. 네트워크 상황에 따라 동적으로 조절합니다.
+### Q5. 원격 플레이어 위치 Snapshot이 2개 이하로 줄어 Interpolation 대신 Extrapolation이 빈번하게 실행됩니다. Extrapolation 지속 시간 상한을 몇 ms로 설정해야 하나요?
+Extrapolation 상한은 Snapshot 주기(예: 50ms, 20Hz)의 2~3배를 권장합니다. 50ms 주기라면 최대 150ms까지 추정하고 이후에는 마지막 알려진 위치에 정지합니다. 방향 전환이 잦은 FPS는 오버슈팅 위험이 크므로 100ms로 줄입니다. 이동 속도가 낮은 MMORPG는 200ms까지 허용할 수 있습니다. Extrapolation 활성 시간과 오버슈팅 거리를 Prometheus로 집계해 상한이 적절한지 검증합니다.
 
-### Q6. Lag Compensation에서 공격자와 피해자의 공정성 문제는 어떻게 다루나요?
-Lag Compensation은 고지연 공격자가 화면에서 조준한 것과 일치하는 Hit 판정을 받도록 보정합니다. 반면 피해자는 이미 숨은 후에도 맞는 경험을 할 수 있습니다. 최대 Rewind Window 상한을 제한하고, 고지연 플레이어를 별도 Match에 분리하는 정책을 경쟁 게임에서 함께 적용합니다.
+### Q6. 보간에 Slerp 대신 Linear Interpolation을 써서 회전이 최단 경로로 보간되지 않는 버그가 발생했습니다. 증상과 수정 방법을 설명하세요.
+Quaternion을 Linear Interpolation(Lerp)하면 길이가 1에서 벗어나 정규화해야 하고, 180° 이상 차이가 있을 때 긴 경로로 회전하는 Gimbal Lock 유사 현상이 생깁니다. Slerp는 구면 선형 보간으로 항상 최단 호를 따라 회전합니다. Quaternion 내적이 음수이면 한쪽을 부정(negate)해 단축 경로를 선택하는 처리가 선행돼야 합니다. 회전 보간 구간이 짧고(< 10도) 성능이 중요할 때는 NLerp(정규화 Lerp)로 대체할 수 있습니다.
 
 ## 10. 예상 꼬리질문
 
-- Jitter가 갑자기 증가했을 때 Interpolation Buffer Underrun이 발생하면 어떻게 처리하나요?
-- 순간 이동(Teleport)이 발생할 때 Interpolation이 잘못 보간하지 않으려면 어떻게 해야 하나요?
-- Lag Compensation History Ring Buffer의 크기는 어떻게 계산하나요?
-- Rewind 중 현재 World 상태를 보호하기 위해 어떤 방법을 사용하나요?
-- 격투 게임의 Rollback Netcode가 FPS의 Lag Compensation과 다른 이유는 무엇인가요?
-- 회전(Rotation) 보간에 Linear Interpolation이 아닌 Slerp를 사용하는 이유는?
-- 피해자가 Lag Compensation을 이용한 Cheat라고 신고할 때 어떻게 대응하나요?
+- 원격 플레이어가 순간이동(Teleport)을 했는데 Interpolation이 순간이동 전 위치에서 후 위치까지 부드럽게 보간해버려 벽을 통과하는 시각 버그가 발생했습니다. 어떻게 방지하나요?
+- 20Hz Snapshot 서버에서 Ring Buffer를 250ms Window로 설정하면 최소 몇 개의 Snapshot Entry가 필요하고, 여유분은 몇 개로 잡아야 하나요?
+- Lag Compensation History에 Position·Rotation 외에 Hitbox Capsule 크기를 저장하지 않으면 어떤 버그가 발생하나요?
+- 서버 Tick이 100ms 지연되는 Lag Spike가 발생했을 때 Ring Buffer에 빈 Gap이 생겨 Rewind에서 적합한 Snapshot을 찾지 못하는 경우를 어떻게 처리하나요?
+- 경쟁 FPS에서 RTT 200ms 이상 플레이어를 별도 Match에 라우팅하는 정책을 도입했을 때, 대기열 시간이 3배로 늘어나는 문제를 어떻게 완화하나요?
+- 피해자가 "벽 뒤로 숨었는데 맞았다"고 신고했습니다. Lag Compensation 로그에서 어떤 정보를 수집해야 정상 보정인지 Cheat인지 판별할 수 있나요?
+- bufferMs를 Jitter p95 기준으로 동적으로 늘렸더니 200ms까지 증가해 UI 입력 반응이 느리게 느껴진다는 피드백이 왔습니다. 상한을 몇 ms로 제한하고 초과 시 어떻게 처리하나요?
 
 ## 11. 30초 모범답변
 

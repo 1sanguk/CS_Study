@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Heartbeat가 왜 필요하고 TCP Keepalive와 차이를 설명할 수 있다.
-- Heartbeat 간격·Timeout 설정 기준과 Reconnect 상태 기계를 단계별로 설명할 수 있다.
-- Resume Token 검증 항목과 Session Generation으로 오래된 콜백을 폐기하는 방법을 설명할 수 있다.
-- 재접속 폭풍(Thundering Herd)을 Exponential Backoff + Jitter로 완화하는 방법을 설명할 수 있다.
+- Heartbeat Timeout 오탐이 증가해 정상 플레이어가 반복 강제 종료되는 상황에서, 단일 실패 판정인지 Jitter p99 기반 Grace Period 부족인지 진단하고 Timeout 기준을 결정할 수 있다.
+- 서버 재시작 후 5만 클라이언트가 동시에 재접속해 인증 서버가 과부하에 빠졌을 때, Exponential Backoff + Jitter 범위와 Retry-After 응답 전략을 기준으로 폭풍 완화 설계를 결정할 수 있다.
+- Reconnect 시 이전 Session의 늦은 Callback이 새 Session에 적용되는 버그가 발생했을 때, Session Generation 불일치 여부를 진단하고 Generation 교체 시점 설계를 결정할 수 있다.
+- Grace Period 동안 악의적 연결 끊기가 반복되는 경우, Grace Period 단축·패배 판정·Penalty 중 게임 규칙과 사용자 경험을 기준으로 정책을 결정할 수 있다.
 
 ## 1. 개요
 Heartbeat는 주기적 Message와 응답 기한으로 연결 생존을 판단하고 Reconnect는 새 연결을 기존 논리 Session에 안전하게 결합하는 절차다.
@@ -196,33 +196,33 @@ Reconnect는 Exponential Backoff(1s, 2s, 4s, 최대 30s)에 Random Jitter(±30%)
 
 ## 9. 면접 질문
 
-### Q1. Heartbeat가 왜 필요하고 TCP Keepalive와의 차이는 무엇인가요?
-TCP 연결 객체가 살아 있어도 Wi-Fi 전환이나 NAT Mapping 만료로 실제 통신이 불가능한 상태가 될 수 있습니다. TCP Keepalive는 OS가 수행하는 전송 경로 점검이고 기본 간격이 2시간으로 게임 서버에 너무 깁니다. Application Heartbeat는 Application 응답성을 직접 확인하며 간격을 자유롭게 조절합니다.
+### Q1. Heartbeat Timeout 오탐으로 정상 플레이어가 반복 강제 종료되는 민원이 증가했습니다. 어떻게 진단하나요?
+Timeout 발생 직전 RTT 히스토그램을 확인합니다. RTT p99가 현재 Timeout(예: 10초)의 80% 이상이면 Jitter가 큰 환경에서 정상 응답이 Timeout보다 늦게 도착하는 것입니다. Timeout을 15초로 늘리거나 단일 실패 대신 연속 3회 실패를 기준으로 변경합니다. 모바일 환경(Wi-Fi ↔ LTE 전환)에서는 Network 전환 지연이 3~5초에 달하므로 Grace Period를 포함한 충분한 유예를 둡니다. Timeout 발생 이유를 RTT 초과·연속 실패·NAT 만료로 분류해 집계합니다.
 
-### Q2. Heartbeat 간격과 Timeout을 어떻게 설정하나요?
-RTT와 Jitter를 측정해 정합니다. 간격이 짧으면 Battery·부하가 늘고 Jitter를 장애로 오탐합니다. Timeout은 단일 응답 실패가 아닌 연속 실패나 충분한 Grace Period로 판단합니다. 실시간 Match는 간격 3~5초·Timeout 10~15초, Lobby는 더 길게 설정합니다.
+### Q2. 서버 재시작 후 5만 클라이언트가 1분 내에 동시 재접속해 인증 서버 CPU가 100%에 도달했습니다. Backoff 설계를 설명하세요.
+Exponential Backoff(초기 1초, 최대 30초)에 Random Jitter(±50%)를 적용해 재시도 분산 범위를 늘립니다. 5만 클라이언트가 동시에 재시도하면 최대 15초 분산 효과가 생겨 초당 재시도 수를 1/15 수준으로 낮춥니다. 인증 서버가 과부하 시 `503 Retry-After: 30`을 응답해 클라이언트가 30초 후 재시도하도록 지시합니다. Match 복귀 요청을 Lobby 로그인보다 우선 처리해 진행 중인 게임의 영향을 최소화합니다. Rate Limit(초당 인증 요청 1,000건 상한)으로 인증 서버를 보호합니다.
 
-### Q3. Reconnect 상태 기계를 단계별로 설명해 주세요.
-Disconnected → Exponential Backoff(Jitter 포함) → 새 Connection 수립 → Resume Token 인증 → Session Generation 교체 → 누락 이벤트 Delta 재전송 또는 Full Snapshot → Active 순서입니다. 이전 Socket의 늦은 콜백은 Generation이 달라 자동 폐기됩니다.
+### Q3. 재접속 후 이전 Session의 위치 이동 콜백이 새 Session에 적용돼 캐릭터가 순간이동하는 버그가 발생했습니다. 수정 방법을 설명하세요.
+Reconnect 시 `session->generation++`로 Generation을 증가시키는 로직을 먼저 확인합니다. 이전 Socket에서 Work Queue에 이미 Enqueue된 콜백이 새 Generation을 확인하지 않고 실행되는 경우입니다. 모든 콜백 실행 전에 `if (callback_generation != session->generation) discard`를 추가합니다. Generation 증가와 새 Connection 바인딩이 원자적으로 일어나야 합니다. Session Lock 없이 단일 Owner Thread에서 Generation 교체를 처리하면 Race Condition을 방지할 수 있습니다.
 
-### Q4. Resume Token 검증에서 어떤 항목을 확인하나요?
-Session ID로 기존 Session을 조회하고, Token 서명·만료 시간·Audience를 검증합니다. 이미 사용된 Token인지(Replay 방지)도 확인합니다. 검증 성공 시 Session Generation을 증가시키고 새 Connection을 연결합니다.
+### Q4. Match 중 특정 플레이어가 패배 직전 반복적으로 연결을 끊는 패턴이 탐지됐습니다. Grace Period를 유지하면서 악용을 방지하는 정책을 설명하세요.
+플레이어별 Grace Period 사용 이력을 누적해 Match당 2회 이상 Timeout이 발생하면 재접속 Grace를 10초로 단축합니다. Grace Period가 만료되면 패배 처리하고 MMR 페널티를 부과합니다. 연속 3 Match에서 패배 직전 Timeout이 반복되면 24시간 이상의 연결 불안정 경고를 부과합니다. Grace Period 동안 캐릭터를 AI 제어로 유지하되 AI가 패배 회피 행동(예: 도주)을 하지 않도록 제한합니다.
 
-### Q5. 재접속 폭풍(Thundering Herd)을 어떻게 방지하나요?
-Exponential Backoff(1s, 2s, 4s...)에 Random Jitter(±30%)를 추가해 수만 클라이언트가 동시에 재시도하지 않도록 분산합니다. 서버는 `Retry-After` 응답으로 대기 시간을 안내합니다. 인증·State Sync 경로에도 Rate Limit과 Capacity 제한을 둡니다.
+### Q5. Resume Token 검증 실패가 갑자기 3배로 증가했습니다. 만료·서명 불일치·Session 없음 중 어느 것이 원인인지 어떻게 진단하나요?
+Resume Token 검증 실패 이유를 이유별로 분류해 집계합니다. `token_expired` 비율이 높으면 Token 유효 기간(예: 5분)이 Grace Period(30초)보다 길더라도 서버 시계가 클라이언트와 크게 차이나는 경우입니다. `session_not_found` 비율이 높으면 Grace Period가 만료되기 전에 Session이 정리되는 경합 조건을 의심합니다. `signature_mismatch`가 높으면 Token 서명 키가 롤링 배포 중 일부 서버에서 교체됐을 가능성이 있습니다. 이유별 카운터를 Prometheus로 수집해 배포 직후 급증 패턴을 확인합니다.
 
-### Q6. Match 중 연결이 끊겼을 때 캐릭터를 어떻게 처리하나요?
-Grace Period(예: 30초) 동안 캐릭터를 AI 제어나 정지 상태로 유지합니다. Grace 내 재접속 시 상태를 복원합니다. Grace 만료 시 캐릭터를 제거하고 Match 결과를 처리합니다. 악의적 연결 끊기로 패배를 회피하지 못하도록 패배 판정 정책과 함께 설계합니다.
+### Q6. 서버 재시작 후 기존 Session을 어떻게 복원하나요?
+Session 상태를 Redis나 DB에 영속화해 서버 재시작 후 Resume Token으로 조회합니다. 재시작 전에 Client가 마지막으로 확인한 Event Sequence를 저장하고, 재시작 후 Reconnect 시 누락 이벤트를 Event Log에서 Delta 재전송합니다. Event Log가 없거나 Window 밖이면 Full Snapshot을 전송합니다. 재화 지급·아이템 처리처럼 중요한 명령은 Idempotency Key와 함께 저장해 재시작 후 중복 실행을 방지합니다.
 
 ## 10. 예상 꼬리질문
 
-- 게임 Packet이 자주 오는데도 별도 Ping을 보내야 하나요?
-- Token 만료 후 Reconnect를 어떻게 처리하나요?
-- Server Restart 후 기존 Session을 어떻게 복원하나요?
-- Grace Period 도중 악의적 연결 끊기를 어떻게 탐지하나요?
-- Delta Sync와 Full Snapshot 중 어느 쪽을 선택하는 기준은 무엇인가요?
-- 같은 Account의 두 연결이 동시에 Resume을 시도하면 어떻게 처리하나요?
-- Heartbeat RTT를 이용해 Clock Offset을 추정하는 방법은 무엇인가요?
+- 게임 Packet이 초당 20개 이상 오는 환경에서 별도 Ping을 추가하면 어떤 부작용이 있고, 마지막 Packet 시각으로 생존을 판단할 때 서버→클라이언트 단방향 Push 상황에서는 어떤 문제가 생기나요?
+- PC에서 로그인한 상태로 모바일에서 같은 Account로 Reconnect를 시도했습니다. 기존 PC 연결을 강제 종료하는 정책과 두 연결을 병존 허용하는 정책 중 FPS·MMORPG 각각에서 어떤 쪽이 적합한가요?
+- Delta Sync를 위한 Event Log 보관 Window를 30초로 설정했는데 Grace Period가 60초라면 어떤 문제가 생기나요?
+- Heartbeat Ping Sequence를 이용해 서버와 클라이언트 Clock Offset을 추정하는 방법을 설명하세요. NTP가 있는 환경에서는 이 추정이 필요한가요?
+- Grace Period 30초를 모두 소진했는데 재접속이 5초 만에 이루어졌다면, 캐릭터가 이미 Match에서 제거된 상황을 클라이언트에게 어떻게 안내하나요?
+- Resume Token에 `jti`(JWT ID) 필드를 추가해 Replay 방지를 구현했는데 Redis에서 `jti`를 저장·조회하는 비용이 Reconnect 처리량을 제한하고 있습니다. 어떻게 최적화하나요?
+- Reconnect 성공률이 특정 통신사 사용자에서만 60%로 낮습니다. 원인을 어떻게 진단하고 Grace Period나 Token TTL 조정 외에 어떤 대안을 검토하나요?
 
 ## 11. 30초 모범답변
 

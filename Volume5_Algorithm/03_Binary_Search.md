@@ -11,9 +11,9 @@ importance: 5
 
 ## 학습 목표
 
-- 이진 탐색이 성립하는 정렬·단조성 전제를 설명할 수 있다.
+- 배열의 단조성 위반 여부를 확인하고 Binary Search 적용 가능 여부를 판단할 수 있다.
 - 정확한 값, lower bound, upper bound를 구분해 구현할 수 있다.
-- 닫힌 구간과 반열린 구간 Template의 불변식을 설명할 수 있다.
+- 구간 종류(닫힌·반열린)와 답 정의를 먼저 정해 Loop 불변식이 유지되는지 추론하고 구현 오류를 예방할 수 있다.
 - Answer Search를 게임 서버 수용량·설정 경계 문제에 적용할 수 있다.
 
 ## 1. 개요
@@ -130,6 +130,27 @@ lower_bound → index 1
 
 정확히 Target이 존재하는지는 반환 Index가 `n`보다 작고 `values[index] == target`인지 추가 확인한다.
 
+게임 서버 MMR 배열에서 점수 구간 탐색 예시를 Java로 구현하면 다음과 같다.
+
+```java
+// Lower Bound: MMR 1500 이상 첫 번째 플레이어 인덱스
+int lowerBound(int[] mmrArr, int target) {
+    int left = 0, right = mmrArr.length;
+    while (left < right) {                        // 반열린 구간 [left, right)
+        int mid = left + (right - left) / 2;      // Overflow 안전한 mid 계산
+        if (mmrArr[mid] < target) left = mid + 1;
+        else right = mid;
+    }
+    return left; // target 이상인 첫 번째 인덱스 (없으면 length 반환)
+}
+
+// Upper Bound: MMR 2000 이하 마지막 플레이어 인덱스 (lowerBound(2001) - 1)
+// MMR 1500~2000 구간 플레이어 수: upperBound(2000) - lowerBound(1500)
+int countInRange(int[] mmrArr, int lo, int hi) {
+    return lowerBound(mmrArr, hi + 1) - lowerBound(mmrArr, lo);
+}
+```
+
 ## 6. Upper Bound와 중복 개수
 
 Upper Bound는 `target 초과`인 첫 위치다.
@@ -228,6 +249,15 @@ Binary Search는 Random Access가 가능한 연속 배열에 잘 맞는다. Link
 
 DB Index의 B+Tree 검색도 계층적으로 범위를 줄이지만 Binary Search와 동일한 자료구조는 아니다. Page I/O를 줄이기 위해 한 Node에 많은 Key와 자식을 둔다.
 
+Binary Search는 정렬 배열에서만 동작하므로, 삽입·삭제가 빈번하면 균형 BST나 Hash Table이 적합하다.
+
+| 구조 | 탐색 | 삽입 | 삭제 | 메모리 | 적합한 경우 |
+|------|------|------|------|-------|-----------|
+| 정렬 배열 + Binary Search | O(log n) | O(n) | O(n) | 연속 | 읽기 위주, 정적 데이터 |
+| 균형 BST (TreeMap) | O(log n) | O(log n) | O(log n) | 포인터 오버헤드 | 삽입·삭제·탐색 균형 |
+| Hash Table | O(1) 평균 | O(1) 평균 | O(1) 평균 | 해시 버킷 | 정확 일치 조회 |
+| Linked List | O(n) | O(1) 위치 알 때 | O(1) 위치 알 때 | 포인터 | 순서 유지 삽입·삭제 |
+
 ## 11. 실수하기 쉬운 Case
 
 - 빈 배열
@@ -299,38 +329,50 @@ Shard `s`개에 Player `x`명을 분배했을 때 CPU·Memory 제한을 넘지 �
 
 ## 15. 면접 질문
 
-### Q1. Binary Search의 전제와 복잡도를 설명해 주세요.
+### Q1. 레벨 임계값 배열에서 Binary Search가 잘못된 결과를 반환할 때 어떤 전제가 위반된 것인지 진단하는 방법은?
 
-중간 결과로 한쪽 절반을 안전하게 제거할 수 있는 정렬 또는 단조성이 필요합니다. 매 단계 탐색 범위가 절반이 되어 시간 O(log n), 반복 구현의 보조 공간은 O(1)입니다.
+**30초 모범답변:** Binary Search 전제는 단조성(정렬·비감소·비증가). 잘못된 결과가 나오면 (1) 배열이 중간에 비정렬 구간이 있는지 (2) 비교 함수가 전이성을 위반하는지 (3) 실수 비교에서 부동소수점 오차가 있는지 순서로 점검합니다.
 
-### Q2. Lower Bound와 Upper Bound의 차이는 무엇인가요?
+**1~2분 모범답변:** 진단 절차: (1) 배열 전체를 한 번 순회해 `arr[i] > arr[i+1]`인 지점을 찾음 — 있으면 정렬 위반 (2) 비교 함수가 있으면 동일 입력에서 다른 결과가 나오는지 확인 — 있으면 비결정적 Comparator (3) 실수 Target을 쓰면 `==` 대신 `Math.abs(a - b) < epsilon` 사용. 게임 서버에서 레벨 임계값 배열은 레벨업 이벤트로 동적으로 갱신되는 경우 Binary Search 도중 배열이 변경되어 단조성이 깨질 수 있으므로 읽기 Lock 또는 Snapshot 복사 후 탐색합니다.
 
-Lower Bound는 Target 이상인 첫 위치, Upper Bound는 Target 초과인 첫 위치입니다. 중복 Target의 개수는 `upper - lower`로 구할 수 있고, Target이 없어도 삽입 위치를 반환합니다.
+### Q2. MMR 배열에서 특정 점수 구간에 속하는 플레이어 수를 O(log n)에 구할 때 Lower Bound와 Upper Bound를 어떻게 조합하는가?
 
-### Q3. Mid는 왜 `left + (right-left)/2`로 계산하나요?
+**30초 모범답변:** `count = lowerBound(hi+1) - lowerBound(lo)`. Lower Bound는 target 이상의 첫 번째 인덱스를 반환하므로, 두 번 호출해 범위를 지정합니다. 두 호출 모두 O(log n)이므로 전체 O(log n)입니다.
 
-`left + right`가 정수 최댓값을 넘는 Overflow를 피하기 위해서입니다. Answer Search의 큰 범위와 Predicate 내부 산술에도 넓은 정수형을 사용해야 합니다.
+**1~2분 모범답변:** Lower Bound 정의: `arr[i] >= target`인 최소 i. Upper Bound: `arr[i] > target`인 최소 i (= lowerBound(target+1)). 구간 [lo, hi] 플레이어 수 = `lowerBound(hi+1) - lowerBound(lo)`. 중요한 엣지: lowerBound 반환값이 배열 길이이면 해당 target 이상이 없음을 의미하므로 음수 결과 방지를 위해 `Math.max(0, result)` 처리. Java에서는 `Arrays.binarySearch()` 대신 직접 구현 권장 — 표준 라이브러리는 중복 원소에서 어느 인덱스를 반환할지 보장하지 않습니다.
 
-### Q4. Off-by-One을 줄이는 방법은 무엇인가요?
+### Q3. Answer Binary Search에서 탐색 범위를 `int`로 선언했다가 플레이어 수가 수십만을 넘는 순간 잘못된 최대값을 반환하는 버그가 발생했습니다. 어디서 문제가 생긴 것이고 어떻게 수정하나요?
 
-탐색 구간이 닫힌지 반열린지, 답이 첫 True인지 마지막 True인지 먼저 정의합니다. Loop 불변식과 Mid가 답일 때 어느 쪽에 남기는지를 설명하고 매 반복 구간이 줄어드는지 확인합니다.
+**30초 모범답변:** `mid = (left + right) / 2`에서 `left + right`가 int 최댓값(약 21억)을 초과해 음수로 Wrap되면 mid가 음수가 되어 탐색 범위가 무너집니다. `mid = left + (right - left) / 2`로 교체하고, Predicate 내부의 플레이어 수 합산·곱셈도 `long`으로 선언해야 합니다.
 
-### Q5. 답에 대한 이진 탐색은 무엇인가요?
+**1~2분 모범답변:** Answer Binary Search에서 `left=1_000_000, right=2_000_000`이면 합산이 3_000_000으로 int 범위 내지만, 실제 동접 상한을 `Integer.MAX_VALUE`까지 열어두거나 Predicate 내부에서 `players * costPerPlayer` 같은 곱셈을 하면 Overflow가 발생합니다. 수정 포인트는 세 곳입니다. (1) mid 계산을 `left + (right - left) / 2`로 변경. (2) 탐색 범위 변수를 `long`으로 선언. (3) Predicate 내부 산술에 `long` 캐스팅 추가. 버그 진단 시에는 `left`, `right`, `mid` 값을 로그로 찍어 mid가 음수인지 확인합니다. 게임 서버에서 동접 수용 상한 탐색은 수십만~수백만 단위로 쉽게 int 경계를 넘으므로 Answer Binary Search 구현 시 기본값을 `long`으로 잡아야 합니다.
 
-정답 후보 `x`에 대해 가능 여부 Predicate가 단조일 때 가능한 최소 또는 최대 경계를 찾는 방식입니다. Predicate 비용이 P이고 범위가 R이면 O(P log R)입니다.
+### Q4. MMR 매칭 서버 배포 직후 특정 점수대 플레이어가 항상 매칭 대기열에서 빠지는 신고가 들어왔습니다. Lower Bound 구현 코드가 의심될 때 어떤 순서로 진단하나요?
 
-### Q6. 정렬되지 않은 배열에서 한 번만 검색한다면 이진 탐색이 유리한가요?
+**30초 모범답변:** 먼저 경계값 로그를 남겨 `left`, `right`, `mid`, 반환 인덱스를 확인합니다. 다음으로 문제 점수를 직접 입력해 반환 인덱스가 배열 범위를 벗어나거나 예상 위치와 다른지 봅니다. 구간 포함 방식(`left < right` vs `left <= right`)과 `right = mid` vs `right = mid - 1` 갱신 중 하나가 잘못됐을 가능성이 높습니다.
 
-보통 아닙니다. 정렬 O(n log n) 후 검색해야 하므로 선형 O(n)이 낫습니다. 조회가 반복되거나 이미 정렬된 상태일 때 이진 탐색의 이점이 커집니다.
+**1~2분 모범답변:** 진단 절차는 다음 순서입니다. (1) 로그에서 경계 조건 확인 — `while(left < right)`인데 `right = mid - 1`로 갱신하면 정답 인덱스를 버리는 Off-by-One이 발생합니다. (2) 탐색 구간 불변식 확인 — 반열린 구간 `[left, right)`에서 `right`는 후보 밖의 끝이므로 `right = mid`로만 줄여야 하고 `right = mid - 1`로 쓰면 정답을 제거합니다. (3) 경계 케이스 재현 — 문제 점수가 배열 최솟값, 최댓값, 또는 배열에 없는 값인지 테스트합니다. (4) 단위 테스트 추가 — `target`이 배열의 첫·마지막 원소와 일치할 때, 배열 전체가 동일값일 때 결과가 맞는지 확인합니다. 수정 후에는 경계 테스트 케이스를 CI에 포함해 재발을 방지합니다.
+
+### Q5. Shard 수가 고정된 서버에서 처리 가능한 최대 동시 플레이어 수를 이진 탐색으로 구할 때 Predicate를 어떻게 설계하고 단조성 위반을 어떻게 검증하는가?
+
+**30초 모범답변:** Predicate: `f(x) = (x명이 n개 Shard에서 처리 가능한가?)`. 단조성: x가 증가할수록 f는 True→False로 한 번만 전환(단조 감소). 이진 탐색으로 마지막 True인 x를 찾습니다. 단조성 검증: 부하 시뮬레이션에서 x=100, 500, 1000에서 f(x) 호출해 결과가 단조인지 확인합니다.
+
+**1~2분 모범답변:** Answer Binary Search(매개변수 탐색) 설계: (1) 탐색 범위 설정 — `left=0, right=MAX_PLAYERS` (2) `mid` 값으로 `canHandle(mid)` 호출 — mid명을 n개 Shard에 균등 분배했을 때 각 Shard의 처리 시간이 Budget 이내인지 시뮬레이션 (3) `canHandle(mid)==true`면 `left=mid+1`, false면 `right=mid` (4) 종료 시 `left-1`이 최대값. 단조성 위반 예: Shard 간 세션 이동 비용이 플레이어 수에 비선형적이면 중간에 False→True→False 패턴 가능 — 이 경우 Binary Search 대신 Ternary Search 또는 전수 탐색이 필요합니다.
+
+### Q6. 플레이어 세션 로그가 시간순으로 정렬되지 않은 상태에서 특정 이벤트를 한 번 조회해야 합니다. 이진 탐색을 위해 정렬하는 것이 유리한가요, 선형 탐색이 유리한가요? 판단 기준을 말해 주세요.
+
+**30초 모범답변:** 한 번만 조회한다면 선형 탐색 O(n)이 유리합니다. 정렬 O(n log n) 후 이진 탐색 O(log n)을 더해도 총 O(n log n)으로 더 비쌉니다. 동일 로그를 q번 반복 조회하거나 이미 정렬 상태가 보장된다면 이진 탐색이 유리한 기준점이 달라집니다.
+
+**1~2분 모범답변:** 판단 기준은 조회 횟수, 갱신 빈도, 정렬 유지 비용 세 가지입니다. (1) 한 번 조회: 정렬 O(n log n) > 선형 O(n) → 선형 탐색. (2) q번 반복 조회(q가 충분히 큼): `O(n log n + q log n)` < `O(qn)` → 한 번 정렬 후 이진 탐색. (3) 실시간 갱신이 빈번: 정렬 배열 삽입은 O(n) 이동 비용 → 균형 BST나 외부 Sorted Set 고려. 게임 서버에서 세션 로그는 실시간으로 쌓이므로 정렬 배열 유지보다 Sorted Set(Redis ZSet 등)이나 DB 인덱스를 이용한 Range 쿼리가 현실적입니다. 이진 탐색 직접 구현은 갱신이 드물고 배열이 이미 정렬된 설정 테이블 조회에 적합합니다.
 
 ## 16. 예상 꼬리질문
 
-- 닫힌 구간과 반열린 구간 Loop 조건은 어떻게 다른가요?
-- 첫 번째 True와 마지막 True는 Mid를 어떻게 갱신하나요?
-- Lower Bound 반환값이 배열 길이일 수 있는 이유는 무엇인가요?
-- 중복 원소의 마지막 위치는 어떻게 찾나요?
-- Predicate가 단조인지 어떻게 증명하나요?
-- 실수 Answer Search는 어떻게 종료하나요?
+- MMR 매칭 서버에서 Lower Bound 구현 중 경계 조건 실수로 같은 점수대 플레이어가 매칭에서 누락되는 버그가 발생했습니다. 어디서 문제가 생길 수 있고 어떻게 진단하나요?
+- 쿨다운 타이머 만료 여부를 이진 탐색으로 조회할 때, 같은 만료 시각을 가진 스킬이 여러 개 있다면 가장 나중에 만료되는 것을 정확히 찾아야 합니다. Upper Bound와 Lower Bound 중 어떤 것을 쓰고 Mid 갱신을 어떻게 설계하나요?
+- 랭킹 배열에서 특정 점수 이상 플레이어를 조회했는데 Lower Bound가 배열 길이를 반환했습니다. 이 값을 그대로 인덱스로 사용하면 어떤 장애가 발생하고, 운영 코드에서 어떻게 처리해야 하나요?
+- 레벨 임계값 배열에 같은 경험치 값이 중복 등록되어 있을 때 Upper Bound를 쓰면 현재 레벨 인덱스 계산 결과가 달라집니다. 이 경우 어떤 결과가 나오고 어떻게 수정하나요?
+- Shard 분배 시뮬레이션 Predicate를 Answer Binary Search에 적용했는데 특정 플레이어 수 구간에서 canHandle 결과가 True→False→True로 뒤집혔습니다. 원인이 무엇이고 이 경우 어떻게 대응하나요?
+- 스킬 쿨다운 배율 같은 실수 설정값의 최적 상한선을 이진 탐색으로 찾을 때, 반복 횟수를 정하지 않으면 어떤 문제가 생기고 실무에서는 종료 조건을 어떻게 결정하나요?
 - 정렬 배열과 균형 Tree 중 무엇을 선택하나요?
 
 ## 17. 30초 모범답변

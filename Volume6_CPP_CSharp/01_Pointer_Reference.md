@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Pointer의 주소 저장·역참조와 Reference의 별칭 의미를 설명할 수 있다.
-- Null, Dangling, Pointer 산술과 객체 수명 문제를 설명할 수 있다.
-- 값·Pointer·Reference 함수 인자의 의미와 Const 조합을 비교할 수 있다.
-- Container 무효화와 게임 Entity Handle 설계에 적용할 수 있다.
+- 함수 인자로 값·Pointer·Reference 중 어느 것을 선택할지, Null 허용 여부·수정 여부·복사 비용 조건을 분석하여 판단할 수 있다.
+- Dangling Pointer·Reference가 발생하는 조건(Scope 종료·delete 후 사용·Container 재할당)을 파악하고, 코드에서 수명 오류 가능성을 진단할 수 있다.
+- `const int*`·`int* const`·`const int* const` 등 Const 조합이 코드에서 어떤 수정 제한을 나타내는지 판별하고, 잘못된 Const 사용이 있을 때 의도를 복원할 수 있다.
+- Vector·List 등 Container 수정 후 기존 Pointer·Iterator 무효화 여부를 판단하고, 게임 Entity를 안전하게 참조하기 위한 Handle 설계 방식을 선택할 수 있다.
 
 ## 1. 개요
 
@@ -361,39 +361,51 @@ Pointer가 유효하다는 것과 동시 접근이 안전하다는 것은 별개
 
 ## 17. 면접 질문
 
-### Q1. Pointer와 Reference의 차이를 설명해 주세요.
+### Q1. 게임 서버 Tick 루프에서 World가 std::vector<Entity>로 엔티티를 관리하는데, 다른 System이 Entity* 포인터를 한 프레임 이상 보관하다가 크래시가 발생했습니다. 원인을 어떻게 진단하고 장기적으로 안전한 참조 방식으로 바꾸겠습니까?
 
-Pointer는 주소를 저장하는 객체라 Null과 재지정, 제한적인 산술이 가능합니다. Reference는 기존 객체의 별칭으로 선언 시 결합하고 재결합할 수 없습니다. 둘 다 대상 수명이나 소유권을 자동 보장하지 않아 Dangling이 될 수 있습니다.
+가장 먼저 Vector에 push_back이나 erase가 발생했는지 확인합니다. push_back이 Capacity를 초과하면 전체 원소를 새 메모리로 이동해 기존 포인터가 무효화됩니다. erase는 삭제 위치 이후 원소를 이동해 그 주소도 바뀝니다. AddressSanitizer를 사용하면 Use-after-free 시점을 정확히 찾을 수 있습니다.
 
-### Q2. Pointer와 Reference 함수 인자는 언제 선택하나요?
+장기 해결책으로는 Raw Pointer 대신 (slotIndex, generation) Handle을 저장합니다. Entity를 삭제하거나 Slot을 재사용할 때 Generation을 증가시키면 오래된 Handle이 새 Entity를 참조하는 ABA 오류를 차단합니다. 한 Tick 안에서만 사용하는 짧은 접근이라면 Tick 시작 시 Handle로 Entity*를 조회해 지역 변수로 두고 Tick이 끝나면 버립니다. 이렇게 하면 수명이 명확하고 Vector 재할당에 안전합니다.
 
-필수 비소유 객체를 복사 없이 읽으면 `const T&`, 수정하면 `T&`를 고려합니다. 대상이 없을 수 있으면 `T*`가 자연스럽습니다. 작은 값 Type은 값 전달이 더 단순할 수 있습니다.
+### Q2. Packet 처리 함수가 대형 Buffer 객체를 값으로 받아 복사 비용이 문제가 됐습니다. const T&로 바꾸면 해결되는지, 아니면 다른 방식이 필요한지 어떻게 판단하겠습니까?
 
-### Q3. Dangling Pointer는 언제 발생하나요?
+읽기만 하고 수정이 없다면 const T& 변경으로 복사를 제거할 수 있습니다. 단, Packet 처리가 동기 함수라면 대상 수명이 호출 기간 동안 보장되므로 안전합니다. 비동기로 처리를 Worker에 넘긴다면 함수 반환 후에도 Buffer를 사용하게 되어 Dangling Reference가 됩니다. 이 경우 값 복사, shared_ptr, 또는 명시적 수명 관리가 필요합니다.
 
-대상 Scope 종료, delete 후 접근, Container 재할당·Erase, Temporary 수명 종료 뒤 주소나 Reference를 보관할 때 발생합니다. Pointer 주소 값이 남아 있어도 객체 수명은 끝난 상태입니다.
+Buffer 일부 구간만 읽는다면 std::span<const std::byte>로 Pointer와 길이를 함께 전달하는 방식이 좋습니다. Span 자체는 소유하지 않으므로 원본 Buffer가 살아 있어야 하고, 비동기 전송이 Span을 저장한다면 전송 완료 콜백까지 Buffer 수명을 명시적으로 관리해야 합니다.
 
-### Q4. `const int*`와 `int* const`의 차이는 무엇인가요?
+### Q3. 비동기 Network Callback이 Session Raw Pointer를 Capture했는데 Callback 실행 전에 Session이 종료되어 Use-after-free가 발생했습니다. 어떤 설계로 이 문제를 해결하겠습니까?
 
-`const int*`는 Pointer를 바꿀 수 있지만 그 Pointer로 int를 수정할 수 없습니다. `int* const`는 Pointer가 다른 대상을 가리킬 수 없지만 현재 int 값은 수정할 수 있습니다.
+세 가지 전략을 검토합니다. 첫째, shared_ptr<Session>을 Callback에 Capture합니다. Session이 살아 있는 동안은 안전하지만, 작업 Queue가 Session을 예상보다 오래 살려 메모리가 증가할 수 있습니다. 둘째, weak_ptr<Session>을 저장하고 실행 시점에 lock()으로 유효성을 확인합니다. 이미 종료된 Session이면 작업을 조용히 취소합니다. 셋째, Session 소유권을 단일 I/O Thread에 고정하고 Callback도 같은 Thread에서 실행합니다. 소유권이 명확하고 Data Race도 없지만 Thread 확장성이 제한됩니다.
 
-### Q5. Vector 원소 Pointer가 무효화되는 이유는 무엇인가요?
+실무에서는 Session 수명 관리 정책을 먼저 결정한 뒤 적합한 방식을 선택합니다. weak_ptr는 "이미 종료됐으면 무시한다"는 의도를 코드로 명확하게 표현한다는 장점이 있습니다.
 
-Capacity 증가 시 더 큰 연속 공간을 할당하고 원소를 이동하므로 기존 주소가 바뀝니다. Erase도 이후 원소를 이동할 수 있습니다. Container의 구체적인 무효화 규칙을 확인해야 합니다.
+### Q4. 코드 리뷰 중 Buffer 읽기 함수의 인자가 int* const p로 선언되어 있는데, 팀원이 "이미 const가 붙어 있으니 안전하다"고 했습니다. 실제로 이 선언이 Buffer 내용을 보호하는지 판단하고, 의도에 맞는 선언으로 수정하겠습니까?
 
-### Q6. 게임 Entity를 안전하게 참조하는 방법은 무엇인가요?
+int* const p는 Pointer 자체를 재지정할 수 없다는 제한이지, Buffer 내용을 수정하지 않겠다는 보장이 아닙니다. *p = 0처럼 대상 값은 자유롭게 바꿀 수 있어 "읽기 전용"이라는 의도를 전혀 표현하지 않습니다. 반면 const uint8_t* p는 이 Pointer로 Buffer를 수정할 수 없다고 컴파일러가 강제합니다.
 
-장기 Raw Pointer 대신 ID나 Slot Index와 Generation으로 구성한 Handle을 저장합니다. 사용할 때 World에서 유효성을 확인해 짧은 Reference를 얻고, 삭제·Slot 재사용 후 오래된 Handle을 거부합니다.
+Buffer 읽기 함수가 인자를 내부에서 이동할 필요도 없다면 const uint8_t* const p로 두 제한을 모두 적용합니다. 이렇게 하면 함수 안에서 실수로 Buffer를 덮어쓰거나 Pointer를 엉뚱한 주소로 재지정하는 버그를 컴파일 타임에 차단할 수 있습니다. 호출자에게도 "이 함수는 Buffer를 읽기만 한다"는 계약이 Type Signature에 명시됩니다.
+
+### Q5. 게임 서버에서 std::vector<Entity>에 Entity를 추가하다가 특정 프레임에서 p99 지연이 급등하는 현상이 반복됩니다. 이 문제의 원인을 어떻게 진단하고, 포인터 무효화 위험 없이 해결하겠습니까?
+
+p99 급등이 특정 프레임에 몰린다면 Vector Capacity 초과로 인한 재할당이 원인일 가능성이 높습니다. push_back 시 Capacity를 초과하면 더 큰 연속 메모리를 새로 할당하고 모든 원소를 이동합니다. 이 비용이 해당 Tick에 집중됩니다.
+
+진단은 Vector capacity()와 size()를 Tick마다 로그로 남겨 재할당 시점을 특정합니다. 해결책은 서버 시작 시 최대 예상 Entity 수를 reserve()로 사전 할당하는 것입니다. 이렇게 하면 이후 push_back에서 재할당이 발생하지 않습니다. 포인터 무효화 위험도 제거됩니다. 최대 Entity 수를 알 수 없다면 Pool Allocator나 Handle 기반 설계로 전환해 재할당 영향 자체를 차단하는 방법도 검토합니다.
+
+### Q6. 게임 서버에서 Entity Slot을 재사용하기 시작한 이후, 삭제된 Entity를 참조하던 오래된 Handle이 신규 Entity를 잘못 참조하는 버그가 발생했습니다. 이 문제를 어떻게 설계로 방지하겠습니까?
+
+이 문제는 ABA 성격의 오류입니다. 동일 Slot을 재사용할 때 기존 Handle이 새 Entity를 가리키는 상황입니다. (slotIndex, generation) 쌍으로 Handle을 구성하고, Slot을 재사용할 때마다 generation 카운터를 증가시키면 오래된 Handle의 generation이 현재 Slot의 generation과 달라져 유효성 검사에서 탈락합니다.
+
+구현 시 generation이 overflow되는 경우도 고려해야 합니다. 64-bit 카운터를 쓰거나, overflow 시 같은 Slot을 즉시 재사용하지 않는 정책을 추가합니다. Entity 조회 함수는 "Handle이 유효하면 Entity*를 반환하고, 아니면 nullptr를 반환"하는 계약으로 설계해 호출자가 유효성을 항상 확인하도록 강제합니다.
 
 ## 18. 예상 꼬리질문
 
-- 소유권과 객체 수명은 어떻게 다른가요?
-- `nullptr`와 `NULL`의 차이는 무엇인가요?
-- One-past-end Pointer는 어디까지 사용할 수 있나요?
-- Temporary의 Reference Lifetime Extension은 언제 적용되나요?
-- Span이 Buffer 수명을 보장하지 않는 이유는 무엇인가요?
-- 비동기 Callback의 대상 수명은 어떻게 관리하나요?
-- 유효한 Pointer를 통한 접근에도 Data Race가 생길 수 있나요?
+- 게임 서버 Entity Pool에서 unique_ptr와 Raw Pointer Observer를 함께 쓸 때 Observer가 먼저 소멸한 Owner의 객체에 접근하는 버그를 어떻게 탐지하나요?
+- C API를 Wrapping한 함수에서 Pointer Null 체크를 빠뜨려 서버 크래시가 발생했습니다. Null 허용 여부를 API 계약으로 표현하는 방법은 무엇인가요?
+- Packet Buffer를 순회하는 코드에서 범위를 벗어난 Pointer 산술로 Undefined Behavior가 발생했습니다. std::span이나 Iterator Pair로 교체할 때 어떤 경계 조건을 확인해야 하나요?
+- 함수가 const std::string&을 반환했는데 호출자에서 값이 깨지는 버그가 발생했습니다. 원인이 무엇이고 어떻게 수정하나요?
+- 비동기 전송 함수에 std::span<const std::byte>를 넘겼더니 전송 완료 전에 원본 Buffer가 해제되어 손상된 데이터가 전송됐습니다. 어떻게 수명을 보장하겠습니까?
+- 게임 서버에서 Callback Queue에 캡처된 shared_ptr<Session>이 쌓여 메모리가 계속 증가하는 현상이 발생했습니다. weak_ptr로 교체할 때 어떤 실행 분기가 달라지나요?
+- 멀티스레드 게임 서버에서 유효한 Entity*를 통해 컴포넌트를 읽는데 간헐적으로 값이 깨집니다. 포인터 유효성 외에 무엇을 추가로 확인해야 하나요?
 
 ## 19. 30초 모범답변
 

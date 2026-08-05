@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Object Pool과 Buffer Pool의 목적과 언제 도입해야 하는지 판단할 수 있다.
-- Use-after-return·Double Return 위험과 RAII를 이용한 소유권 방어를 설명할 수 있다.
-- Buffer Pool에서 Size Class를 나누는 이유와 Shared vs Thread-local Pool의 Trade-off를 설명할 수 있다.
-- Pool 고갈 시 정책과 민감 데이터 초기화 필요성을 설명할 수 있다.
+- Tick p99 지연이 GC Pause·Allocator 경쟁에서 기인하는지 Profile로 확인하고, Object Pool 도입 여부와 Size Class 기준을 결정할 수 있다.
+- 비동기 Send 완료 전에 Buffer가 반환돼 데이터 오염이 발생했을 때, RAII Handle 소유권 이전 누락인지 Double Return인지 진단하고 수정 방향을 결정할 수 있다.
+- Pool이 고갈됐을 때 필수 Packet 추가 할당·비핵심 Drop·요청 거부 중 메시지 종류와 실시간 경로 여부를 기준으로 정책을 결정할 수 있다.
+- Thread-local Pool에서 객체가 특정 Thread에 몰려 다른 Thread가 Shared Fallback을 반복 호출하는 상황을 진단하고, Local-cache 크기 조정 또는 Pool 분리 방향을 결정할 수 있다.
 
 ## 1. 개요
 Pool은 반복 생성·해제되는 객체나 Buffer를 재사용해 할당 비용과 지연 변동을 줄이는 방식이다.
@@ -225,33 +225,33 @@ Pool Hit·Miss·신규 할당 수·동시 대여 수·보유 Byte·Oversize 빈�
 
 ## 9. 면접 질문
 
-### Q1. Object Pool의 목적과 언제 도입하는 것이 적절한가요?
-Packet과 임시 객체의 고빈도 할당이 GC Pause, Allocator 경쟁, Tick 지연 변동을 만들 때 Pool로 재사용해 개선합니다. Allocation이 Profile 병목임을 확인한 뒤 도입합니다. 작고 드문 객체에는 복잡도만 늘고 이득이 없습니다.
+### Q1. 게임 서버 Tick p99가 배포 후 10ms→45ms로 급등했습니다. Object Pool 도입 여부를 어떤 순서로 판단하나요?
+먼저 `perf record` 또는 Allocation Profiler(jemalloc jeprof, dotnet-trace 등)로 Hot Allocation 경로를 확인합니다. Packet 할당이 전체 CPU의 15% 이상을 차지하거나 GC Pause가 p99 기여의 30% 이상이면 Pool 도입을 검토합니다. Allocation이 병목이 아니라면 DB 동기 호출이나 Lock Contention을 먼저 해결합니다. Pool 도입 후 Tick p99와 GC Pause 지표를 A/B 비교해 효과를 검증합니다.
 
-### Q2. Use-after-return 위험과 방어 방법은 무엇인가요?
-Pool에 반환한 Buffer를 다른 코드가 참조하면, 재사용된 Buffer에 덮어쓰기가 발생합니다. C++에서는 RAII Handle에 `ptr = nullptr`을 설정해 반환 후 접근을 막고, `std::move`로 소유권을 이전해 비동기 완료까지 Buffer를 살립니다.
+### Q2. 비동기 Send 중 Buffer 내용이 오염돼 클라이언트가 잘못된 Packet을 받았습니다. 어떻게 진단하나요?
+SendPacket 함수에서 Buffer를 Pool에서 Rent한 뒤 AsyncSend 콜백에 전달하기 전에 반환한 경우를 먼저 의심합니다. RAII Handle이 람다에 복사(copy)가 아닌 이동(move)으로 전달됐는지 확인합니다. Debug 빌드에서 반환 직후 Buffer를 0xDD로 채우면 오염 패턴이 0xDD로 나타나 Use-after-return임을 확인할 수 있습니다. Double Return은 Pool 내부 Free Stack에서 같은 포인터가 두 번 나타나는 Assert로 탐지합니다.
 
-### Q3. Buffer Pool에서 Size Class를 나누는 이유는 무엇인가요?
-모든 Buffer를 최대 크기로 주면 메모리 낭비가 큽니다. 256B·1KB·4KB처럼 Bucket을 나눠 필요한 가장 작은 Bucket을 사용합니다. Oversize 요청만 별도 할당하거나 거부하면 Pool의 메모리 낭비를 줄일 수 있습니다.
+### Q3. 서버에 초당 50만 건 Packet이 유입되는데 Pool Miss가 3%에 달합니다. Pool 크기를 즉시 늘리지 않고 다른 원인을 먼저 진단한다면 어디를 확인하나요?
+Pool Miss 발생 시각과 특정 Worker의 처리 지연 시각이 겹치는지 확인합니다. 특정 Size Class(예: 4KB Bucket)에서만 Miss가 집중되면 해당 Bucket 크기를 늘리거나 Oversize 임계값을 조정합니다. Worker별 Concurrent Rent 수를 측정해 한 Worker가 Buffer를 오래 보유하는 경우(비동기 완료 지연)를 확인합니다. 비동기 Send Completion 지연이 원인이면 Pool 크기가 아닌 Completion Thread 수나 Send Queue 상한을 조정합니다.
 
-### Q4. Shared Pool과 Thread-local Pool의 Trade-off는 무엇인가요?
-Shared Pool은 재사용률이 높지만 Lock과 Cache Line 경쟁이 있습니다. Thread-local Pool은 Lock이 없고 Cache Locality가 좋지만 한 Thread에 유휴 객체가 몰립니다. 작은 Thread-local Cache와 Shared Fallback을 조합하면 두 장점을 균형 있게 취할 수 있습니다.
+### Q4. Thread-local Pool에서 특정 Worker Thread의 Pool은 가득 찼는데 다른 Worker의 Pool은 거의 비어 있습니다. 어떻게 처리하나요?
+Thread-local Pool이 특정 Thread에 객체를 대여하고 다른 Thread에서 반환하는 패턴(이른바 producer-consumer 불균형)이 원인입니다. Thread-local Cache 상한(예: 64개)을 두고 초과하면 Shared Pool로 반환하도록 설계합니다. Shared Pool은 Lock 경쟁이 생기지만 Load Balance 효과로 특정 Thread 고갈을 방지합니다. Pool Hit/Miss를 Thread ID별로 분리 집계해 불균형 비율이 10% 이상이면 Local Cache 크기를 절반으로 줄이는 것을 검토합니다.
 
-### Q5. Pool이 고갈됐을 때 어떻게 처리하나요?
-정책 선택지는 세 가지입니다. 새로 할당(Pool 없이 동작)은 부하 흡수에 유리하지만 Pool 도입 목적이 흐려집니다. 대기는 실시간 경로에서 Tick을 지연시킵니다. 거부는 빠른 응답이지만 클라이언트에 오류를 반환합니다. 필수 Packet은 제한적 추가 할당, 비핵심 Broadcast는 Drop을 적용합니다.
+### Q5. 10만 CCU 서버에서 Pool이 고갈됐을 때 로그인·위치 갱신·결제 완료를 서로 다르게 처리하는 설계를 설명하세요.
+Pool 고갈 시 결제 완료·아이템 지급처럼 손실 불가한 Packet은 일반 할당으로 폴백해 처리합니다. 신규 로그인 Packet은 Pool Full 시 거부하고 클라이언트에게 429를 반환해 재시도를 유도합니다. 위치 갱신·Broadcast처럼 최신 값만 의미 있는 Packet은 Drop합니다. Pool Miss Rate가 5%를 초과하면 알람을 발생시켜 Warm-up 또는 Pool 크기 조정을 트리거합니다.
 
-### Q6. 민감 데이터가 포함된 Buffer를 반환할 때 무엇을 해야 하나요?
-반환 전에 `memset(0)` 등으로 Buffer 내용을 지워야 합니다. 초기화하지 않으면 이전 Session의 인증 Token이나 좌표 데이터가 다음 Rent에서 노출됩니다. Debug 빌드에서는 반환 Buffer를 특정 패턴(예: 0xDD)으로 채워 Use-after-return을 쉽게 감지합니다.
+### Q6. 게임 서버에서 인증 Buffer를 Pool에 반환했는데 다음 Rent 사용자에게 이전 Session의 Token이 그대로 노출됐습니다. 재발 방지 설계를 설명하세요.
+Return() 함수 내에서 반환 전에 `memset(h.ptr, 0, BUCKET_SIZES[idx])`를 실행해 민감 데이터를 초기화합니다. Return 호출 경로가 여러 곳이라면 RAII Handle의 소멸자에서만 Return이 호출되도록 설계해 초기화 누락을 방지합니다. CI에서 인증 Buffer Rent 후 반환하지 않고 다시 Rent했을 때 내용이 0인지 검증하는 Fixture Test를 추가합니다. Debug 빌드에서는 Rent 시 0xCC, Return 시 0xDD 패턴으로 채워 메모리 오염 위치를 즉시 파악할 수 있게 합니다.
 
 ## 10. 예상 꼬리질문
 
-- RAII Handle이 아닌 환경(C, Lua 등)에서 반환 누락을 어떻게 방지하나요?
-- C# `ArrayPool<T>`와 직접 구현 Object Pool의 차이는 무엇인가요?
-- Pool 객체가 비동기 Queue를 넘어갈 때 Lifetime을 어떻게 추적하나요?
-- Reference-counted Pool Segment와 일반 Pool Handle 중 어떤 것이 적합한 상황은?
-- Pool의 Trim(유휴 객체 해제) 시점을 어떻게 결정하나요?
-- Pool이 Thread-safe하지 않은 상태에서 Multi-thread 접근이 발생하면 어떤 버그가 나타나나요?
-- 게임 서버에서 Bullet이나 Effect 같은 단명 객체에 Pool을 적용하는 게 항상 유리한가요?
+- Lua나 C 환경에서 RAII를 사용할 수 없을 때, 반환 누락으로 Pool이 서서히 고갈되는 문제를 어떻게 탐지하고 방지하나요?
+- Pool Trim 주기를 5분으로 설정했는데 트래픽 부하 후 메모리가 즉시 줄지 않고 5분간 유지됩니다. Peak 재발 예측이 가능한 경우와 그렇지 않은 경우에 Trim 기준을 어떻게 다르게 잡나요?
+- Pool Miss Rate를 Prometheus로 수집하는데, 해당 수치가 1%에서 8%로 증가했을 때 Pool 크기를 늘리기 전에 먼저 확인해야 하는 지표 두 가지는 무엇인가요?
+- Buffer를 여러 비동기 Stage를 거쳐 전달할 때 각 Stage 경계에서 소유권 이전이 명확하지 않으면 어떤 버그가 생기나요? Reference Counting과 std::move 중 어떤 방식을 권장하나요?
+- C# ArrayPool<T>를 사용하는 코드에서 try/finally 없이 Rent한 Buffer가 예외 경로에서 반환되지 않아 Pool이 고갈됐습니다. 재발 방지를 위해 ArrayPool 래핑 패턴을 어떻게 설계하나요?
+- Bullet·Effect처럼 수명이 100~200ms인 단명 객체 100만 개/초가 생성되는 경우, Pool과 Arena Allocator 중 어떤 기준으로 선택하나요?
+- Pool 객체에 이전 Session의 오래된 Callback이 남아 있어 반환 후 재사용된 객체에서 Callback이 실행됐습니다. Reset 계약에 Callback 목록 초기화를 포함하는 것만으로 충분한가요?
 
 ## 11. 30초 모범답변
 

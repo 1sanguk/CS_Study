@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Login Server의 Token 발급 흐름과 Game Server에서의 검증 방법을 설명할 수 있다.
-- Chat Server의 Channel Fan-out과 순서·중복·Backpressure 처리를 설명할 수 있다.
-- Ranking Server에서 점수 원본 권위를 지키고 Redis Sorted Set과 영속 원본을 분리하는 이유를 설명할 수 있다.
-- 세 서비스의 장애 격리 기준과 독립 확장이 필요한 시점을 설명할 수 있다.
+- Login Rate Limit 기록에서 특정 IP의 실패 횟수가 초당 100회를 초과할 때, Brute Force 공격인지 NAT 공유 IP 오탐인지 구분하고 차단 범위를 결정할 수 있다.
+- Chat Channel Fan-out에서 느린 Client의 Send Queue 깊이가 5,000을 초과해 전체 브로드캐스트 지연이 발생할 때, Drop 정책·연결 보호·채널 분리 중 어떤 조치를 적용할지 판단할 수 있다.
+- Ranking Redis와 DB 간 불일치가 발견됐을 때, Match Result Event 중복 반영·Crash 복구 실패·시즌 전환 타이밍 문제 중 원인을 좁히고 DB를 권위 원본으로 복구하는 순서를 결정할 수 있다.
+- Login·Chat·Ranking 중 하나의 장애가 다른 서비스 응답에 영향을 주는 현상이 관찰될 때, 장애 격리 경계가 어디서 무너졌는지 진단하고 독립 확장 여부를 판단할 수 있다.
 
 ## 1. 개요
 Login은 신원·Session 발급, Chat은 실시간 Message Fan-out과 정책, Ranking은 점수 갱신과 정렬 조회를 담당하는 서비스다.
@@ -180,33 +180,33 @@ Ranking은 Redis Sorted Set으로 실시간 조회하고 DB·Event Log를 복구
 
 ## 9. 면접 질문
 
-### Q1. Login Server의 Token 발급 흐름을 설명해 주세요.
-클라이언트가 Credential을 Login Server에 전송합니다. Login Server는 Password Hash를 검증하고 Rate Limit을 확인한 뒤 짧은 수명(5분)의 JWT를 서명해 반환합니다. 클라이언트는 이 Token으로 Game Server나 Gateway에 접속하고, Game Server는 서명·만료·Audience를 검증합니다.
+### Q1. 피크 시간에 Login Server의 응답 p99가 5ms에서 500ms로 급등했습니다. 어떤 순서로 원인을 진단하겠습니까?
+Prometheus에서 Login RPS vs 성공률, Credential 실패율, Rate Limit 발동률, DB 연결 풀 Wait 시간을 순서대로 확인합니다. Rate Limit 발동 급증이면 Brute Force 공격 가능성을 먼저 검토합니다. DB 연결 풀이 고갈됐다면 bcrypt 연산이 I/O Thread를 점유하는 구조 문제입니다. bcrypt 연산을 별도 Worker Pool로 오프로드해 I/O Thread를 해방시키고, IP와 계정 단위 Rate Limit을 Redis로 집계해 공격성 트래픽을 차단합니다.
 
-### Q2. Chat Channel의 순서 보장과 Fan-out은 어떻게 처리하나요?
-Channel을 한 Partition Owner에 배치해 Channel 내 Message Sequence를 원자적으로 발급합니다. 전역 순서는 비용이 크고 대개 불필요합니다. Fan-out은 Channel 구독자에게 브로드캐스트하되, 느린 클라이언트의 Send Queue에 상한을 두고 오래된 일반 Chat을 Drop합니다.
+### Q2. 특정 Chat Channel에서 메시지가 발송자 화면에는 보이는데 수신자 화면에 일부가 누락되거나 순서가 뒤섞입니다. 원인과 수정 방법은 무엇입니까?
+Sequence 발급과 Broadcast를 같은 Channel Partition에서 원자적으로 처리하지 않으면, Sequence 발급 후 Broadcast 전 Worker 재시작 시 해당 Sequence 메시지가 손실됩니다. Channel Partition Owner에서 Sequence 발급·저장·Broadcast를 단일 Commit 단위로 묶어야 합니다. 재연결 클라이언트는 마지막 수신 Sequence 이후 메시지를 재전송하는 재동기화 절차를 추가합니다.
 
-### Q3. Ranking에서 클라이언트가 점수를 제출하면 안 되는 이유와 설계는?
-클라이언트 코드는 조작 가능하므로 점수를 직접 제출하면 치팅이 됩니다. 점수는 Game Server의 권위 Match Result Event에서 생성하고 `matchId`로 중복 반영을 막습니다. Redis Sorted Set으로 빠른 조회를 지원하고 DB를 영속 원본으로 분리합니다.
+### Q3. Ranking Redis의 특정 Player 점수가 DB보다 높은 불일치가 발견됐습니다. 발생 경로를 추적하고 복구 방법을 설명하십시오.
+Event Log에서 해당 matchId의 DB 저장 성공 여부를 확인합니다. DB 저장 실패 후 Redis만 갱신됐다면 Redis → DB 순서로 반영된 구조 문제입니다. DB가 권위 원본이므로 Redis를 DB 기준으로 재계산해 덮어씁니다. 재발 방지: DB 저장 완료 후 Redis를 반영하거나 Transactional Outbox를 사용해 Event가 DB에 먼저 저장된 뒤 Ranking에 반영되도록 보장합니다.
 
-### Q4. Token Key Rotation 시 기존 Token이 무효가 되지 않으려면 어떻게 하나요?
-새 Key로 서명하기 시작해도 이전 Key로 서명된 Token이 만료될 때까지 구 Key도 검증합니다. Key ID(kid)를 Token Header에 포함해 어떤 Key로 서명됐는지 구분합니다. Overlap 기간 동안 구/신 Key를 모두 검증합니다.
+### Q4. Login Token 만료 시간을 30분에서 5분으로 단축한 배포 후 게임 중 사용자 로그아웃이 급증합니다. Silent Refresh 구현과 Token 교체 중 Race Condition 방지 방법은 무엇입니까?
+만료 1분 전에 클라이언트가 백그라운드에서 Refresh Token으로 새 Access Token을 요청하는 Silent Refresh를 구현합니다. 여러 탭이 동시에 갱신 요청을 보내지 않도록 BroadcastChannel API로 탭 간 Lock을 구현하거나, 서버에서 Refresh Token을 1회성으로 처리하는 Rotation 방식을 사용합니다. 갱신 실패 시 지수 Backoff(최대 30초)로 재시도를 제한합니다.
 
-### Q5. 세 서비스를 분리해야 하는 기준은 무엇인가요?
-Login은 Credential 처리 보안과 Burst 부하, Chat은 Fan-out 연결 수, Ranking은 정렬 조회 부하가 각각 다른 특성입니다. 한 기능의 부하·장애가 다른 기능에 영향을 주기 시작할 때 서비스를 분리합니다. 작은 규모에서는 Module 경계로 시작하고 측정 결과를 보며 분리합니다.
+### Q5. Chat 금칙어 목록을 핫픽스로 업데이트했는데 일부 Chat Server에만 적용되고 나머지에는 반영되지 않아 필터 우회가 가능합니다. 무중단으로 전체 서버에 즉시 배포하는 방법은?
+금칙어 목록을 Redis Pub/Sub 또는 Consul·etcd에 Versioned Key로 저장합니다. Chat Server가 Subscribe하다가 갱신 알림을 받으면 새 목록을 Pull해 메모리 내 Filter를 Immutable 새 목록 Pointer 스왑으로 원자적으로 교체합니다. 각 서버의 현재 적용 Version을 `/health` Endpoint에 노출해 불일치 서버를 즉시 감지합니다.
 
-### Q6. Ranking 시즌 전환을 어떻게 처리하나요?
-이전 시즌 Key(`ranking:season1`)를 보관하고 새 시즌 Key(`ranking:season2`)로 전환합니다. 전환 순간 읽기 Traffic을 새 Key로 원자적으로 전환합니다. 이전 시즌 Top N은 DB에서 집계해 별도로 저장하고 보상 지급 기준 Snapshot을 영속화합니다.
+### Q6. 시즌 전환 직후 Ranking Top 100 보상 배치가 실행됐는데 일부 Player에게 이전 시즌 점수 누락 상태로 보상이 지급됐습니다. 원인과 재발 방지 방법은?
+시즌 전환과 보상 배치가 동시에 실행되면 Redis Key 교체와 DB Snapshot 저장 사이에 Race가 발생해 Snapshot 저장 전 보상 배치가 실행될 수 있습니다. 재발 방지: 시즌 종료 시점에 DB에 별도 Snapshot 테이블을 생성하고 잠근 뒤, 보상 배치는 그 Snapshot만 참조하도록 합니다. Snapshot 생성 완료를 확인한 후 Redis Versioned Key를 전환합니다.
 
 ## 10. 예상 꼬리질문
 
-- Login Server 장애 시 기존 Game Session까지 끊을지, 신규 Login만 막을지 어떻게 구분하나요?
-- Chat에서 귓속말(DM)과 채널 Chat의 저장 정책을 어떻게 다르게 설계하나요?
-- Ranking에서 Top N과 "내 주변 순위" 조회의 구현 방법 차이는?
-- 동점 처리를 위한 Secondary Sort Key를 Redis Sorted Set에서 어떻게 인코딩하나요?
-- Chat 금칙어 필터를 실시간으로 업데이트할 때 Service 재시작 없이 어떻게 적용하나요?
-- Login 실패 횟수 제한을 분산 환경에서 어떻게 정확하게 집계하나요?
-- Ranking DB와 Redis 간 불일치가 발생했을 때 복구 절차는?
+- Login Rate Limit을 Redis로 집계할 때 Key TTL을 60초로 설정했는데 분산 환경에서 카운터 Drift가 발생하는 원인과 Redis Cluster Hash Slot 설계 방법은 무엇인가요?
+- Chat Channel Partition 수를 100개로 늘렸는데 특정 채널의 Fan-out 지연이 오히려 증가했습니다. Cross-Partition 오버헤드를 어떻게 측정하고 최적 Partition 수를 결정하나요?
+- 1만 명이 구독하는 글로벌 채팅 채널에서 초당 1,000건 메시지가 들어올 때 발생하는 1,000만 건/초 Write 부하를 어떻게 완화하나요?
+- Ranking Redis Sorted Set ZADD가 초당 5,000건임에도 ZRANGEBYSCORE p99가 200ms를 초과합니다. Redis 단일 Key 경합인지 Slow Query인지 어떻게 구분하고 조치하나요?
+- Game Server 프로세스가 Match Result Event를 발행하기 전에 죽었을 때 Ranking 점수 누락을 Transactional Outbox와 Saga 패턴 중 어떤 방식으로 처리하고 선택 기준은 무엇인가요?
+- Login Service를 Game Server와 분리 배포할 때 Public Key를 어디서 가져오고, Key Rotation 중 kid 필드 없이 구 Key와 신 Key가 혼재하면 어떤 검증 실패가 발생하나요?
+- Chat Spam 필터를 Redis Rate Limit으로 구현했는데 특정 User가 50개 계정으로 분산 전송해 개별 한도를 우회합니다. IP·장치 ID 기반 집계 시 발생하는 오탐과 완화 방법은 무엇인가요?
 
 ## 11. 30초 모범답변
 

@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Matchmaking의 핵심 목표와 Ticket 구성 요소를 설명할 수 있다.
-- 대기 시간에 따른 MMR 범위 확장 전략과 공정성 Trade-off를 설명할 수 있다.
-- Ticket 원자적 Claim과 이중 매칭 방지 방법을 설명할 수 있다.
-- Game Server Capacity 예약 실패 처리와 Matchmaking 품질 지표를 설명할 수 있다.
+- Prometheus에서 특정 Region·Mode의 대기 시간 p95가 30초를 초과할 때, MMR 범위 확장 속도 설정 문제인지 인구 부족인지 Bucket Worker 처리량 부족인지 진단 순서를 결정할 수 있다.
+- Redis Lua Script 기반 Ticket Claim에서 동일 Ticket이 두 Match에 중복으로 들어가는 버그가 발생했을 때, Claim 원자성 실패·Lease 만료 경쟁·Version 누락 중 원인을 좁혀 수정 방향을 결정할 수 있다.
+- Server Capacity 예약 실패율이 5%를 초과하는 상황에서, Match 확정 전 TTL 선점 누락·Warm Pool 부재·Region 용량 부족 중 원인을 측정하고 재처리 정책을 선택할 수 있다.
+- Dodge 패널티 도입 후 정상 사용자의 Match 취소율이 2배 증가했을 때, 오탐 기준·패널티 강도·MMR 범위 완화 한계 중 어떤 정책 파라미터를 먼저 조정해야 하는지 판단할 수 있다.
 
 ## 1. 개요
 Matchmaking은 실력, 지연, Party, 대기 시간과 서버 용량 조건으로 함께 플레이할 참가자와 Game Server를 선택하는 과정이다.
@@ -174,33 +174,33 @@ Ticket에 `version`과 `idempotencyKey`를 두어 중복 Queue 진입을 막는�
 
 ## 9. 면접 질문
 
-### Q1. Matchmaking의 핵심 목표와 Ticket 구성 요소를 설명해 주세요.
-공정성(비슷한 실력), 낮은 Ping(같은 Region), 적절한 대기 시간, 서버 용량을 균형 있게 최적화합니다. Ticket에는 Player/Party ID, Mode, Region, MMR, 역할, Platform, 대기 시작 시각, Idempotency Key, Version이 포함됩니다.
+### Q1. Matchmaking 서버에서 특정 Region의 대기 시간 p95가 평소 10초에서 60초로 급등했습니다. 어떤 순서로 원인을 진단하겠습니까?
+Prometheus에서 해당 Region·Mode의 Bucket Queue 깊이, Ticket 생성률 vs 매칭 완료율부터 확인합니다. 인구 급감이면 Queue 깊이는 낮고 생성률도 낮습니다. Worker 처리량 부족이면 Queue 깊이만 쌓입니다. MMR 범위 확장 설정 변경이 원인이면 취소율과 Claim 실패율이 동시에 오릅니다. Ticket Claim 실패율과 Lease 만료 복귀 비율을 함께 보면 Worker 경합 여부를 판별할 수 있습니다.
 
-### Q2. 대기 시간에 따른 MMR 범위 확장 전략은 어떻게 설계하나요?
-처음에는 좁은 MMR 범위와 같은 Region 조건으로 시작합니다. 대기 시간이 늘수록 MMR 범위와 Ping 허용치를 단계적으로 확장합니다. Mode·Region별 확장 속도를 달리하고, 최대 확장 범위를 Product 목표로 명시합니다. 빠른 매칭이 실제 이탈률을 줄이는지 지표로 검증합니다.
+### Q2. Redis Lua Script 기반 원자적 Claim을 사용함에도 동일 Ticket이 두 Match에 중복으로 들어가는 버그가 발생했습니다. 가능한 원인과 수정 방법은 무엇입니까?
+Redis 클러스터 환경에서 Ticket Key와 Lock Key가 서로 다른 Hash Slot에 있으면 Lua Script 원자성이 보장되지 않습니다. 두 Key를 동일 Hash Slot에 배치해야 합니다. 또한 Lease 만료 직전 두 Worker가 거의 동시에 Read → Version 검사 → Write 순서를 실행하면 경쟁이 생깁니다. SET NX + Version 검증을 하나의 Lua Script 안에 넣고, 클러스터 리샤딩 중 MOVED 응답으로 재시도가 누락되지 않도록 재시도 정책에 MOVED 처리를 추가합니다.
 
-### Q3. Ticket 원자적 Claim과 이중 매칭 방지는 어떻게 구현하나요?
-Redis Lua Script나 DB의 CAS(Compare-And-Swap)로 Ticket 상태를 `Queued → Claimed`로 원자적으로 전환합니다. Claim에 성공한 Worker만 Match를 진행하고, Lease(예: 30초) 만료 시 `Queued`로 자동 복귀합니다. Ticket Version으로 늦은 취소가 이미 확정된 Match를 되돌리지 않게 합니다.
+### Q3. 배포 후 Server Capacity 예약 실패율이 0.5%에서 7%로 올랐습니다. 어떤 지표를 보고 어떤 조치를 취합니까?
+Region별 Instance 가용 수, Warm Pool 크기, Auto Scaling 반응 시간(평균 1~3분)을 먼저 확인합니다. Match TTL 만료 전 확인 실패로 Capacity가 제때 반환되지 않는지 확인합니다. 즉각 조치로 Warm Pool 크기를 예약 실패율의 2배 기준으로 임시 증가시킵니다. 근본 조치로는 Match 확정과 동시에 Reservation을 시작하도록 타이밍을 조정하고, Region별 Auto Scaling Min을 평균 부하 + 20% 버퍼로 상향합니다.
 
-### Q4. Game Server Capacity 예약 실패 시 어떻게 처리하나요?
-Match 확정 전에 Region·Build Version·Mode 기준으로 Server Instance를 TTL로 선점합니다. 예약 실패 시 Match를 원자적으로 취소하고 Ticket을 Queue에 복귀시킵니다. 일부 Player만 확인한 경우 Mode 규칙에 따라 대체자를 배정하거나 Match를 해산합니다. Warm Pool과 Auto Scaling으로 예약 실패 자체를 줄입니다.
+### Q4. 새벽 비피크 시간에 MMR 차이가 800점 이상인 매칭이 발생해 플레이어 불만이 집중됩니다. 범위 확장 상한을 어떻게 설계해야 합니까?
+경쟁 모드는 최대 ±200, 캐주얼 모드는 ±400처럼 Mode별 확장 상한을 Product 목표로 명시합니다. 비피크 시간에 상한을 초과하면 대기 시간을 더 늘리거나, Cross-Region 확장(Ping 허용치를 50ms→100ms로 완화)으로 인구를 보충합니다. 알고리즘 변경 전에 과거 Queue Event Replay로 예상 승률 분포를 시뮬레이션해 기준값이 50% 근처인지 검증합니다.
 
-### Q5. MMR 조작 같은 악용을 어떻게 방지하나요?
-MMR은 서버 기록에서 계산하고 클라이언트가 직접 제출하지 못합니다. 반복 Dodge에는 증가하는 대기 패널티를 부여합니다. Party 내 MMR 편차 상한으로 고수+초보 조합 악용을 제한합니다. 신규 계정과 배치 중인 계정은 별도 Pool에서 매칭합니다.
+### Q5. Party 내 MMR 편차가 500점인 고수·초보 조합이 비슷한 총합 MMR 상대를 만나 승률이 극단적으로 갈리는 문제가 보고됩니다. Party MMR 보정 정책을 어떻게 설계합니까?
+대표 Rating을 단순 평균 대신 `Max(Party MMR) × 0.6 + Avg(Party MMR) × 0.4` 방식으로 계산해 최고값에 가중치를 부여합니다. 편차가 ±300을 초과하는 Party는 경쟁 모드 진입을 제한하거나 매칭 범위를 좁힙니다. 보정 강도(α)는 실제 승률 분포 데이터를 분석해 50% 근처로 수렴하도록 조정하며, Queue Event Replay로 사전 시뮬레이션 후 배포합니다.
 
-### Q6. Matchmaking 품질 지표는 어떻게 측정하나요?
-평균 대기 시간만이 아닌 p50·p95·p99를 Region·Mode·시간대별로 집계합니다. 예상 승률 분포(50% 근처 분포가 좋은 매칭), Match 취소율, Server 예약 실패율을 봅니다. 알고리즘 변경 전후를 과거 Queue Event Replay로 비교 검증합니다.
+### Q6. Matchmaking 알고리즘을 개선한 뒤 실제 게임 품질이 좋아졌는지 어떤 지표와 방법으로 검증합니까?
+대기 시간 p50·p95 감소, 예상 승률 분포가 50% ± 5% 이내로 수렴, Match 취소율·Server 예약 실패율 감소를 Region·Mode별로 측정합니다. 과거 Queue Event Replay로 알고리즘 변경 전후를 오프라인 시뮬레이션해 비교합니다. A/B 테스트로 실제 이탈률과 게임 완료율 차이를 확인합니다. 알고리즘 효과를 측정할 때 인구 급감·서버 장애 같은 외부 변수를 메트릭과 함께 기록해 오염을 제거합니다.
 
 ## 10. 예상 꼬리질문
 
-- 인구가 적은 Region에서 매칭 품질과 대기 시간을 어떻게 균형 잡나요?
-- Shard 간에 분산된 Ticket Queue를 어떻게 통합 탐색하나요?
-- Party 내 MMR 편차가 클 때 대표 Rating을 어떻게 계산하나요?
-- Match가 성사됐지만 플레이어가 응답하지 않으면(Dodge) 어떻게 처리하나요?
-- 특정 역할이 부족할 때 매칭 방식을 어떻게 조정하나요?
-- Server Build Version이 다른 플레이어가 섞이지 않게 어떻게 보장하나요?
-- 지역 장애로 한 Region Matchmaking이 중단됐을 때 어떻게 대응하나요?
+- Ticket Claim Lease를 30초로 설정했는데 특정 Worker가 죽었을 때 최악의 경우 매칭 지연이 몇 초 발생하고, Lease를 10초로 줄이면 어떤 부작용이 생기나요?
+- Matchmaking이 100개 Shard로 분산된 상황에서 인접 Bucket 탐색 시 동일 Ticket을 여러 Shard가 동시에 Claim 시도하면 DB CAS Write QPS가 얼마나 증가하고, Redis Lua Script 대신 DB를 쓸 때 어떻게 완화하나요?
+- 비피크 시간에 MMR ±500까지 확장됐는데 특정 Mode의 취소율이 10%를 초과했습니다. Prometheus 알람 기준은 어떻게 잡고 확장 속도를 동적으로 조절하는 방법은 무엇인가요?
+- Region 장애로 5만 명 Ticket을 인접 Region으로 이전할 때 발생하는 재접속 폭풍을 Rate Limit(초당 1,000건)과 ±50% Jitter Backoff로 어떻게 분산하나요?
+- 신규 Build Version(v2) 배포 중 구 버전(v1)·신 버전(v2) Player가 혼재할 때 Ticket에 Build Version 필드가 없으면 어떤 입장 실패가 발생하고, Rolling Deploy 기간의 Ticket Schema 하위 호환성을 어떻게 보장하나요?
+- Queue Event Replay로 알고리즘 변경을 사전 검증할 때 Replay 속도를 실시간의 10배로 하면 Event 순서 재현이 보장되는지 확인해야 할 항목과 결과를 어떤 지표로 비교하나요?
+- Dodge 패널티 도입 후 특정 Region에서 취소율 15%·평균 대기 시간 45초가 동시에 증가했습니다. Dodge 오탐과 인구 감소 중 어느 쪽이 원인인지 어떤 지표로 구분하나요?
 
 ## 11. 30초 모범답변
 

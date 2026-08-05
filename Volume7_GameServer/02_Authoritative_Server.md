@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Authoritative Server의 신뢰 경계와 입력 검증 원칙을 설명할 수 있다.
-- Client Prediction과 Server Authority의 역할 분리를 설명할 수 있다.
-- 이동·전투 검증에서 허용 오차를 설계하는 방법을 설명할 수 있다.
-- 중복·역순 입력 처리와 Cheat 탐지 파이프라인을 설명할 수 있다.
+- PvP 게임에서 Cheat 탐지가 정상 플레이어를 오탐하는 빈도가 높아질 때, 이동 허용 오차(maxSpeed × elapsed + tolerance)의 Network Jitter 분포 기반 튜닝 방법과, 반복 위반 횟수·편차 크기 기준으로 즉시 Drop·경고·탐지 점수 축적·제재 중 어느 단계를 선택할지 판단할 수 있다.
+- 공격 Packet에서 Client가 보낸 damage·position·target을 그대로 적용했을 때 발생하는 취약점을 진단하고, skillId·Cooldown·시야 범위·버프 상태를 서버 측에서 재계산해야 하는 필드와 Client 신뢰 허용 필드를 Authority 경계 기준으로 구분해 설계 결정을 내릴 수 있다.
+- 네트워크 재전송으로 같은 Command가 중복·역순 도착할 때, Sequence Number·Idempotency Key·Version 조건부 갱신 중 부작용(재화 지급·아이템 획득) 유무와 서비스 Authority 경계를 기준으로 적합한 중복 방지 패턴을 결정할 수 있다.
+- Authoritative Server의 입력 검증 로직이 DoS 공격면이 되는 조건을 진단하고, Packet Rate Limit·검증 예산(Budget) 상한·우선순위별 Drop 정책 중 서버 Tick 안정성과 정상 플레이어 경험을 동시에 보호하는 조합을 결정할 수 있다.
 
 ## 1. 개요
 권위 서버는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
@@ -146,53 +146,113 @@ Authoritative Server은 정상 경로만 구현해서는 운영 준비가 끝나
 
 Authoritative Server에서는 각 Test는 성공 여부만 기록하지 않는다. 처리 시간 분포, Queue 최대치, Drop·Retry 수와 복구 소요 시간을 남겨 다음 배포의 기준값으로 사용한다.
 
-## 4. 쉬운 예시
-Client가 좌표 100m 이동을 주장해도 Server는 마지막 위치와 입력 시간으로 가능한 최대 거리를 계산한다. 벽 충돌과 이동 제한을 통과한 결과만 권위 상태에 반영하고 위반 입력은 교정한다.
+## 4. 쉬운 예시: 공격 Packet 검증과 중복 처리
+
+**Server 측 공격 검증 의사코드**
+
+```python
+def handle_attack(session, packet):
+    actor = get_actor(session.actor_id)
+    skill  = get_skill(packet.skill_id)          # DB 기준 스탯
+
+    # 1. 시전 가능 상태 확인
+    if actor.state != ALIVE:
+        return reject("dead actor")
+    # 2. Cooldown 서버 시간 기준 검증
+    if now() < actor.skill_cooldowns[skill.id]:
+        return reject("cooldown not ready")
+    # 3. 중복·역순 입력 방지
+    if packet.seq <= session.last_seq:
+        return drop("old or duplicate seq")
+    # 4. 시야·사거리 검증
+    target = get_actor(packet.target_id)
+    if distance(actor, target) > skill.range:
+        return reject("out of range")
+
+    # 5. 서버 기준 데미지 계산 (Client 값 무시)
+    damage = calc_damage(skill, actor.stats, target.buffs)
+    target.apply_damage(damage)
+    session.last_seq = packet.seq
+    broadcast_hit(actor, target, damage)
+```
+
+Client가 보낸 `damage` 필드는 사용하지 않는다. 서버가 `skill.id`로 DB 스탯을 조회하고 Cooldown·사거리·시야를 서버 시간과 서버 좌표 기준으로 검증한 뒤 데미지를 재계산한다.
 
 ## 5. 비슷한 개념과 비교
-서버 판정은 치팅과 상태 불일치를 줄이지만 RTT만큼 결과 확인이 늦다. Client Prediction은 반응성을 보완하지만 최종 판정과 보상은 Server에 남겨야 한다.
+
+| 구분 | Authoritative Server | Client-side Authority |
+|------|---------------------|-----------------------|
+| 최종 상태 결정 | 서버 | 클라이언트 |
+| Cheat 방어 | 강함 (서버가 검증) | 취약 (클라이언트 신뢰) |
+| 지연 (RTT) | 판정이 RTT만큼 지연 | 즉각 반응 |
+| 반응성 보완 | Client Prediction + 보정 | 불필요 |
+| 서버 CPU | 검증·Simulation 부하 | 낮음 |
+| 공정성·일관성 | 높음 | 낮음 (클라이언트마다 다름) |
+| 적합한 장르 | Competitive·MMORPG | PvE Casual·Turn-based |
 ## 6. 장점과 단점
-Authoritative Server을 올바르게 적용하면 상태와 처리 책임이 명확해지고 Peak 부하와 장애에 대한 예측 가능성이 높아진다. 반면 신뢰 경계, 입력 Sequence와 이동 검증 정책을 잘못 정하면 지연, 상태 불일치 또는 운영 복잡도가 늘어난다. 실제 요구와 측정 결과를 기준으로 필요한 범위만 적용한다.
+
+### Authoritative Server의 장점
+
+- 공정성: 모든 참가자에게 동일한 최종 상태를 보장
+- Cheat 방어: Client 조작이 최종 상태에 반영되지 않음
+- 일관성: Cooldown·데미지·재화를 서버 단일 기준으로 계산
+- Replay 가능: 서버 입력 로그로 전체 Match 재현 가능
+
+### Authoritative Server의 단점
+
+- RTT만큼 판정 지연: Client Prediction으로 보완하지 않으면 조작감 저하
+- 서버 CPU 증가: 이동·전투 Simulation, 검증 비용이 Tick마다 발생
+- 개발 복잡도: Prediction·Reconciliation·Rollback 로직 필요
+- 검증 자체가 DoS 공격면: Packet Rate·검증 Budget 제한 필요
 ## 7. 게임 서버·백엔드 실무 예시
 공격 Packet의 damage 값을 믿지 않고 skillId, target과 input sequence를 받아 서버 데이터로 판정한다. 이상 행동은 거부뿐 아니라 지표·제재 파이프라인으로 기록한다.
 
 Authoritative Server 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
 ## 8. 자주 하는 오해
-- Authoritative 서버를 두면 치팅이 완전히 불가능하다고 생각한다. 검증 비용 대비 가치를 설계해야 하며 서버도 공격 대상이 될 수 있다.
-- 서버에서 모든 게임 로직을 검증하면 플레이가 불가능할 정도로 지연된다고 생각한다. Input 전송과 State 수신만으로도 플레이 가능하며 Client Prediction으로 체감 지연을 보완한다.
-- 이동 검증은 목적지 좌표 범위만 확인하면 된다고 생각한다. 속도, 가속도, 장애물 충돌, 물리 조건 등 복합 검증이 필요하다.
-- 전투 검증은 서버에서 데미지 계산만 하면 된다고 생각한다. 사거리, 시야, 쿨다운, 버프·디버프 상태 전체가 서버 기준이어야 한다.
-- 클라이언트가 보낸 쿨다운 완료 신호를 믿어도 된다고 생각한다. Cooldown은 반드시 서버 시간 기준으로 계산해야 클라이언트 조작을 막을 수 있다.
+
+- **서버에서 모든 검증을 하면 플레이가 불가능할 정도로 지연된다**: Input 전송과 State 수신만으로도 플레이 가능하며, Client Prediction으로 체감 지연을 보완한다. 검증 비용은 Budget으로 제어한다.
+- **이동 검증은 목적지 좌표 범위만 확인하면 된다**: 속도·가속도·Navigation Mesh·장애물 충돌 등 복합 조건이 필요하다. 좌표만 보면 벽 통과나 텔레포트 Cheat를 막지 못한다.
+- **전투 검증은 서버에서 데미지 계산만 하면 된다**: 사거리·시야(LOS)·Cooldown·버프·디버프 상태 전체가 서버 기준이어야 한다. 어느 하나만 클라이언트를 신뢰하면 해당 값으로 Exploit이 생긴다.
+- **클라이언트가 보낸 Cooldown 완료 신호를 믿어도 된다**: Cooldown은 서버 시간 기준으로 계산해야 한다. 클라이언트가 시간을 조작하거나 신호를 재전송하면 무한 연속기가 가능해진다.
+- **Wall Hack은 Authoritative 서버만 있으면 자동으로 막힌다**: 서버가 최종 Authority여도 Interest Management를 적용하지 않으면 Client가 볼 수 없는 Enemy 위치 등이 패킷에 포함돼 Wall Hack에 악용된다.
+- **Sequence Number만 있으면 중복 Command를 완전히 막는다**: Sequence로 오래된 입력을 Drop할 수 있지만, 재화 지급·아이템 획득처럼 부작용이 있는 Command는 Idempotency Key와 영속 저장 기반 중복 방지가 추가로 필요하다.
+- **검증 실패는 모두 즉시 Ban으로 처리해야 한다**: Packet Loss·Clock Drift·Client Bug도 검증 실패를 유발한다. Drop·경고·탐지 점수 축적·제재로 단계를 구분하지 않으면 정상 플레이어가 오탐으로 제재된다.
 ## 9. 면접 질문
 
-### Q1. Authoritative Server를 설명해 주세요.
-게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델입니다. Client는 의도를 보내고 서버가 유효성을 판단하며, 서버 결과가 항상 최종 기준입니다.
+### Q1. PvP 슈팅 서버에서 이동 검증 오탐으로 정상 플레이어가 Correction을 받는 빈도가 초당 5회를 넘었습니다. tolerance 값을 어떻게 조정하고, 조정 후 실제 Cheat 허용 여지가 얼마나 커지는지 어떻게 측정하나요?
 
-### Q2. 왜 Authoritative Server가 필요한가요?
-변조된 Client가 위치·피해량·재화를 임의 결정하지 못하게 하고 모든 참가자에게 일관된 결과를 제공하기 위해서입니다.
+tolerance를 줄이면 오탐이 줄지만 허용 Cheat 거리가 줄어들고, 늘리면 정상 Correction이 감소하지만 Cheat 여지가 커집니다. 조정 순서: (1) 클라이언트 RTT 분포와 Jitter를 수집(예: p99 RTT 80ms, Jitter ±20ms), (2) tolerance = maxSpeed × (RTT_p99 + Jitter) × 안전 계수(1.2)로 재계산, (3) 실제 Cheat 허용 여지는 해당 tolerance 거리를 Replay 로그에서 실측. 운영 시에는 Correction 빈도, 실제 이동 속도 분포, Cheat 탐지 이벤트를 같은 대시보드에서 보고 tolerance 변경이 세 지표에 미치는 영향을 동시에 측정합니다.
 
-### Q3. 공격 Packet을 어떻게 검증하나요?
-Client가 보낸 damage 값을 그대로 적용하지 않습니다. skillId·target·input sequence를 받아 서버 측 스탯·버프·Cooldown 기준으로 판정합니다. 이상 행동은 Drop·경고·탐지 점수 축적·제재 파이프라인으로 단계별 처리합니다.
+### Q2. 공격 Packet에 Client가 damage=9999로 조작해 전송했습니다. 서버가 이 값을 그대로 적용하는 취약점이 발생한 근본 원인과, 서버가 재계산해야 하는 필드 목록을 설계하세요.
 
-### Q4. 이동 검증 허용 오차를 어떻게 설정하나요?
-`허용거리 = 최대속도 × 경과시간 + 여유치`로 계산합니다. 여유치가 너무 작으면 정상 플레이어를 수정하고, 너무 크면 Cheat 여지가 커집니다. Network Jitter 분포와 게임 디자인 기준으로 측정하여 결정합니다.
+근본 원인: Client 입력 Packet의 damage 필드를 Authority 검증 없이 State에 적용했습니다. 서버가 재계산해야 하는 필드: skillId 기반 기본 데미지(DB), 공격자 스탯·버프 배율, 방어자 Armor·저항, Crit 여부(서버 RNG), 사거리·시야(서버 좌표), Cooldown 잔여(서버 시간). Client 신뢰 허용 필드: 이동 방향(서버 검증 후 적용), 스킬 발동 의도(skill_id·target_id). 설계 원칙: "Client는 의도(skill_id, target_id)만 보내고 결과(damage, 상태변화)는 서버가 계산한다."
 
-### Q5. 중복·역순 입력을 어떻게 처리하나요?
-Sequence Number로 오래된·중복 입력을 식별합니다. `lastProcessedSeq`보다 작거나 같은 Sequence는 Drop합니다. 재화 지급 같은 부작용이 있는 Command는 Idempotency Key와 영속 중복 방지가 추가로 필요합니다.
+### Q3. 재화 지급 Command가 네트워크 재전송으로 두 번 도착해 골드가 중복 지급됐습니다. Sequence Number만으로는 이를 막지 못한 이유와, Idempotency Key를 적용하는 설계를 설명하세요.
 
-### Q6. Client Prediction과 Server Authority를 어떻게 조합하나요?
-Client는 즉각 반응성을 위해 서버 응답 전에 결과를 예측해 표시합니다. Server 확정 결과가 오면 예측이 틀렸을 때 보정합니다. 서버 결과가 기준이며 Client 예측 상태는 임시 표시일 뿐입니다.
+Sequence Number는 같은 세션 내에서 오래된·중복 입력을 Drop하지만, 서버 재시작 후 세션이 끊기고 재연결되면 Sequence가 초기화돼 이전 Command와 구분할 수 없습니다. 재화 지급처럼 부작용이 있는 Command는 Idempotency Key(UUID)를 호출자가 생성해 요청에 포함하고, 서버는 처리 전 Redis 또는 DB에 Key를 기록합니다. 동일 Key가 존재하면 이전 결과를 반환합니다. Key 저장과 재화 지급은 동일 DB Transaction에 묶거나 Outbox 패턴으로 원자적으로 커밋합니다. Key TTL은 재시도 최대 Window(5분)보다 길게 설정합니다.
+
+### Q4. 적 위치를 알 수 없어야 하는데 클라이언트가 패킷을 파싱해 숨어 있는 Enemy 좌표를 추출해 Wall Hack을 구현했습니다. 서버 설계에서 어떻게 방지하나요?
+
+Interest Management를 적용합니다. 서버는 각 플레이어의 시야 범위·Zone 경계 기준으로 해당 클라이언트가 '알아야 할' Entity 목록을 계산하고, 시야 밖 Enemy 상태는 전송하지 않습니다. 구현: (1) 매 Tick 또는 Entity 이동 시 시야 범위(예: 반경 50m) 안의 Entity 집합을 계산, (2) 이전 Tick 집합과 비교해 Enter/Leave 이벤트를 전송, (3) 시야 밖 Entity는 좌표·HP 등 어떤 필드도 Packet에 포함하지 않음. 추가로 서버가 보내는 Entity 수를 Tick당 상한으로 제어해 Fan-out 부하도 방지합니다.
+
+### Q5. 입력 검증 서버가 초당 100만 건의 조작된 Packet을 받아 CPU 100%에 도달했습니다. 검증 로직 자체가 DoS 공격면이 된 상황에서 어떻게 방어하나요?
+
+계층별 방어를 적용합니다. (1) **Gateway/Load Balancer**: IP 당 초당 Packet 수 상한(예: 초당 100 Packet)을 Rate Limit으로 차단. (2) **Session 계층**: 인증되지 않은 Session의 Packet은 서명 검증만 하고 즉시 Drop. 무거운 비즈니스 검증은 인증 성공 후만 실행. (3) **검증 Budget**: Tick당 검증에 사용할 CPU 시간 상한을 설정하고, 초과 시 우선순위가 낮은 Packet(이동 빈도 갱신 등)부터 Drop. (4) **Blacklist**: 반복 위반 IP/세션은 Circuit Breaker로 일정 시간 차단. 측정 지표: Packet Reject Rate·Validation CPU·Tick p99를 함께 모니터링합니다.
+
+### Q6. Competitive PvP 서버에서 Lag Compensation으로 과거 Snapshot을 참조하는 범위를 최대 200ms로 설정했습니다. 이 수치가 너무 크면 어떤 문제가 생기고, 적정 Window를 결정하는 기준은 무엇인가요?
+
+최대 Rollback Window가 너무 크면, 저지연(10ms) 클라이언트가 고지연(200ms) 적을 기준 시점보다 훨씬 과거 위치에서 판정해 "내가 분명히 피했는데 맞은" 경험이 발생합니다. 반대로 너무 작으면 고지연 플레이어가 Hit 판정을 거의 받지 못합니다. 결정 기준: (1) 대상 플레이어 RTT 분포의 p95(예: 150ms), (2) 장르의 공정성 우선순위(경쟁적일수록 Window를 좁힘), (3) Corrective Hit 빈도를 Replay 로그로 측정해 실제 플레이어 체감 불만 구간을 파악. 운영 중에는 RTT 분포 변화(새 지역 유입 등)에 따라 Window를 A/B 테스트로 조정합니다.
 
 ## 10. 예상 꼬리질문
 
-- 검증 실패를 모두 즉시 Ban으로 처리하면 어떤 문제가 생기나요?
-- Lag Compensation은 어떤 원리로 과거 상태를 참조하나요?
-- Server RNG와 Client RNG는 어떻게 분리하나요?
-- Authority를 여러 서비스로 분할할 때 경계를 어떻게 정하나요?
-- Authoritative Server에서 Replay 시스템을 어떻게 구현하나요?
-- Cooldown을 Server Time 기준으로 계산해야 하는 이유는 무엇인가요?
-- 이동 검증과 전투 판정 중 더 엄격하게 검증해야 하는 쪽은 어느 쪽인가요?
+- 이동 검증 tolerance를 p99 RTT 기반으로 튜닝했는데도 특정 지역 플레이어(RTT 300ms 이상)의 오탐이 계속 발생합니다. 지역별 tolerance를 분리하는 방법과, 단일 서버에서 이를 관리하는 구조를 설명해 주세요.
+- 공격 Command에 Sequence Number와 Idempotency Key를 모두 적용했을 때 두 가지의 역할이 어떻게 다르고, 서버 재시작 후 Key가 초기화되면 어떤 중복이 발생할 수 있나요?
+- Server RNG로 생성한 크리티컬 히트 결과가 클라이언트 예측과 달라 보정이 발생했습니다. RNG Seed를 Replay Log에 기록하는 방법과, 보안용 RNG와 Simulation RNG를 분리해야 하는 이유를 설명해 주세요.
+- Authoritative Server에서 Match 결과를 Persistence Service로 한 번만 전달해야 하는데 결과 전송 도중 서버가 재시작됐습니다. 중복 전송 없이 정확히 한 번 전달을 보장하는 설계를 설명해 주세요.
+- 입력 검증 실패를 단계별(Drop→경고→탐지 점수→제재)로 처리하는데, 탐지 점수 임계값을 넘어 자동 제재가 적용됐을 때 오탐 복구 절차와 운영 지표(False Positive Rate)를 어떻게 관리하나요?
+- Authority를 Game Instance와 Inventory Service로 분할했을 때, 전투 중 아이템 사용 Command가 두 서비스에 걸친 상태를 변경해야 합니다. 부분 실패 시 일관성을 보장하는 방법을 설명해 주세요.
+- 클라이언트 예측이 서버 보정과 충돌해 플레이어 위치가 순간 이동처럼 점프하는 현상이 발생했습니다. 보정을 매끄럽게 처리하는 방법(보간·속도 제한·Rubber-banding)과, 보정 빈도가 높을 때 서버 측 설계에서 무엇을 먼저 점검해야 하나요?
 
 ## 11. 30초 모범답변
 
