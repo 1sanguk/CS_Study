@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- List·Set·Map 인터페이스의 계약 차이와 연산 요구에 따른 구현체 선택 기준을 설명할 수 있다.
-- HashMap의 hashCode·equals 계약과 Mutable Key를 사용했을 때의 위험을 설명할 수 있다.
-- ConcurrentHashMap 단일 메서드와 복합 연산의 Thread Safety 차이를 설명하고 compute로 해결할 수 있다.
-- 게임 서버 세션 조회·Tick 입력·랭킹 구조별 적합한 Collection을 요구에 근거해 선택할 수 있다.
+- Tick 루프에서 세션 조회 지연이 급증했을 때, HashMap·ConcurrentHashMap·ArrayDeque 중 어느 구조를 교체해야 하는지 연산 요구와 Thread-safety 관점에서 결정할 수 있다.
+- 운영 중 특정 playerId HashMap 조회가 null을 반환하는 버그를 발견했을 때, Mutable Key로 인한 hashCode 변경이 원인인지 확인하고 불변 Key로 수정하는 방법을 결정할 수 있다.
+- ConcurrentHashMap에서 get 후 put 패턴으로 킬 카운터를 구현했는데 Race Condition으로 값이 낮게 집계될 때, compute·merge 중 어떤 API를 사용해야 하는지 결정할 수 있다.
+- 점수 동점 플레이어를 TreeMap에 저장했는데 Comparator가 0을 반환해 한 플레이어가 사라지는 버그를 발견했을 때, Comparator에 보조 Key 추가 또는 `Map<Long, List<Player>>` 구조 변경 중 어떤 방법이 적합한지 결정할 수 있다.
 
 ## 1. 개요
 
@@ -161,41 +161,41 @@ Map<UUID, Session> preAllocated = new HashMap<>(256);
 Tick 처리 중 세션 조회는 `ConcurrentHashMap<UUID, Session>`으로 O(1)에 처리하고, 킬 카운트 같은 카운터는 `compute`로 원자적으로 갱신한다. 타이머 만료 처리는 `PriorityQueue<Timer>`로 최소 만료 시간 순서로 처리하고, 점수 기반 랭킹은 `TreeMap<Long, List<Player>>`의 `descendingKeySet()`으로 상위 N명을 조회한다. 부하 테스트에서는 평균 조회 시간 외에 Rehash 순간 지연, GC Allocation, Hot Key 경쟁을 관찰한다.
 
 ## 8. 자주 하는 오해
-- LinkedList는 모든 삽입·삭제에서 ArrayList보다 빠르다고 본다. Node 할당과 Cache Miss 비용이 있어 실제로는 소규모 List에서 ArrayList가 더 빠른 경우가 많다. 위치를 이미 아는 Iterator를 통한 변경이 아니면 LinkedList의 이점이 없다.
-- HashMap이 삽입 순서를 유지한다고 의존한다. HashMap의 순회 순서는 구현 내부와 Rehash에 따라 바뀔 수 있다. 삽입 순서가 필요하면 LinkedHashMap을 사용한다.
-- equals만 Override해도 Hash Collection 계약이 완성된다고 생각한다. equals가 true인 두 객체는 반드시 같은 hashCode를 반환해야 한다. hashCode를 Override하지 않으면 동등한 객체가 HashSet에 중복으로 저장된다.
-- ConcurrentHashMap이면 여러 메서드의 복합 연산도 자동으로 원자적이라고 본다. 단일 메서드(get·put·remove)는 Thread-safe하지만 get 후 put처럼 두 연산 사이에 다른 Thread가 개입할 수 있다. compute·merge·putIfAbsent로 원자성을 확보한다.
-- TreeMap Comparator가 0을 반환하면 두 Key가 equals라고 본다. TreeMap은 Comparator 결과가 0이면 같은 Key로 취급해 덮어쓴다. 점수가 같은 플레이어를 별도로 보관하려면 Comparator에 보조 Key(playerId)를 추가해야 한다.
-- ArrayList 중간 삭제가 LinkedList보다 항상 느리다고 생각한다. LinkedList는 중간 노드를 찾는 데 O(n)이 걸린다. 인덱스로 접근해 삭제하면 LinkedList도 O(n)이고, 메모리 연속성 덕분에 ArrayList가 실제로 더 빠를 수 있다.
-- synchronized List나 Map은 ConcurrentHashMap과 같은 동시성 보장을 제공한다고 생각한다. Collections.synchronizedMap은 모든 메서드에 단일 Lock을 걸어 처리량이 낮다. ConcurrentHashMap은 Striped Lock으로 높은 동시성을 지원하고 compute 같은 원자 복합 연산을 제공한다.
+- **LinkedList는 모든 삽입·삭제에서 ArrayList보다 빠르다고 본다.** Node 할당과 Cache Miss 비용이 있어 실제로는 소규모 List에서 ArrayList가 더 빠른 경우가 많다. 위치를 이미 아는 Iterator를 통한 변경이 아니면 LinkedList의 이점이 없다.
+- **HashMap이 삽입 순서를 유지한다고 의존한다.** HashMap의 순회 순서는 구현 내부와 Rehash에 따라 바뀔 수 있다. 삽입 순서가 필요하면 LinkedHashMap을 사용한다.
+- **equals만 Override해도 Hash Collection 계약이 완성된다고 생각한다.** equals가 true인 두 객체는 반드시 같은 hashCode를 반환해야 한다. hashCode를 Override하지 않으면 동등한 객체가 HashSet에 중복으로 저장된다.
+- **ConcurrentHashMap이면 여러 메서드의 복합 연산도 자동으로 원자적이라고 본다.** 단일 메서드(get·put·remove)는 Thread-safe하지만 get 후 put처럼 두 연산 사이에 다른 Thread가 개입할 수 있다. compute·merge·putIfAbsent로 원자성을 확보한다.
+- **TreeMap Comparator가 0을 반환하면 두 Key가 equals라고 본다.** TreeMap은 Comparator 결과가 0이면 같은 Key로 취급해 덮어쓴다. 점수가 같은 플레이어를 별도로 보관하려면 Comparator에 보조 Key(playerId)를 추가해야 한다.
+- **ArrayList 중간 삭제가 LinkedList보다 항상 느리다고 생각한다.** LinkedList는 중간 노드를 찾는 데 O(n)이 걸린다. 인덱스로 접근해 삭제하면 LinkedList도 O(n)이고, 메모리 연속성 덕분에 ArrayList가 실제로 더 빠를 수 있다.
+- **synchronized List나 Map은 ConcurrentHashMap과 같은 동시성 보장을 제공한다고 생각한다.** Collections.synchronizedMap은 모든 메서드에 단일 Lock을 걸어 처리량이 낮다. ConcurrentHashMap은 Striped Lock으로 높은 동시성을 지원하고 compute 같은 원자 복합 연산을 제공한다.
 
 ## 9. 면접 질문
-### Q1. List, Set과 Map의 차이는 무엇인가요?
-List는 삽입 순서를 유지하고 중복을 허용합니다. Set은 중복 없는 원소 집합이며 순서 보장 여부는 구현체마다 다릅니다. Map은 Key와 Value의 쌍을 저장하고 Key로 Value를 조회합니다. 구현체를 고르기 전에 필요한 연산(Index 접근·Key 조회·정렬·순서 유지)을 먼저 정합니다.
+### Q1. 게임 서버에서 세션 조회 HashMap이 특정 시점마다 null을 반환합니다. 코드를 보니 Player 객체를 Key로 사용하고 있고, 접속 후 닉네임을 변경할 수 있습니다. 무엇이 문제이고 어떻게 수정합니까?
+닉네임 변경으로 hashCode 관련 필드가 바뀌면 원래 Bucket에서 Key를 찾지 못합니다. HashMap은 hashCode로 Bucket을 찾고 equals로 Key를 확인하는 두 단계이므로, 삽입 시점과 조회 시점의 hashCode가 다르면 잘못된 Bucket을 탐색해 null을 반환합니다. 수정: 불변 UUID를 Key로 사용하도록 교체. equals·hashCode는 UUID만 참조. Player의 name·score 같은 mutable 필드는 hashCode에서 제외.
 
-### Q2. ArrayList와 LinkedList는 어떻게 선택하나요?
-ArrayList는 동적 배열 기반으로 Index 조회가 O(1)이고 Cache Locality가 좋아 순회가 빠릅니다. LinkedList는 Node 기반으로 미리 위치를 알 때 삽입·삭제가 O(1)이지만 Node 할당·Cache Miss 비용이 있어 실제로는 대부분의 경우 ArrayList가 더 빠릅니다. Deque가 필요한 경우 LinkedList 또는 ArrayDeque를 비교합니다.
+### Q2. ConcurrentHashMap에서 킬 카운터를 `Integer count = killCount.get(id); killCount.put(id, count == null ? 1 : count + 1)` 패턴으로 구현했는데 야간 대규모 전투 시 카운터 값이 실제보다 낮습니다. 원인과 수정 방법은 무엇입니까?
+get→put 사이에 다른 Thread가 개입해 이전 값으로 덮어씁니다. 예: Thread A가 count=5를 읽고 Thread B도 count=5를 읽어 각각 6으로 put하면 두 킬이 하나로 합쳐짐. 수정: `killCount.compute(id, (k, v) -> v == null ? 1 : v + 1)` 또는 `killCount.merge(id, 1, Integer::sum)`으로 원자적 갱신. compute 내부 Mapping Function에서 외부 I/O나 같은 Map의 재진입은 Deadlock 위험이 있으므로 피합니다.
 
-### Q3. HashMap의 equals·hashCode 계약은 무엇인가요?
-equals가 true인 두 객체는 반드시 같은 hashCode를 반환해야 합니다. HashMap은 hashCode로 Bucket을 찾고 equals로 정확한 Key를 확인하는 두 단계로 동작합니다. hashCode가 같아도 equals는 false일 수 있어(Hash 충돌) Bucket에서 equals 비교가 필요합니다. equals만 Override하고 hashCode를 Override하지 않으면 HashSet에서 중복 제거가 실패합니다.
+### Q3. 점수 랭킹 TreeMap에서 동점 플레이어 두 명 중 한 명이 저장 후 사라집니다. Comparator 코드를 보니 `Long.compare(a.score, b.score)`만 사용하고 있습니다. 문제 원인과 수정 방법은 무엇입니까?
+TreeMap은 Comparator가 0이면 같은 Key로 취급해 기존 Value를 덮어씁니다. equals와 무관하게 Comparator 결과만으로 Key 동등성을 판단합니다. 수정 방법: ① Comparator에 보조 Key 추가 `score 비교 → 0이면 playerId.compareTo(...)` → 동점도 별도 엔트리로 보관. ② 구조 변경 `TreeMap<Long, List<Player>>` → 같은 점수에 여러 플레이어를 List로 보관 후 descendingKeySet()으로 Top N 조회.
 
-### Q4. HashMap Key가 Mutable하면 어떤 문제가 있나요?
-Key를 삽입한 후 hashCode에 영향을 주는 필드가 바뀌면 원래 Bucket에서 Key를 찾지 못합니다. get·remove 모두 잘못된 Bucket을 탐색해 null을 반환합니다. 해결책은 불변 객체(UUID·String 등)를 Key로 사용하거나 hashCode가 불변 필드만 사용하도록 설계하는 것입니다.
+### Q4. 게임 서버 Tick 루프에서 세션 HashMap의 순간 지연이 발생합니다. async-profiler flame graph 결과 HashMap.transfer()가 상위에 올라왔습니다. 원인과 방지 방법은 무엇입니까?
+Load Factor 초과로 Rehash가 발생할 때 모든 원소를 새 배열로 재배치합니다. 기본 Capacity(16) + Load Factor(0.75)라면 12번째 삽입부터 Rehash 시작. 방지: 예상 세션 최대치를 알면 초기 Capacity를 `size / 0.75 + 1`로 지정. 예: 세션 1,000개 → `new HashMap<>(1334)`. Rehash 빈도는 JFR HashMap 이벤트 또는 async-profiler의 HashMap.resize() 호출 수로 확인.
 
-### Q5. ConcurrentHashMap의 복합 연산은 어떻게 처리하나요?
-단일 메서드(get·put·remove)는 Thread-safe하지만 get 후 put처럼 분리된 두 연산 사이에 다른 Thread가 개입할 수 있습니다. 원자적 갱신에는 `compute(key, (k, v) -> ...)`, `merge(key, value, mergeFunction)`, `putIfAbsent(key, value)`를 사용합니다. 더 복잡한 불변식은 외부 Lock이나 상태 소유 Thread가 관리합니다.
+### Q5. 게임 서버 코드 리뷰에서 `for (Player p : sessions.values()) { if (p.isDisconnected()) sessions.remove(p.id); }` 패턴을 발견했습니다. 어떤 문제가 있고 어떻게 수정합니까?
+일반 Map에서 순회 중 구조 변경 시 ConcurrentModificationException이 발생합니다. ConcurrentHashMap은 ConcurrentModificationException은 없지만 순회 중 제거가 스냅샷을 보장하지 않아 일부 항목을 건너뛸 수 있습니다. 수정: ① `sessions.values().removeIf(p -> p.isDisconnected())` — ConcurrentHashMap에서 Thread-safe. ② 분리 수집 후 제거: disconnectedIds를 먼저 List로 수집 후 `sessions.keySet().removeAll(disconnectedIds)`. ③ Iterator.remove() 패턴 사용.
 
-### Q6. HashMap에서 충돌이 많아지면 내부적으로 어떻게 처리되나요?
-Java 8부터 같은 Bucket의 원소가 8개를 초과하면 연결 리스트에서 Red-Black Tree로 전환해 최악 조회를 O(n)에서 O(log n)으로 개선합니다. Load Factor(기본 0.75)를 초과하면 Bucket 수를 2배로 늘리는 Rehash가 발생합니다. Rehash는 모든 원소를 재배치하는 비용이 있으므로 예상 크기를 알면 초기 Capacity를 `size / loadFactor + 1`로 지정합니다.
+### Q6. 세션 수 100명일 때는 빠르던 TreeMap 랭킹 범위 조회가 10만 명이 되자 Tick p99가 20ms를 초과합니다. TreeMap 유지 여부와 대안을 판단하는 방법은 무엇입니까?
+TreeMap O(log n) 삽입·삭제는 10만 건에서 약 17 비교이므로 이론상 충분합니다. 실제 병목을 async-profiler flame graph로 확인: ① 잦은 삽입·삭제로 Red-Black Tree 회전 + GC Allocation이 주 원인 → 배치 갱신(Tick 종료 후 일괄 반영) 검토. ② synchronized TreeMap 경합 → ConcurrentSkipListMap으로 교체(Lock-free 범위 조회). ③ Top N(100~1000위)만 필요하면 PriorityQueue로 상위 N만 유지. ④ 전체 랭킹은 비동기 배치로 계산 후 Redis ZADD/ZRANGE로 서빙.
 
 ## 10. 예상 꼬리질문
-- ArrayList와 LinkedList 중 실제로 LinkedList를 선택하는 경우는 어떤 상황인가요?
-- HashMap의 충돌이 많아지면 내부적으로 어떻게 변환되나요? (연결 리스트 → Tree)
-- ConcurrentHashMap이 `Collections.synchronizedMap`과 다른 점은 무엇인가요?
-- HashSet의 원소 중복 제거가 올바르게 동작하려면 무엇이 필요한가요?
-- TreeMap의 Comparator 결과가 0인데 equals가 false인 경우 어떻게 되나요?
-- 게임 서버에서 플레이어 세션 관리에 HashMap 대신 ConcurrentHashMap을 사용하는 이유는 무엇인가요?
-- LinkedHashMap으로 LRU 캐시를 구현할 때 어떤 생성자 옵션이 필요하나요?
+- HashMap에서 Bucket 하나에 엔트리가 8개를 초과해 LinkedList에서 Red-Black Tree로 전환되는 treeify 조건을 설명하고, 악의적인 Hash 충돌 공격(Hash DoS)이 들어왔을 때 서버가 받는 영향과 방어 방법은 무엇인가요?
+- ConcurrentHashMap.compute() 내부 Mapping Function에서 외부 DB I/O를 호출하면 어떤 문제가 발생하고, 이 경우 computeIfAbsent와 별도 Lock 중 어느 쪽이 적합한가요?
+- LinkedHashMap(accessOrder=true)으로 LRU 캐시를 구현했는데 멀티스레드 환경에서 사용하면 어떤 문제가 발생하고, Thread-safe LRU를 구현하는 방법과 각각의 성능 Trade-off는 무엇인가요?
+- 게임 서버 세션 Map에서 `sessions.size()`가 실제 활성 세션 수와 다르게 나타납니다. ConcurrentHashMap.size()가 근사값일 수 있는 이유와, 정확한 카운터가 필요할 때 LongAdder를 별도로 유지해야 하는 이유를 설명하세요.
+- ArrayList에서 `removeIf(Predicate)` 내부 구현이 일반 for-each + remove보다 효율적인 이유와, 이 메서드가 ConcurrentModificationException을 내지 않는 조건은 무엇인가요?
+- 초당 1,000건 이상 점수 갱신이 있는 게임 서버 랭킹에서 synchronized TreeMap 대신 ConcurrentSkipListMap이 유리한 조건과 한계는 무엇인가요?
+- ConcurrentHashMap의 entrySet().removeIf()를 사용해 만료된 세션을 일괄 제거할 때 동시 수정 환경에서 어떤 일관성이 보장되고, 어떤 경우 일부 엔트리가 누락될 수 있나요?
 
 ## 11. 30초 모범답변
 

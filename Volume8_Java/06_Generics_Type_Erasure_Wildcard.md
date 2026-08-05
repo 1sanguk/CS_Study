@@ -10,10 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- Type Erasure의 동작(Bound/Object로 치환, Bridge Method 생성)과 런타임 제약을 설명할 수 있다.
-- Generic 불공변의 이유와 extends/super Wildcard(PECS 원칙)를 구분해 사용할 수 있다.
-- Raw Type과 Heap Pollution의 위험성을 설명하고 Type Token으로 런타임 타입을 전달하는 방법을 알 수 있다.
-- Packet Handler Registry 같은 게임 서버 컴포넌트에 Generic을 적용해 Compile Time 타입 안전성을 확보할 수 있다.
+- Packet Handler Registry `dispatch()` 메서드에서 런타임 ClassCastException이 발생했을 때, Raw Type Heap Pollution과 Unchecked Cast 범위 문제 중 어느 원인인지 진단하고 수정하는 방법을 결정할 수 있다.
+- Jackson Deserializer에서 `new T()`를 사용할 수 없다는 컴파일 오류가 발생했을 때, Type Erasure가 원인임을 파악하고 `Class<T>` Token 또는 Factory를 사용하는 방법을 결정할 수 있다.
+- `List<AdminPlayer>`를 `List<Player>` 파라미터에 넘기는 컴파일 오류가 발생했을 때, Generic 불공변(Invariant)이 이유임을 파악하고 `? extends Player` Wildcard로 수정하는 방법을 결정할 수 있다.
+- 제네릭 메서드를 타입 인자만 다르게 Overloading하려다 컴파일 오류가 발생했을 때, Type Erasure로 Signature가 동일해지는 이유를 파악하고 메서드명 분리 또는 파라미터 추가로 해결하는 방법을 결정할 수 있다.
 
 ## 1. 개요
 Generics는 Type을 Parameter로 받아 Compile Time Type Safety와 재사용성을 제공하며 Java Compiler는 대체로 Type Erasure로 이를 구현한다.
@@ -162,41 +162,41 @@ String s = (String) rawList.get(1); // 런타임 ClassCastException!
 패킷 파싱 결과를 `Result<T>`로 감싸면 null 체크 없이 성공·실패를 명시적으로 처리할 수 있다. Packet Handler Registry에 `register(Class<T> type, PacketHandler<T> handler)`를 사용하면 잘못된 패킷-핸들러 조합을 Compile Time에 방지한다. `@SuppressWarnings("unchecked")`를 붙일 때는 해당 Cast가 실제로 안전한 이유를 주석으로 남기고, Unchecked Warning을 무조건 억제하지 않는다.
 
 ## 8. 자주 하는 오해
-- `List<Integer>`가 `List<Number>`의 서브타입이라고 생각한다. Generic은 불공변이므로 `List<Integer>`는 `List<Number>`가 아니다. 허용되면 `List<Number>` 경로로 `Double`을 추가해 Integer를 기대하는 코드가 깨진다.
-- Type Erasure 후에도 런타임에 `instanceof List<String>`으로 제네릭 타입을 확인할 수 있다고 생각한다. `List<String>`과 `List<Integer>`는 런타임에 동일한 Class이므로 `instanceof List<String>`은 컴파일 오류다. `instanceof List<?>`만 가능하다.
-- `List<? extends T>`에도 원소를 안전하게 추가할 수 있다고 생각한다. 실제 타입이 `List<Integer>`일 수도 `List<Double>`일 수도 있어 컴파일러가 추가를 거부한다. null만 추가 가능하다.
-- Raw Type 사용 시 경고만 나올 뿐 실제 문제는 없다고 생각한다. Raw Type은 타입 검사를 우회해 다른 타입의 객체가 컬렉션에 들어가고 나중에 전혀 다른 위치에서 ClassCastException이 발생한다.
-- Generic 메서드를 타입 인자만 다르게 Overloading할 수 있다고 생각한다. Type Erasure로 `void process(List<String>)`과 `void process(List<Integer>)`는 Erasure 후 동일한 Signature가 되어 컴파일 오류가 발생한다.
-- Bridge Method는 직접 작성한 코드라고 생각한다. Compiler가 Type Erasure 후에도 Override 다형성을 유지하기 위해 자동으로 생성하는 합성 메서드다. Reflection이나 Stack Trace에서 보이더라도 Source에 없다고 이상 동작으로 판단하지 않는다.
-- `@SuppressWarnings("unchecked")`를 붙이면 타입 안전성이 보장된다고 생각한다. 경고를 억제할 뿐 실제 안전성은 개발자가 보장해야 한다. Cast가 실제로 안전한 이유를 주석으로 명시하고, 범위를 최소화해 꼭 필요한 줄에만 적용한다.
+- **`List<Integer>`가 `List<Number>`의 서브타입이라고 생각한다.** Generic은 불공변이므로 `List<Integer>`는 `List<Number>`가 아니다. 허용되면 `List<Number>` 경로로 `Double`을 추가해 Integer를 기대하는 코드가 깨진다.
+- **Type Erasure 후에도 런타임에 `instanceof List<String>`으로 제네릭 타입을 확인할 수 있다고 생각한다.** `List<String>`과 `List<Integer>`는 런타임에 동일한 Class이므로 `instanceof List<String>`은 컴파일 오류다. `instanceof List<?>`만 가능하다.
+- **`List<? extends T>`에도 원소를 안전하게 추가할 수 있다고 생각한다.** 실제 타입이 `List<Integer>`일 수도 `List<Double>`일 수도 있어 컴파일러가 추가를 거부한다. null만 추가 가능하다.
+- **Raw Type 사용 시 경고만 나올 뿐 실제 문제는 없다고 생각한다.** Raw Type은 타입 검사를 우회해 다른 타입의 객체가 컬렉션에 들어가고 나중에 전혀 다른 위치에서 ClassCastException이 발생한다.
+- **Generic 메서드를 타입 인자만 다르게 Overloading할 수 있다고 생각한다.** Type Erasure로 `void process(List<String>)`과 `void process(List<Integer>)`는 Erasure 후 동일한 Signature가 되어 컴파일 오류가 발생한다.
+- **Bridge Method는 직접 작성한 코드라고 생각한다.** Compiler가 Type Erasure 후에도 Override 다형성을 유지하기 위해 자동으로 생성하는 합성 메서드다. Reflection이나 Stack Trace에서 보이더라도 Source에 없다고 이상 동작으로 판단하지 않는다.
+- **`@SuppressWarnings("unchecked")`를 붙이면 타입 안전성이 보장된다고 생각한다.** 경고를 억제할 뿐 실제 안전성은 개발자가 보장해야 한다. Cast가 실제로 안전한 이유를 주석으로 명시하고, 범위를 최소화해 꼭 필요한 줄에만 적용한다.
 
 ## 9. 면접 질문
-### Q1. Generics와 Type Erasure를 설명해 주세요.
-Generics는 타입을 파라미터로 받아 Compile Time에 타입 검사를 제공합니다. Compiler는 컴파일 시 Type Parameter를 Bound 또는 Object로 치환하고(Erasure), 필요한 Cast와 Bridge Method를 삽입합니다. 그 결과 `List<String>`과 `List<Integer>`는 런타임에 동일한 `List` Class가 되어 별도 메모리를 차지하지 않습니다.
+### Q1. Packet Handler Registry `dispatch()` 메서드에서 MovePacket 처리 시 런타임 ClassCastException이 발생합니다. 코드 내부에 `@SuppressWarnings("unchecked")` Cast가 있습니다. 원인과 수정 방법은 무엇입니까?
+`handlers.get(packet.getClass())`의 결과를 `PacketHandler<T>`로 Unchecked Cast할 때, Handler 등록이 잘못된 타입-핸들러 조합이면 ClassCastException이 발생합니다. 원인 파악: register() 호출 스택을 trace해 MovePacket 클래스에 ChatPacketHandler가 등록됐는지 확인. 수정: `register(Class<T> type, PacketHandler<T> handler)` 파라미터로 Compile Time 타입 일치 보장 → 잘못된 조합은 컴파일러가 차단. 내부 Dispatch Cast는 register() 계약이 보장하므로 `@SuppressWarnings("unchecked")` 최소 범위 적용 후 주석으로 안전한 이유 명시.
 
-### Q2. `List<Integer>`가 `List<Number>`가 아닌 이유는 무엇인가요?
-Generic은 불공변(Invariant)입니다. `List<Integer>`가 `List<Number>`로 참조될 수 있다면 `List<Number>` 경로로 `Double`을 추가할 수 있고, 그 리스트를 `Integer`로 꺼낼 때 ClassCastException이 발생합니다. 불공변으로 Compile Time에 이런 타입 위반을 차단합니다.
+### Q2. Jackson Deserializer 클래스에서 `T packet = new T()`를 사용하려는데 컴파일 오류가 발생합니다. Type Erasure가 원인인 이유와, 게임 서버 Packet 파싱에서 해결 방법을 설명하세요.
+Type Erasure로 컴파일 후 T는 Object로 치환되므로 `new T()`는 `new Object()`가 되어 컴파일러가 거부합니다. 해결: ① `Class<T>` Token을 생성자에 전달해 `type.getDeclaredConstructor().newInstance()` 사용. ② Factory 함수 `Supplier<T>`를 파라미터로 전달. ③ Jackson의 `TypeReference<T>`(익명 서브클래스로 Reflection을 통해 제네릭 타입 정보 복원). 게임 서버에서는 `new Deserializer<>(MovePacket.class)` 형태로 Class Token을 명시 전달해 런타임 파싱 가능.
 
-### Q3. extends와 super Wildcard를 어떻게 구분하나요?
-PECS 원칙: **P**roducer **E**xtends, **C**onsumer **S**uper. `? extends T`는 읽기(Producer)에 사용하고 쓰기가 불가능하며, `? super T`는 쓰기(Consumer)에 사용하고 읽으면 Object로만 처리됩니다. 예를 들어 컬렉션에서 읽어 처리하는 메서드는 `List<? extends Number>`, 값을 추가하는 메서드는 `List<? super Integer>`를 사용합니다.
+### Q3. 게임 서버 Broadcast 메서드가 `List<Player>` 파라미터를 받는데 `List<AdminPlayer>`를 넘기니 컴파일 오류가 발생합니다. Generic 불공변이 원인인 이유와 Wildcard를 사용한 해결 방법을 설명하세요.
+Generic 불공변: `List<AdminPlayer>`는 `List<Player>`가 아닙니다. 허용되면 `List<Player>` 경로로 다른 Player 서브타입을 추가해 `AdminPlayer` 기대를 깰 수 있기 때문입니다. 해결: ① 읽기만 하면 `List<? extends Player>`로 파라미터 변경 → `List<AdminPlayer>` 허용, 원소는 Player로 읽힘. ② 메서드 자체를 `<T extends Player> void broadcast(List<T> players)` 제네릭 메서드로 변경. ③ 쓰기도 필요하면 PECS 기준으로 `? super T` 방향 검토.
 
-### Q4. 런타임에 T의 Class가 필요하면 어떻게 하나요?
-Type Erasure로 `T.class`를 직접 사용할 수 없습니다. 생성자나 팩토리 메서드에 `Class<T>` 파라미터를 명시적으로 전달하는 Type Token 패턴을 사용합니다. Jackson·Gson 같은 라이브러리의 `TypeReference<T>`도 같은 방식의 변형입니다.
+### Q4. 패킷 처리 코드에서 `void process(List<String> names)`와 `void process(List<Integer> ids)`를 같은 클래스에 Overloading하려는데 컴파일 오류가 발생합니다. 원인과 해결 방법은 무엇입니까?
+Type Erasure로 두 메서드가 Erasure 후 동일한 Signature `void process(List)` 가 되어 컴파일러가 Overloading 불가 판단합니다. 해결: ① 메서드명 분리 `processNames(List<String>)`, `processIds(List<Integer>)`. ② 파라미터 추가로 구분 `process(List<String> names, String marker)`. ③ 하나의 Generic 메서드 `<T> void process(List<T> items, Class<T> type)`으로 통합 후 내부에서 타입 분기.
 
-### Q5. Raw Type이 위험한 이유는 무엇인가요?
-Raw Type은 Generic 타입 검사를 우회해 어떤 타입의 객체도 컬렉션에 넣을 수 있습니다. 오류는 삽입 시점이 아니라 전혀 다른 위치에서 Cast를 시도할 때 ClassCastException으로 나타나 원인 추적이 어렵습니다. Raw Type은 제네릭 이전의 레거시 API와 호환할 때만 불가피하게 사용합니다.
+### Q5. Generic Varargs 메서드 `@SafeVarargs void register(Handler<T>... handlers)`에서 `Possible heap pollution from parameterized vararg type` 경고가 발생합니다. Heap Pollution이 실제로 발생하는 시나리오와 `@SafeVarargs`를 붙일 수 있는 조건은 무엇입니까?
+Generic Varargs는 내부에서 `T[]` 배열을 생성하는데 배열은 공변이므로 `Handler<String>[]`에 `Handler<Integer>`가 저장 가능 → 읽는 쪽에서 ClassCastException. Heap Pollution 시나리오: `handlers[0] = (Handler<String>) handlers[0]`처럼 배열 내부를 외부에 노출하거나 다른 메서드에 넘길 때 발생. `@SafeVarargs` 조건: ① varargs 배열을 외부에 노출하지 않음 ② 배열에 엉뚱한 타입을 저장하지 않음 ③ final·static·private 메서드에만 적용 가능. 조건 불확실하면 `List<Handler<T>>`로 대체.
 
-### Q6. Bridge Method란 무엇이고 왜 생성되나요?
-Type Erasure 후에도 Override 다형성을 유지하기 위해 Compiler가 자동으로 생성하는 합성 메서드입니다. 예를 들어 `class Foo implements Comparable<Foo>`에서 Erasure 후 `compareTo(Object)`가 필요한데 이를 `compareTo(Foo)`로 위임하는 Bridge Method가 생성됩니다. Reflection이나 Stack Trace에서 `isSynthetic()=true`인 메서드로 확인할 수 있습니다.
+### Q6. Reflection으로 클래스의 메서드를 탐색했는데 소스 코드에 없는 `compareTo(Object)` 메서드가 나타납니다. `isSynthetic()=true`입니다. 이 메서드가 무엇이고 왜 생성됐습니까?
+Compiler가 Type Erasure 후 Override 다형성을 유지하기 위해 자동으로 생성한 Bridge Method입니다. `class Foo implements Comparable<Foo>`에서 Erasure 후 JVM이 `Comparable.compareTo(Object)`를 요구하는데 실제 구현은 `compareTo(Foo)`. Compiler가 `compareTo(Object o) { return compareTo((Foo) o); }` Bridge Method를 합성해 JVM dispatch가 동작하도록 합니다. Source에 없는 정상 코드이며 Stack Trace에 나타나면 그 아래 실제 구현 메서드를 확인합니다.
 
 ## 10. 예상 꼬리질문
-- `List<? extends T>`에서 원소를 추가할 수 없는 이유를 컴파일러 관점에서 설명해 주세요.
-- Type Erasure로 `new T()`나 `T[]{}`를 만들 수 없을 때 어떻게 우회하나요?
-- Heap Pollution이란 무엇이고 Generic Varargs와 어떻게 연관되나요?
-- `@SafeVarargs`는 어떤 경우에 사용하나요?
-- Generic 메서드와 Wildcard 메서드 중 어떤 것을 선택하는 기준은 무엇인가요?
-- Bridge Method는 Reflection으로 어떻게 확인하나요?
-- 게임 서버 Packet Handler Registry에서 `@SuppressWarnings("unchecked")`를 어떻게 안전하게 사용하나요?
+- `TypeReference<List<Player>>`를 사용할 때 익명 서브클래스가 제네릭 타입 정보를 유지하는 원리와, 이 방법이 Type Erasure를 피할 수 있는 이유와 한계는 무엇인가요?
+- 게임 서버 `PlayerRepository<T>`를 Spring Bean으로 등록했을 때 런타임에 `T`의 실제 타입을 알 수 없는 이유와, Spring `ResolvableType`으로 이를 해결하는 방법은 무엇인가요?
+- Generic Varargs 메서드에서 `@SafeVarargs`를 잘못 적용했을 때 Heap Pollution이 발생하는 구체적인 시나리오와, SpotBugs·SonarQube에서 이 패턴을 탐지하는 방법은 무엇인가요?
+- Packet Handler Registry `dispatch()` 내부 Unchecked Cast가 실제로 안전하다는 것을 증명하는 방법과, 안전하지 않은 경우를 탐지하기 위한 단위 테스트 설계는 무엇인가요?
+- `class Foo<T extends Comparable<T>>`처럼 재귀 Generic Bound가 있는 경우 Type Erasure 후 T가 어떤 타입으로 치환되고, Bridge Method가 생성되는 조건은 무엇인가요?
+- Kotlin Reified Type Parameter와 Java `Class<T>` Token을 비교했을 때, 게임 서버 Packet 파싱처럼 런타임 타입이 필요한 상황에서 두 방법의 구현 차이와 성능 Trade-off는 무엇인가요?
+- Java 17+ sealed class와 Generic을 함께 사용해 Packet Handler Registry를 구현할 때, Pattern Matching switch로 instanceof 분기를 제거하는 방법과 Type Erasure 때문에 불가능한 경우는 무엇인가요?
 
 ## 11. 30초 모범답변
 > Generics는 Compile Time 타입 안전성과 재사용성을 제공합니다. Compiler는 Type Erasure로 파라미터를 Bound 또는 Object로 치환하고 Bridge Method를 삽입합니다. Producer는 `? extends`, Consumer는 `? super`(PECS)를 적용하고, 런타임 타입이 필요하면 `Class<T>` Token을 명시적으로 전달합니다.

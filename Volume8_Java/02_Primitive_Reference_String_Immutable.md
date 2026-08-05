@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Primitive와 Reference Type의 메모리 표현 방식 차이와 복사·공유 동작을 설명할 수 있다.
-- Java가 항상 Pass-by-value임을 Reference 전달 예시로 정확히 설명할 수 있다.
-- String Immutability의 이점(Hash Key 안정성·Thread Safety)과 String Pool 동작을 설명할 수 있다.
-- Immutable 객체를 올바르게 설계하고 Defensive Copy가 필요한 시점을 구분할 수 있다.
+- 게임 Tick Broadcast 시 Mutable Position 객체를 Snapshot과 공유했을 때 어떤 버그가 발생하는지 파악하고, Immutable DTO(record)로 전환해야 하는 시점을 결정할 수 있다.
+- GC 지표에서 단수명 Integer 객체 Allocation이 급증할 때, JFR Allocation Profiling으로 Hot Path Autoboxing을 확인하고 Primitive 전용 컬렉션 도입 여부를 판단할 수 있다.
+- Immutable 클래스 설계에서 final Field 선언만으로는 불충분한 시나리오를 식별하고, Defensive Copy(생성자)와 Unmodifiable View(Getter)를 적용해야 하는 지점을 결정할 수 있다.
+- Integer == 비교가 Cache 범위(-128~127) 밖에서 간헐적 버그를 유발하는 코드를 발견했을 때, 운영 영향 범위를 추정하고 equals 전환 우선순위를 결정할 수 있다.
 
 ## 1. 개요
 
@@ -160,41 +160,43 @@ long safe = (long) a * 2;     // 올바른 승격: 연산 전에 long으로 캐�
 운영 중 GC 지표에서 단수명 객체 Allocation이 많으면 Autoboxing이 Hot Path에서 발생하는지 JFR로 확인한다. `Map<Integer, Player>`처럼 Wrapper를 Key로 쓸 때 Cache 범위를 벗어난 값에 ==를 사용하는 코드가 없는지 검토한다.
 
 ## 8. 자주 하는 오해
-- Java가 객체 Reference를 전달하므로 Pass-by-reference라고 말한다. Java는 항상 값을 전달하며 객체 인자도 Reference 값의 복사본이 전달된다. Parameter에 새 객체를 대입해도 호출자의 변수는 바뀌지 않는다.
-- String 내용 비교에 ==를 사용한다. ==는 같은 객체 참조인지 확인하고 String Pool 밖에서 생성된 `new String("...")`과 비교하면 내용이 같아도 false를 반환한다. 값 비교는 반드시 equals를 사용한다.
-- final Field만 선언하면 내부 Collection도 자동으로 불변이라고 본다. `final List<Item> items`는 items 참조 자체의 재대입을 막을 뿐 List 내부 원소 추가·삭제는 가능하다. List.copyOf 또는 Collections.unmodifiableList가 필요하다.
-- Wrapper의 Autoboxing에는 예외 가능성이 없다고 생각한다. Integer가 null인데 int로 Unboxing하면 NullPointerException이 발생한다. 이는 컴파일 오류 없이 런타임에만 나타나 주의가 필요하다.
-- int 연산 결과를 long에 담으면 Overflow가 자동으로 방지된다고 본다. `long result = a * b`에서 a·b가 int면 곱셈이 int 범위에서 먼저 일어나고 Overflow된 뒤 long으로 대입된다. `(long) a * b`로 연산 전에 승격해야 한다.
-- Integer의 == 비교는 항상 값을 비교한다고 생각한다. JVM은 -128~127 범위의 Integer를 캐시하므로 이 범위 안에서는 == 비교가 우연히 동작하지만 범위를 벗어나면 false가 된다. 항상 equals를 사용해야 한다.
-- StringBuilder는 Thread-safe하다고 생각한다. StringBuilder는 동기화가 없어 Thread-safe하지 않다. 멀티스레드 환경에서는 StringBuffer(동기화 있음)를 사용하거나 각 Thread가 독립 StringBuilder를 사용해야 한다.
+- **Java가 객체 Reference를 전달하므로 Pass-by-reference다.** Java는 항상 값을 전달하며 객체 인자도 Reference 값의 복사본이 전달된다. Parameter에 새 객체를 대입해도 호출자의 변수는 바뀌지 않는다.
+- **String 내용 비교에 ==를 사용한다.** ==는 같은 객체 참조인지 확인하고 String Pool 밖에서 생성된 `new String("...")`과 비교하면 내용이 같아도 false를 반환한다. 값 비교는 반드시 equals를 사용한다.
+- **final Field만 선언하면 내부 Collection도 자동으로 불변이다.** `final List<Item> items`는 items 참조 자체의 재대입을 막을 뿐 List 내부 원소 추가·삭제는 가능하다. List.copyOf 또는 Collections.unmodifiableList가 필요하다.
+- **Wrapper의 Autoboxing에는 예외 가능성이 없다.** Integer가 null인데 int로 Unboxing하면 NullPointerException이 발생한다. 이는 컴파일 오류 없이 런타임에만 나타나 주의가 필요하다.
+- **int 연산 결과를 long에 담으면 Overflow가 자동으로 방지된다.** `long result = a * b`에서 a·b가 int면 곱셈이 int 범위에서 먼저 일어나고 Overflow된 뒤 long으로 대입된다. `(long) a * b`로 연산 전에 승격해야 한다.
+- **Integer의 == 비교는 항상 값을 비교한다.** JVM은 -128~127 범위의 Integer를 캐시하므로 이 범위 안에서는 == 비교가 우연히 동작하지만 범위를 벗어나면 false가 된다. 항상 equals를 사용해야 한다.
+- **StringBuilder는 Thread-safe하다.** StringBuilder는 동기화가 없어 Thread-safe하지 않다. 멀티스레드 환경에서는 StringBuffer(동기화 있음)를 사용하거나 각 Thread가 독립 StringBuilder를 사용해야 한다.
 
 ## 9. 면접 질문
-### Q1. Primitive와 Reference Type의 차이는 무엇인가요?
-Primitive 변수는 언어가 정의한 값(boolean·byte·int·long·float·double 등)을 스택에 직접 저장합니다. Reference 변수는 Heap의 객체를 가리키는 주소 값을 저장합니다. Reference를 복사하면 두 변수가 같은 Mutable 객체를 가리키므로 한 곳의 변경이 다른 곳에 보입니다.
 
-### Q2. Java는 Pass-by-value인가요?
-Java는 항상 값을 전달합니다. 객체 인자도 Reference 값의 복사본이 전달되므로 메서드 내에서 Parameter에 새 객체를 대입해도 호출자의 변수는 바뀌지 않습니다. 그러나 같은 Mutable 객체의 필드를 변경하면 호출자도 그 변경을 볼 수 있습니다. "Pass-by-reference-value"로 표현하기도 합니다.
+### Q1. Tick에서 Player 위치를 Snapshot에 담아 Broadcast했는데 클라이언트가 수신한 좌표가 직전 Tick이 아닌 현재 Tick의 값을 담고 있습니다. 원인과 수정 방법은 무엇입니까?
+Mutable Position 객체를 Snapshot이 Reference로 공유하기 때문입니다. Tick 갱신이 Snapshot 내부의 좌표도 변경합니다. `record PositionDTO(float x, float y)`로 Snapshot 생성 시 값을 복사하면, 이후 Position 갱신이 DTO에 영향을 주지 않습니다.
 
-### Q3. String이 Immutable인 이유는 무엇인가요?
-String이 생성 후 내부 문자 Sequence를 변경할 수 없어 String Pool에서 동일 Literal을 여러 변수가 공유할 수 있습니다. Immutability 덕분에 HashMap Key로 사용해도 hashCode가 변하지 않고, 멀티스레드 환경에서 별도 동기화 없이 안전하게 읽을 수 있습니다. 반복 문자열 결합에는 중간 String 생성을 줄이기 위해 StringBuilder를 사용합니다.
+### Q2. `Map<Integer, Player>` 조회에서 JFR Allocation Profiling 결과 초당 10만 건의 Integer 객체 생성이 Hot Path에서 발생합니다. 원인과 대안은 무엇입니까?
+int 키를 `Map.get(intKey)` 에 넘길 때마다 Autoboxing으로 Integer 객체가 Heap에 할당됩니다. GC Gen0 Allocation이 증가해 Pause 빈도가 높아집니다. Eclipse Collections의 `IntObjectHashMap<Player>`로 교체하면 Boxing 없이 int 키로 직접 조회할 수 있습니다.
 
-### Q4. ==와 equals는 어떻게 다른가요?
-Reference Type에서 ==는 두 변수가 같은 객체를 가리키는지(Identity) 확인하고 equals는 구현된 값 동등성을 검사합니다. Primitive의 ==는 값을 직접 비교합니다. String과 Integer 같은 Wrapper를 비교할 때 ==를 사용하면 Cache 범위 여부나 `new` 사용 여부에 따라 예상과 다른 결과가 나오므로 항상 equals를 사용합니다.
+### Q3. Immutable 클래스를 설계했는데 외부에서 내부 상태가 변경되는 버그가 보고됩니다. 어떤 실수가 있을 수 있고 어떻게 수정합니까?
+세 가지 경우를 확인합니다. 1) 생성자에서 `this.items = items`로 Mutable List를 그대로 보관했으면 → `List.copyOf(items)`로 Defensive Copy. 2) Getter가 내부 List를 직접 반환했으면 → `Collections.unmodifiableList(items)` 반환. 3) `final byte[]` 배열을 Getter로 노출했으면 → `Arrays.copyOf`로 복사본 반환.
 
-### Q5. Immutable Class는 어떻게 설계하나요?
-상태를 변경하는 메서드를 두지 않고 모든 Field를 `final`로 선언합니다. 생성자에서 Mutable 컬렉션 인자는 `List.copyOf`로 Defensive Copy하고 내부 Mutable 객체는 Getter로 직접 노출하지 않고 불변 View 또는 Copy를 반환합니다. Java 16+에서는 `record`가 이 패턴을 간결하게 표현합니다.
+### Q4. 플레이어 ID를 Integer로 관리하는 코드에 ==로 비교하는 구간이 있고, 로컬에서는 정상인데 운영에서 간헐적으로 불일치가 발생합니다. 원인과 수정 방법은 무엇입니까?
+JVM은 Integer -128~127 범위만 동일 객체를 캐시합니다. 로컬 테스트 ID가 작아 우연히 동작하다가, 운영 플레이어 ID가 범위를 초과하면 == 비교가 false를 반환합니다. 코드베이스 전체에서 `Integer` 비교를 `equals()`로 교체하고, SonarQube `JAVA:S4973` 룰로 CI에서 강제합니다.
 
-### Q6. Autoboxing이 게임 서버 Hot Path에서 문제가 되는 이유는 무엇인가요?
-Autoboxing은 `int → Integer` 변환 시 객체를 Heap에 할당하므로 Tick 처리나 패킷 파싱처럼 초당 수만 번 실행되는 경로에서 GC 압박을 높입니다. `Map<Integer, Player>`에서 int 키를 반복 조회하면 매 조회마다 Boxing이 발생합니다. JFR이나 async-profiler로 Allocation Profiling을 수행해 실제 Hot Path인지 확인한 뒤 Primitive 전용 Map(Eclipse Collections·Koloboke 등)을 검토합니다.
+### Q5. Java가 Pass-by-value임을 모르는 동료가 `resetPosition(Position p) { p = new Position(); }` 호출 후 호출자 변수가 바뀔 것을 기대합니다. 실제 동작을 설명하고 설계를 어떻게 수정해야 합니까?
+Java는 항상 Reference 값의 복사본을 전달합니다. Parameter에 새 객체를 대입해도 호출자 변수는 변경되지 않습니다. 반면 `p.x = 0`처럼 Mutable 객체의 Field를 변경하면 동일 Heap 객체를 가리키므로 호출자도 봅니다. `resetPosition`이 새 Position을 반환하도록 설계하거나, 기존 객체의 Field를 직접 초기화하는 방식으로 수정합니다.
+
+### Q6. Logger 구현에서 String 결합이 반복되는 루프 후 GC Gen0 Allocation이 급증했습니다. 원인과 수정 방법은 무엇입니까?
+Runtime 분기 안의 String 연산은 컴파일러가 최적화하지 못해 중간 String 객체가 반복 생성됩니다. JFR Allocation Profiling에서 `String[]` 또는 `char[]` 할당이 상위에 나타납니다. StringBuilder로 append 방식으로 전환하거나, 실제 로그 레벨이 활성화된 경우에만 연산하도록 `() -> "msg " + value` Supplier 형태로 전달합니다.
 
 ## 10. 예상 꼬리질문
-- Autoboxing이 Hot Path에서 성능 문제를 일으키는 구체적인 예시와 해결 방법은 무엇인가요?
-- Defensive Copy 없이 Immutable Class가 외부에서 변경되는 상황을 코드로 설명해 주세요.
-- Integer의 == 비교에서 Cache 범위는 어디까지이고, 범위를 초과하면 어떻게 되나요?
-- String Pool에 명시적으로 추가하는 `intern()` 메서드의 사용 시점과 주의 사항은 무엇인가요?
-- int 연산 결과를 long에 담아도 Overflow가 날 수 있는 이유와 올바른 승격 방법은 무엇인가요?
-- equals를 Override할 때 반드시 hashCode도 같이 Override해야 하는 이유는 무엇인가요?
-- Java의 `record`가 Immutable 설계에서 기존 방식과 어떻게 다른가요?
+
+- `String.intern()`을 세션 ID 저장에 사용해 String Pool 중복을 줄이려 했는데, 세션 수가 100만 개 이상일 때 오히려 Metaspace/PermGen 압박이 생기는 이유와 대안은 무엇인가요?
+- `final byte[] payload`를 필드로 갖는 Immutable 패킷 클래스에서 Getter가 배열 참조를 그대로 반환할 때 어떤 버그가 생기고, `Arrays.copyOf` vs `ByteBuffer.wrap` 중 어떤 방법으로 방어하나요?
+- JFR Allocation Profiling 결과 `Integer[]` 생성이 Top 3에 올라있습니다. IntelliJ/SonarQube에서 Autoboxing 발생 위치를 탐지하는 방법과 `IntObjectHashMap` 전환 시 API 호환성을 유지하는 방법은 무엇인가요?
+- 멀티스레드 채팅 서버에서 `StringBuilder`를 static 필드로 선언해 공유했을 때 어떤 증상이 나타나고, Thread Dump에서 어떻게 확인하나요?
+- `long playerId = player.getId()`에서 `getId()`가 `Long` 타입을 반환할 때 Unboxing NullPointerException이 발생하는 조건과, Optional 또는 null 체크로 방어하는 패턴은 무엇인가요?
+- int 범위를 초과하는 경험치 계산에서 `long exp = baseExp * multiplier`로 선언했는데 Overflow가 여전히 발생합니다. 올바른 승격 방법과 `Math.multiplyExact` 사용 시 ArithmeticException 처리 Trade-off는 무엇인가요?
+- `record PositionDTO(float x, float y, List<Buff> buffs)`처럼 record가 Mutable List 필드를 갖는 경우 어떤 불변식 위반이 발생하고, Compact Constructor에서 `List.copyOf`로 완전한 Immutable을 보장하는 방법은 무엇인가요?
 
 ## 11. 30초 모범답변
 

@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Override(Runtime Dispatch)와 Overload(Compile Time 선택)의 차이를 정확히 설명할 수 있다.
-- Interface와 Abstract Class의 선택 기준(계약 조합 vs 공통 상태·구현 공유)을 설명할 수 있다.
-- 상속보다 Composition을 우선하는 이유와 적합한 판단 기준(is-a 관계·LSP)을 설명할 수 있다.
-- 게임 서버 전투 규칙처럼 변경 축이 분명한 기능을 Interface + Composition으로 분리하는 설계를 적용할 수 있다.
+- Character 상속 계층에 PvP·Raid·Tutorial Mode 규칙이 추가되면서 클래스가 폭발적으로 늘어나는 상황에서, Interface + Composition 분리로 전환해야 하는 시점과 리팩토링 경계를 결정할 수 있다.
+- 기존 코드에서 `instanceof` 분기가 반복되는 Handler 구조를 발견했을 때, Override 다형성으로 대체 가능한 부분과 직렬화·리플렉션 경계에서 불가피하게 유지해야 하는 부분을 구분할 수 있다.
+- Abstract Class와 Interface 중 하나를 선택해야 할 때, 공통 상태·Template 메서드 공유 필요성과 다중 구현·런타임 교체 요구를 기준으로 어느 쪽이 적합한지 판단할 수 있다.
+- Constructor에서 Override 가능한 메서드를 호출하는 코드가 Subclass 필드 초기화 전 Dispatch될 때 어떤 버그가 발생하는지 파악하고, 설계를 수정하는 방법을 결정할 수 있다.
 
 ## 1. 개요
 
@@ -168,41 +168,41 @@ class Sub extends Base {
 또한 `instanceof`로 타입을 분기하는 코드는 새 구현체가 추가될 때마다 분기를 추가해야 해서 Open-Closed 원칙을 위반한다. Override된 다형 메서드로 분기를 제거하면 새 타입 추가 시 해당 클래스만 구현하면 된다.
 
 ## 8. 자주 하는 오해
-- 중복 코드가 보이면 is-a 관계 확인 없이 상속한다. 코드 재사용 목적의 상속은 Base 변경이 Subclass에 예상하지 못한 영향을 주는 Fragile Base Class 문제를 만든다. Composition으로 공통 기능을 위임하는 것이 더 안전하다.
-- Overload가 Runtime 객체 Type에 따라 선택된다고 생각한다. Overload는 Compile Time에 선언 Type을 기준으로 선택된다. `Animal a = new Dog(); a.speak(2)`는 Dog에 speak(int)가 있어도 Animal.speak(int)가 호출된다.
-- Interface는 상태를 가질 수 없으므로 계약도 단순하다고 단정한다. Interface의 Default Method는 구현을 제공할 수 있고, 두 Interface가 같은 이름의 Default Method를 제공하면 구현 클래스가 직접 충돌을 해결해야 한다.
-- Constructor에서 Override 가능한 메서드를 호출해도 Subclass 초기화가 완료되었다고 본다. `super()`가 먼저 실행되므로 Subclass 필드가 아직 초기화되지 않은 상태에서 Override된 메서드가 호출된다.
-- 다형 호출 비용 때문에 Composition과 상속의 설계를 결정한다. JIT는 Type Profile을 기반으로 Devirtualization·Inlining을 적용할 수 있다. Virtual Dispatch 한 번보다 Allocation, Cache Miss, Algorithm 비용이 훨씬 큰 경우가 많으므로 Profile 결과로 판단한다.
-- Static Method도 Override되어 Runtime Dispatch된다고 생각한다. Static Method는 Class에 속하며 Compile Time에 선택된다. Subclass에 같은 이름의 Static Method가 있어도 Override가 아닌 Hiding이다.
-- Liskov Substitution은 단순히 "Subclass는 Base를 대체할 수 있어야 한다"는 뜻이라고 생각한다. LSP는 Subclass가 Base의 사전 조건을 강화하거나 사후 조건을 약화해서는 안 된다는 구체적 계약이다. 예를 들어 Base가 음수를 허용하는데 Subclass가 예외를 던지면 LSP 위반이다.
+- **중복 코드가 보이면 is-a 관계 확인 없이 상속한다.** 코드 재사용 목적의 상속은 Base 변경이 Subclass에 예상하지 못한 영향을 주는 Fragile Base Class 문제를 만든다. Composition으로 공통 기능을 위임하는 것이 더 안전하다.
+- **Overload가 Runtime 객체 Type에 따라 선택된다고 생각한다.** Overload는 Compile Time에 선언 Type을 기준으로 선택된다. `Animal a = new Dog(); a.speak(2)`는 Dog에 speak(int)가 있어도 Animal.speak(int)가 호출된다.
+- **Interface는 상태를 가질 수 없으므로 계약도 단순하다고 단정한다.** Interface의 Default Method는 구현을 제공할 수 있고, 두 Interface가 같은 이름의 Default Method를 제공하면 구현 클래스가 직접 충돌을 해결해야 한다.
+- **Constructor에서 Override 가능한 메서드를 호출해도 Subclass 초기화가 완료되었다고 본다.** `super()`가 먼저 실행되므로 Subclass 필드가 아직 초기화되지 않은 상태에서 Override된 메서드가 호출된다.
+- **다형 호출 비용 때문에 Composition과 상속의 설계를 결정한다.** JIT는 Type Profile을 기반으로 Devirtualization·Inlining을 적용할 수 있다. Virtual Dispatch 한 번보다 Allocation, Cache Miss, Algorithm 비용이 훨씬 큰 경우가 많으므로 Profile 결과로 판단한다.
+- **Static Method도 Override되어 Runtime Dispatch된다고 생각한다.** Static Method는 Class에 속하며 Compile Time에 선택된다. Subclass에 같은 이름의 Static Method가 있어도 Override가 아닌 Hiding이다.
+- **Liskov Substitution은 단순히 "Subclass는 Base를 대체할 수 있어야 한다"는 뜻이라고 생각한다.** LSP는 Subclass가 Base의 사전 조건을 강화하거나 사후 조건을 약화해서는 안 된다는 구체적 계약이다. 예를 들어 Base가 음수를 허용하는데 Subclass가 예외를 던지면 LSP 위반이다.
 
 ## 9. 면접 질문
-### Q1. Override와 Overload의 차이는 무엇인가요?
-Override는 Subclass가 상위 클래스의 같은 Signature Instance Method 구현을 바꾸며 Runtime에 실제 객체 타입을 기준으로 Dispatch됩니다. Overload는 같은 이름에 다른 Parameter 목록을 두고 Compile Time의 선언 타입을 기준으로 선택됩니다. `@Override`를 붙이면 Signature 실수를 컴파일러가 잡아줍니다.
+### Q1. 게임 서버에 PvP·Raid·Tutorial Mode 규칙이 추가되면서 Character 상속 계층 클래스 수가 3개월 만에 30개를 넘었습니다. 이 신호가 Interface + Composition 전환이 필요하다는 의미인지 판단하는 기준과, 전환 시 리팩토링 순서를 설명하세요.
+판단 기준: Mode 조건문이 여러 클래스에 반복되거나 Mode 조합마다 Subclass가 생기면 상속이 변경 축을 잘못 흡수한 것입니다. 반면 Mode 간 공통 상태와 Template 메서드가 많으면 Abstract Class 정리만으로 해결 가능합니다. 리팩토링 순서: ① DamageRule Interface 정의 → ② PvpRule·RaidRule·TutorialRule 구현체 분리 → ③ Match 생성 시 Rule Constructor 주입으로 전환 → ④ Character 클래스 Mode 조건문 제거 → ⑤ DB Schema는 Character 테이블 변경 없이 Mode Rule을 별도 컬럼·JSON으로 유지.
 
-### Q2. Interface와 Abstract Class는 어떻게 선택하나요?
-독립적인 Capability를 조합하거나 다중 구현이 필요하면 Interface가 적합합니다. 모든 구현체가 공통 상태(Field)와 불변식, Template 메서드를 실제로 공유해야 하면 Abstract Class를 고려합니다. 일반적으로 Interface를 먼저 정의하고 공통 구현이 많아지면 Abstract Class로 부분 구현을 추출합니다.
+### Q2. EliteRaidRule이 추가됐는데 코드베이스에 `instanceof DamageRule` 분기가 15곳에 있어 패치마다 수정이 반복됩니다. Open-Closed 원칙을 지키도록 개선하고, 직렬화·리플렉션 경계에서 불가피한 instanceof를 어떻게 범위 제한합니까?
+instanceof 분기를 Override 다형 메서드로 대체합니다. 각 구현체에 공통 인터페이스 메서드를 구현하면 EliteRaidRule 추가 시 기존 호출 코드 변경이 불필요합니다. 직렬화 경계(Jackson @JsonSubTypes, Protobuf Discriminator)와 리플렉션 팩토리에서는 타입 판별이 불가피하므로 이 경계를 한 곳으로 격리합니다. SonarQube java:S1872 룰 또는 ArchUnit 커스텀 룰로 나머지 instanceof 잔존 여부를 CI에서 강제합니다.
 
-### Q3. 상속보다 Composition을 선호하는 이유는 무엇인가요?
-Composition은 Base 내부 구현에 덜 결합되고, 기능을 Runtime에 교체하거나 조합하기 쉽고, Test Double 주입이 용이합니다. is-a 관계가 명확하고 LSP가 성립하는 경우에만 상속을 선택합니다. 단순 코드 재사용 목적이라면 Composition으로 위임하는 것이 더 안전합니다.
+### Q3. Abstract Class `CharacterBase`가 Protected Mutable Field(`int hp`)를 두고 `PvpCharacter·RaidCharacter`가 직접 수정하고 있습니다. 이 구조가 왜 위험하고, 어떻게 리팩토링합니까?
+Protected Mutable State는 Subclass가 Base의 불변식 없이 직접 수정 가능해 hp 유효성을 Base가 보장할 수 없습니다. 예를 들어 PvpCharacter가 hp를 음수로 설정해도 Base가 막을 수 없습니다. 리팩토링: hp를 private으로 바꾸고 `protected applyDamage(int amount)` 게이트 메서드에서 유효성 검증 후 hp를 조작. Subclass는 게이트를 통해서만 접근. 더 강한 분리가 필요하면 hp 관리를 `HealthComponent`로 분리하고 CharacterBase는 위임.
 
-### Q4. Java에서 다중 Class 상속을 지원하지 않는 이유를 설명해 주세요.
-여러 Base Class가 같은 이름의 메서드와 상태를 제공할 때 어느 구현을 상속할지, 초기화 순서를 어떻게 할지 해석이 복잡해집니다(다이아몬드 문제). Java는 Class 상속을 하나로 제한하고 여러 Interface 구현으로 계약 조합을 지원합니다. Default Method 충돌은 구현 클래스가 직접 `InterfaceA.super.method()` 형태로 해결합니다.
+### Q4. `CharacterBase` Constructor에서 `init()`을 호출하는데 PvpCharacter가 `init()`을 Override해 자신의 필드 `pvpRating`을 사용합니다. 운영에서 간헐적으로 `pvpRating`이 0으로 기록됩니다. 근본 원인과 수정 방법은 무엇입니까?
+근본 원인: `super()` 먼저 실행 → CharacterBase.init() 호출 → JVM이 PvpCharacter.init()으로 Dispatch → 이 시점 pvpRating 필드는 아직 기본값 0. 로컬 테스트에서 값이 정상인 이유는 직접 PvpCharacter를 생성해 호출 순서가 다른 경우입니다. 수정: Constructor에서 Override 가능한 메서드 호출 금지. 초기화 로직을 `static factory method` 또는 `final setup()` 메서드로 분리. 또는 Template Method 패턴에서 `initFields()`를 final로 선언해 Subclass Override 자체를 차단.
 
-### Q5. Liskov Substitution 원칙이란 무엇인가요?
-Subclass 객체를 Base가 요구되는 곳에 넣어도 기존 계약(사전 조건·사후 조건·불변식)이 유지되어야 한다는 원칙입니다. Subclass가 Base보다 강한 사전 조건을 요구하거나 보장하던 결과를 약화하면 위반입니다. LSP를 위반하면 상위 타입으로 받아도 안전하게 사용할 수 없어 다형성의 신뢰성이 무너집니다.
+### Q5. `DamageRule` Interface에 Default Method `logDamage()`를 추가했는데, 별도 `Loggable` Interface에도 `logDamage()`가 있어 `PvpRule`에서 컴파일 에러가 발생합니다. Java의 충돌 해결 규칙과 안전한 수정 방법은 무엇입니까?
+Java 우선순위 규칙: ① Abstract Class 또는 Concrete 상위 클래스 구현 > ② 더 구체적인(하위) Interface Default > ③ 동일 수준 두 Interface Default 충돌 시 구현 클래스가 반드시 Override해 `DamageRule.super.logDamage()` 또는 `Loggable.super.logDamage()`로 명시 선택. 안전한 수정: Default Method는 Interface 진화(기존 구현 깨지 않고 신규 추가)용으로만 사용하고, 공통 동작은 `LoggingUtil` 클래스로 분리해 두 Interface가 같은 계약을 제공하지 않도록 설계.
 
-### Q6. instanceof 분기 대신 다형성을 사용해야 하는 이유는 무엇인가요?
-`instanceof` 분기는 새 구현체가 추가될 때마다 분기 코드를 모두 찾아 수정해야 해서 Open-Closed 원칙을 위반합니다. 다형 메서드로 분기를 제거하면 새 타입을 추가할 때 해당 클래스만 구현하면 되고 기존 호출 코드는 변경하지 않아도 됩니다. 단, 타입 자체를 다루는 직렬화·리플렉션 경계에서는 `instanceof`가 불가피하게 필요합니다.
+### Q6. 매 Tick 100만 번 `rule.calculate()` 호출 Game Loop에서 async-profiler flame graph 상위에 다형 호출 오버헤드가 보입니다. 실제 문제인지 판단하는 절차와 최적화 방법을 설명하세요.
+판단 절차: `-XX:+PrintInlining` 또는 JFR Compiler Event로 JIT Inlining 여부 확인. 구현체가 1~2개면 JIT C2가 Devirtualization·Inlining 적용 가능 → flame graph의 Virtual Dispatch 비용은 실제 문제가 아닐 수 있음. 구현체 3개 이상이면 Megamorphic → Inlining 불가. 최적화: Hot Path 구현체를 final 클래스로 선언해 JIT Devirtualization 유도. `-XX:MaxInlineLevel` 조정으로 Inlining 깊이 확장 검토. 단, Allocation·Cache Miss·DB I/O 비용이 Virtual Dispatch 비용보다 크면 설계 변경 불필요 → 먼저 async-profiler로 실제 비율 확인.
 
 ## 10. 예상 꼬리질문
-- 추상 클래스와 Interface 중 무엇을 선택하는 기준은 무엇인가요? 둘 다 쓰는 패턴도 있나요?
-- 다이아몬드 문제는 무엇이고 Java Interface Default Method 충돌을 어떻게 해결하나요?
-- Static Method는 Override가 되나요? Hiding과 Override의 차이는 무엇인가요?
-- Constructor에서 Override 가능한 메서드를 호출하면 안 되는 이유를 코드로 설명해 주세요.
-- instanceof 대신 다형성을 쓰는 것이 좋은 이유는 무엇이고, instanceof가 불가피한 경우는 언제인가요?
-- 게임 캐릭터 계층구조(전사·마법사)에서 상속보다 Composition이 나은 이유를 구체적으로 설명해 주세요.
-- Fragile Base Class 문제가 무엇이고 어떻게 방지하나요?
+- `Animal a = new Dog(); a.staticMethod()`를 실행하면 Dog.staticMethod()가 아닌 Animal.staticMethod()가 호출됩니다. async-profiler에서 이 코드의 호출 경로가 예상과 다를 때 Static Hiding과 Override 차이를 어떻게 빠르게 진단하고, 이 버그를 CI에서 방지하는 방법은 무엇인가요?
+- `Square extends Rectangle`에서 setWidth(5) 호출 시 setHeight도 5로 바뀌어 넓이 계산이 틀립니다. 게임 서버에서 `BossItem extends Item`이 동일한 LSP 위반을 일으키는 시나리오를 만들고, 추상화 경계를 어떻게 재설계합니까?
+- ISP를 적용해 `ICharacterService`(메서드 12개)를 `IHealthService·ICombatService·IInventoryService` 3개로 분리했을 때, 각 서비스를 주입받아야 하는 Handler에서 발생하는 DI 복잡도와 이를 완화하는 패턴은 무엇인가요?
+- Composition으로 DamageRule을 주입받는 Match에서 Tick 중 버프 이벤트로 Rule을 교체해야 합니다. `volatile DamageRule rule` 필드로 교체하면 Race Condition이 해결되는지, 아니면 추가 동기화가 필요한지 Thread-safety 관점에서 분석하세요.
+- `@Override`를 붙이지 않은 채 `calculate(Integer amount)` 메서드가 Base의 `calculate(int amount)` Override 의도였지만 Autoboxing으로 Overload가 됐습니다. SpotBugs·SonarQube에서 이런 버그를 탐지하는 룰 ID와 해당 룰이 잡지 못하는 경계 케이스를 설명하세요.
+- Interface Default Method로 `DamageRule`에 `logDamage()`를 추가했는데 Abstract Class 계층에도 같은 이름이 있어 JDK 충돌 해결 우선순위가 적용됩니다. 어떤 순서로 우선순위가 결정되고, Abstract Class 구현이 Interface Default를 숨겼는지 검증하는 방법은 무엇인가요?
+- 매 Tick 100만 번 `rule.calculate()` 호출 시 async-profiler flame graph에서 Megamorphic 가상 메서드 호출이 병목으로 나타납니다. 구현체를 final로 선언하거나 Inline Cache를 활용하는 방법과 Trade-off, JIT 최적화 여부를 `-XX:+PrintInlining` 또는 JFR Compiler Event로 확인하는 방법을 설명하세요.
 
 ## 11. 30초 모범답변
 

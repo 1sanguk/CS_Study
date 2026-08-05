@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- JDK·JRE·JVM의 구성 차이와 각 역할을 명확히 설명할 수 있다.
-- Java Source가 Bytecode를 거쳐 Native Code로 실행되는 전체 흐름을 단계별로 설명할 수 있다.
-- JIT 컴파일의 최적화 원리(C1·C2·Deoptimization)와 Warm-up이 필요한 이유를 설명할 수 있다.
-- AOT와 JIT의 Trade-off를 요구사항(시작 속도 vs 최적화 수준)에 근거해 선택할 수 있다.
+- 배포 직후 CPU가 급등할 때, JIT Compile Thread 부하인지 GC 압박인지 Application 로직 부하인지 JFR과 GC Log로 진단 순서를 결정할 수 있다.
+- Plugin 서버에서 같은 이름의 Class를 사용하는데 ClassCastException이 발생했을 때, Class Loader 계층 충돌인지 Static Initializer 예외인지 좁혀 수정 방향을 결정할 수 있다.
+- Container 환경에서 JVM이 Host CPU·Memory를 기준으로 동작해 OOM·Thread 과다 문제가 발생했을 때, MaxRAMPercentage·ActiveProcessorCount 설정으로 제한을 명시하는 방법을 결정할 수 있다.
+- 장기 실행 게임 서버와 Serverless Function 각각에 JIT 또는 AOT(GraalVM Native Image)를 선택해야 할 때, 시작 지연·최대 처리량·Reflection 의존성 기준으로 적합한 실행 모드를 판단할 수 있다.
 
 ## 1. 개요
 
@@ -150,42 +150,44 @@ try {
 Container 환경에서는 `-XX:MaxRAMPercentage=75` 등으로 JVM이 Container 메모리 제한을 인식하게 하고, `-XX:ActiveProcessorCount`로 실제 할당 CPU를 명시한다. Readiness Probe는 단순 Process 생존이 아니라 주요 Class Loading·Connection Pool 준비 완료를 확인한다. 새 Instance에 트래픽을 점진적으로 늘려 Cold p99가 기존 Instance에 영향을 주지 않게 한다.
 
 ## 8. 자주 하는 오해
-- JRE, JVM과 JDK를 모두 같은 프로그램으로 생각한다. JDK는 개발 도구(javac·debugger 포함), JRE는 실행 환경(JVM + 표준 Library), JVM은 Bytecode 실행 엔진으로 포함 관계가 다르다.
-- Bytecode가 같으면 모든 Platform에서 동작이 완전히 같다고 생각한다. File System 경로 구분자, Native Library 유무, 환경 변수 차이는 JVM이 추상화하지 않으므로 Platform별 테스트가 필요하다.
-- Class를 Loading하는 순간 Static Initializer가 즉시 실행된다고 생각한다. 초기화는 해당 Class를 처음 사용(접근)하는 시점에 발생하며, Loading·Linking 단계와 구분해야 한다.
-- JIT가 컴파일한 Native Code는 실행 중 변경되지 않는다고 생각한다. Type Profile 가정이 깨지면 Deoptimization으로 Interpreter 경로로 복귀하고 이후 재컴파일될 수 있다.
-- Warm-up 없는 단일 Benchmark 결과로 JVM 전체 성능을 판단한다. Cold 상태의 결과는 JIT 미완료 상태이므로 JMH와 같은 도구로 Warm-up과 Dead Code 제거를 보장한 뒤 측정해야 한다.
-- Java는 태생적으로 느리다고 생각한다. C2 JIT의 Inlining, Escape Analysis, Loop 벡터화 등 최적화로 장기 실행 서버에서는 네이티브에 근접한 성능을 낼 수 있다.
-- AOT(GraalVM Native Image)를 사용하면 JIT의 모든 장점을 유지하면서 시작 속도만 빨라진다고 생각한다. AOT는 런타임 Profile 기반 최적화를 포기하므로 장기 실행 서버에서는 C2 JIT보다 처리량이 낮을 수 있다. Reflection 사용 코드는 설정 파일로 별도 선언해야 한다.
-- ClassNotFoundException과 NoClassDefFoundError가 같은 원인이라고 생각한다. 전자는 런타임 Class 탐색 실패, 후자는 Compile 시점에는 있었으나 런타임 탐색 실패 또는 Static Initializer 예외로 원인 범위가 다르다.
+- **JRE, JVM과 JDK를 모두 같은 프로그램으로 생각한다.** JDK는 개발 도구(javac·debugger 포함), JRE는 실행 환경(JVM + 표준 Library), JVM은 Bytecode 실행 엔진으로 포함 관계가 다르다.
+- **Bytecode가 같으면 모든 Platform에서 동작이 완전히 같다.** File System 경로 구분자, Native Library 유무, 환경 변수 차이는 JVM이 추상화하지 않으므로 Platform별 테스트가 필요하다.
+- **Class를 Loading하는 순간 Static Initializer가 즉시 실행된다.** 초기화는 해당 Class를 처음 사용(접근)하는 시점에 발생하며, Loading·Linking 단계와 구분해야 한다.
+- **JIT가 컴파일한 Native Code는 실행 중 변경되지 않는다.** Type Profile 가정이 깨지면 Deoptimization으로 Interpreter 경로로 복귀하고 이후 재컴파일될 수 있다.
+- **Warm-up 없는 단일 Benchmark 결과로 JVM 전체 성능을 판단한다.** Cold 상태의 결과는 JIT 미완료 상태이므로 JMH와 같은 도구로 Warm-up과 Dead Code 제거를 보장한 뒤 측정해야 한다.
+- **Java는 태생적으로 느리다.** C2 JIT의 Inlining, Escape Analysis, Loop 벡터화 등 최적화로 장기 실행 서버에서는 네이티브에 근접한 성능을 낼 수 있다.
+- **AOT(GraalVM Native Image)를 사용하면 JIT의 모든 장점을 유지하면서 시작 속도만 빨라진다.** AOT는 런타임 Profile 기반 최적화를 포기하므로 장기 실행 서버에서는 C2 JIT보다 처리량이 낮을 수 있다. Reflection 사용 코드는 설정 파일로 별도 선언해야 한다.
+- **ClassNotFoundException과 NoClassDefFoundError가 같은 원인이다.** 전자는 런타임 Class 탐색 실패, 후자는 Compile 시점에는 있었으나 런타임 탐색 실패 또는 Static Initializer 예외로 원인 범위가 다르다.
 
 ## 9. 면접 질문
-### Q1. JVM, JRE와 JDK의 차이는 무엇인가요?
-JVM은 Bytecode 실행, Memory 관리와 Runtime 서비스를 담당합니다. JRE는 실행에 필요한 JVM과 표준 Library를 묶은 개념이고 JDK는 javac, debugger 같은 개발 도구까지 포함합니다. 최근 배포에서는 jlink로 필요한 모듈만 포함한 커스텀 Runtime Image를 만들 수 있어 JRE 전체를 별도 설치하는 방식은 줄었습니다.
 
-### Q2. Java Source가 실행되기까지 과정을 설명해 주세요.
-javac이 Source를 Class File의 Bytecode로 Compile합니다. JVM은 Class Loader로 Loading·Linking·Initialization을 수행하고 Bytecode를 Interpreter로 해석합니다. 반복 호출이 많은 Hot Code는 C1 JIT(기본 최적화)를 거쳐 C2 JIT(고도 최적화)로 Native Code를 생성하고, Type Profile 가정이 깨지면 Deoptimization으로 안전한 경로로 복귀합니다.
+### Q1. 게임 서버 배포 직후 CPU 사용률이 비정상적으로 높습니다. JIT Compile Thread, GC 압박, Application 로직 부하를 어떻게 구분하고 진단하겠습니까?
+JFR 녹화에서 JIT Compile 이벤트 비중을 확인합니다. Compile 이벤트가 집중되면 Warm-up 기간이므로 트래픽을 점진적으로 투입하고 Readiness Probe를 Warm-up 완료 후로 조정합니다. GC Log에서 Pause 빈도와 GC Cause를 확인해 Allocation 압박인지 구분합니다. Thread Dump에서 Worker Thread가 BLOCKED·WAITING이면 Lock 경합이나 외부 I/O 지연입니다.
 
-### Q3. Interpreter와 JIT는 어떻게 다른가요?
-Interpreter는 Bytecode를 줄 단위로 해석해 즉시 실행하므로 Cold Start가 빠르지만 동일 코드를 반복 해석하는 비용이 있습니다. JIT는 Hot Method와 Loop를 Native Code로 변환하고 Inlining·Escape Analysis 등 런타임 Profile 기반 최적화를 적용해 장기 실행에서 높은 성능을 냅니다. 단, JIT Compile Thread 자체가 CPU를 소비하고 Deoptimization 시 성능이 일시 하락할 수 있습니다.
+### Q2. Plugin 서버에서 같은 이름의 Class를 사용하는데 ClassCastException이 발생합니다. 원인과 수정 방법은 무엇입니까?
+같은 이름이라도 Class Loader가 다르면 JVM은 서로 다른 Type으로 취급합니다. `obj.getClass().getClassLoader()`와 캐스트 대상 Class의 Loader를 비교해 다른지 확인합니다. Plugin과 Core가 공유해야 하는 Class는 Bootstrap 또는 Platform Loader에서 로딩하도록 Loader 위임 정책을 정의합니다. Plugin API 인터페이스를 별도 모듈로 분리하고 Plugin ClassLoader가 해당 모듈을 위임하게 구성합니다.
 
-### Q4. Class Loading의 주요 단계는 무엇인가요?
-Loading은 Class Binary를 찾아 메모리에 올립니다. Linking은 Bytecode 검증, Static Field에 기본값 준비, Symbolic Reference를 실제 참조로 해석하는 세 단계로 구성됩니다. Initialization은 Static Initializer와 명시적 Static Field 초기화를 클래스를 처음 사용하는 시점에 실행합니다. 같은 이름의 Class라도 Loader가 다르면 다른 Type으로 취급되어 ClassCastException이 발생할 수 있습니다.
+### Q3. 신규 배포 Instance의 첫 1분간 응답 p99가 기존 Instance 대비 5배 높습니다. Cold Start 문제를 확인하고 완화하는 방법은 무엇입니까?
+JFR 또는 `-XX:+PrintCompilation`으로 배포 직후 JIT Compile 이벤트가 집중되는지 확인합니다. Readiness Probe를 Process 생존이 아닌 `/warmup` 엔드포인트로 교체해, 주요 Class 로딩과 대표 요청을 미리 처리한 뒤 Ready 상태로 전환합니다. Load Balancer에서 신규 Instance에 트래픽을 0%에서 시작해 1분에 걸쳐 점진적으로 늘립니다. AOT(GraalVM Native Image)로 전환하면 Warm-up 없이 즉시 최대 속도로 시작하지만 런타임 최적화 수준이 낮아집니다.
 
-### Q5. Warm-up이 필요한 이유는 무엇인가요?
-JVM 시작 직후에는 Class Loading, JIT Compile, Cache 준비가 진행 중이어서 Cold 상태 p99가 Steady State보다 훨씬 높게 나타납니다. 게임 서버 배포 시 Readiness Probe 전에 주요 Class Loading과 대표 요청을 수행해 JIT가 Hot Code를 충분히 컴파일하도록 하고, 신규 Instance에 트래픽을 점진적으로 늘려 Cold p99가 기존 Instance에 영향을 주지 않게 합니다.
+### Q4. Container에서 JVM 응답이 극도로 느려지고 GC Pause가 빈번합니다. 어떤 설정 누락이 원인이고 어떻게 수정합니까?
+JVM이 Container 메모리 제한을 인식하지 못해 Heap을 Host Memory 기준(예: 32GB)으로 설정하면 실제 Container 한도(예: 4GB)를 초과해 OS OOM Kill 전에 GC가 극도로 빈번해집니다. `-XX:MaxRAMPercentage=75`로 Container 메모리의 75%를 Heap 상한으로 명시합니다. `java -XshowSettings:all`로 인식된 CPU·Heap 값을 확인합니다. ForkJoinPool 등이 Host Core 수로 Thread를 생성하지 않도록 `-XX:ActiveProcessorCount`로 실제 할당 CPU를 명시합니다.
 
-### Q6. ClassNotFoundException과 NoClassDefFoundError의 차이는 무엇인가요?
-ClassNotFoundException은 `Class.forName()` 등으로 런타임에 클래스를 동적으로 탐색했지만 찾지 못할 때 발생하는 Checked Exception입니다. NoClassDefFoundError는 Compile 시점에는 참조 클래스가 존재했으나 런타임에 찾을 수 없거나 Static Initializer에서 예외가 발생했을 때 나타나는 Error입니다. 후자는 Cause Chain에서 ExceptionInInitializerError를 확인해야 실제 원인을 파악할 수 있습니다.
+### Q5. JIT Deoptimization이 빈번해 Tick p99가 간헐적으로 급등합니다. 원인과 JFR로 확인하는 방법은 무엇입니까?
+JFR에서 `Deoptimization` 이벤트를 필터링해 어떤 Method에서 발생하는지 확인합니다. 주요 원인: 인터페이스 구현체가 두 개로 늘어나 Megamorphic 상태가 되거나, null 체크 가정이 깨지거나, 인라인된 Method가 변경됩니다. `-XX:+TraceDeoptimization`으로 로그를 추가로 확인합니다. Hot Path에서 final 메서드 사용, Type 다형성 최소화, 불필요한 null 역참조 제거로 완화합니다.
+
+### Q6. 장기 실행 게임 서버와 Serverless API 각각에 JIT와 AOT 중 무엇을 선택하고 이유는 무엇입니까?
+장기 실행 게임 서버는 JIT(C2)를 선택합니다. 수백 시간 실행 동안 런타임 Profile 기반 Inlining·Escape Analysis·SIMD 최적화로 처리량이 AOT를 초과합니다. Reflection을 별도 설정 없이 자유롭게 사용할 수 있습니다. Serverless API는 AOT(GraalVM Native Image)를 선택합니다. 요청당 인스턴스가 짧게 살아 JIT Warm-up 기회가 없고 수십 ms 수준의 Cold Start가 필요합니다. Hibernate·Spring 등 Reflection 의존 라이브러리는 `-H:ReflectionConfigurationFiles`로 사전 선언이 필요합니다.
 
 ## 10. 예상 꼬리질문
-- JVM Warm-up이 게임 서버 배포 시 어떤 문제를 만드나요? 어떻게 완화하나요?
-- ClassNotFoundException과 NoClassDefFoundError는 어떻게 다르고 각각 어떤 상황에서 발생하나요?
-- JIT Deoptimization이 발생하는 경우는 어떤 것이 있고 운영에 어떤 영향을 주나요?
-- Class Loader 계층과 격리가 Plugin 구조(예: Minecraft 서버)에서 왜 중요한가요?
-- AOT(GraalVM Native Image)와 JIT의 Trade-off를 어떤 상황에서 고려하나요?
-- Container 환경에서 JVM의 CPU·Memory 제한을 올바르게 설정하지 않으면 어떤 문제가 생기나요?
-- JFR(Java Flight Recorder)로 JIT 관련 성능 문제를 어떻게 진단하나요?
+
+- `-XX:+PrintCompilation` 출력에서 `made not entrant`와 `made zombie`가 각각 어떤 상태를 의미하고 운영에서 어떤 영향을 주나요?
+- JVM Tiered Compilation에서 특정 Method가 C1에 머무르고 C2로 진행하지 않는 이유와, C2 컴파일을 강제하는 방법 및 부작용은 무엇인가요?
+- Reflection을 많이 사용하는 Plugin 프레임워크를 GraalVM Native Image로 전환할 때 `-H:ReflectionConfigurationFiles` 누락으로 발생하는 런타임 오류와 사전 탐지 방법은 무엇인가요?
+- 두 Plugin이 각각 다른 ClassLoader로 같은 버전의 Guava를 로딩할 때 발생하는 메모리 중복 비용과 격리 vs 공유 Trade-off를 어떻게 결정하나요?
+- JFR Recording에서 JIT Compile 이벤트가 배포 후 5분까지 계속될 때 Warm-up 완료 시점을 어떤 지표로 판단하나요?
+- Container CPU Limit이 밀리코어 500(0.5코어)일 때 `-XX:ActiveProcessorCount`를 명시하지 않으면 ForkJoinPool.commonPool() Thread 수가 어떻게 설정되고 어떤 문제가 생기나요?
+- Static Initializer에서 DB Connection을 여는 코드가 있는데 DB가 다운된 상태로 Class가 처음 로딩되면 어떤 예외가 발생하고, 이후 같은 Class를 다시 로딩하려 하면 어떤 문제가 생기나요?
 
 ## 11. 30초 모범답변
 

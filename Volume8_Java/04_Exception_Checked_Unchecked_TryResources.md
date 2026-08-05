@@ -11,10 +11,10 @@ importance: 5
 
 ## 학습 목표
 
-- Checked/Unchecked Exception의 차이와 각 선택 기준(복구 가능성·API 계약 노출)을 설명할 수 있다.
-- Exception 전파·Translation·Cause Chain 보존의 원칙을 설명할 수 있다.
-- try-with-resources의 동작(역순 close, Suppressed Exception)과 finally와의 차이를 설명할 수 있다.
-- 게임 서버의 Timeout/멱등성 상황에서 재시도 안전성을 고려한 예외 처리를 설계할 수 있다.
+- Match 결과 저장 Timeout 예외 이후 즉시 재시도할지, Idempotency Key로 멱등성을 확인한 뒤 재시도 큐로 지연 처리할지 판단하는 기준을 결정할 수 있다.
+- Service 계층에 `DataAccessException`이 직접 노출된 코드를 발견했을 때, Exception Translation과 Cause Chain 보존이 필요한 경계를 식별하고 커스텀 예외로 Wrap하는 방법을 결정할 수 있다.
+- `finally`로 자원을 닫는 레거시 코드에서 close 예외가 본문 예외를 덮어 원래 실패가 사라지는 문제를 식별하고, try-with-resources로 수정해 Suppressed Exception이 보존되도록 결정할 수 있다.
+- Checked Exception이 중간 계층에 `throws`로 기계적으로 전파되는 코드에서, Unchecked로 Wrap해야 하는 시점과 API 계약에 노출할 가치가 있는 경우를 구분할 수 있다.
 
 ## 1. 개요
 
@@ -170,41 +170,41 @@ for (String token : tokens) {
 Match 결과 저장 후 바로 재시도하면 성공한 저장이 중복될 수 있다. `matchId`를 Unique Key로 두거나 Idempotency Key를 포함한 재시도 큐로 넘겨 지연 처리하면 중복 보상 지급을 방지한다. 예외율·원인 타입·재시도 횟수를 Metric으로 집계하되, 잘못된 입력(패킷 파싱 오류 등) 을 고비용 Stack Trace 예외로 남발하지 않는다.
 
 ## 8. 자주 하는 오해
-- Checked Exception이면 언제나 호출자가 복구할 수 있다고 단정한다. Checked Exception은 "복구를 시도해야 한다"는 API 계약의 표현이며 실제 복구 가능 여부는 Context에 따라 다르다. 복구 불가능하면 Unchecked로 Wrap해서 전달하는 것이 더 명확할 수 있다.
-- catch한 Exception을 무시하면 Server 가용성이 높아진다고 본다. 빈 catch 블록은 실패를 숨겨 상태 손상이 계속 누적된다. 최소한 로그를 남기고 적절한 복구 또는 상위 전달을 해야 한다.
-- finally가 강제 Process 종료나 `System.exit()`에서도 반드시 실행된다고 생각한다. JVM 강제 종료, Process Crash, 전원 장애처럼 정상 Stack Unwinding이 불가능하면 실행이 보장되지 않는다.
-- try-with-resources에서 close 예외는 항상 사라진다고 본다. 본문 예외가 주 예외가 되고 close 예외는 Suppressed Exception으로 보존된다. `e.getSuppressed()`로 확인할 수 있다.
-- 동일 Exception을 모든 계층에서 반복 Log한다. 복구하거나 최종 처리하는 경계에서 한 번만 Correlation ID와 함께 기록한다. 중간 계층에서 Log만 하고 다시 던지면 같은 오류가 여러 줄로 중복된다.
-- Timeout 예외 후 즉시 재시도하면 항상 안전하다고 생각한다. Timeout은 성공 여부가 불확실한 상태다. DB 쓰기·결제처럼 멱등하지 않은 연산은 Idempotency Key와 결과 조회 없이 재시도하면 중복 처리가 발생한다.
-- 예외 메시지에 상세 정보를 많이 넣을수록 디버깅이 쉬워진다고 생각한다. SQL Parameter에 개인정보(이메일·주민번호·카드 번호)가 포함되면 예외 메시지가 로그에 노출된다. matchId·요청 ID 같은 추적 키만 메시지에 넣고 민감 정보는 제외한다.
+- **Checked Exception이면 언제나 호출자가 복구할 수 있다고 단정한다.** Checked Exception은 "복구를 시도해야 한다"는 API 계약의 표현이며 실제 복구 가능 여부는 Context에 따라 다르다. 복구 불가능하면 Unchecked로 Wrap해서 전달하는 것이 더 명확할 수 있다.
+- **catch한 Exception을 무시하면 Server 가용성이 높아진다고 본다.** 빈 catch 블록은 실패를 숨겨 상태 손상이 계속 누적된다. 최소한 로그를 남기고 적절한 복구 또는 상위 전달을 해야 한다.
+- **finally가 강제 Process 종료나 `System.exit()`에서도 반드시 실행된다고 생각한다.** JVM 강제 종료, Process Crash, 전원 장애처럼 정상 Stack Unwinding이 불가능하면 실행이 보장되지 않는다.
+- **try-with-resources에서 close 예외는 항상 사라진다고 본다.** 본문 예외가 주 예외가 되고 close 예외는 Suppressed Exception으로 보존된다. `e.getSuppressed()`로 확인할 수 있다.
+- **동일 Exception을 모든 계층에서 반복 Log한다.** 복구하거나 최종 처리하는 경계에서 한 번만 Correlation ID와 함께 기록한다. 중간 계층에서 Log만 하고 다시 던지면 같은 오류가 여러 줄로 중복된다.
+- **Timeout 예외 후 즉시 재시도하면 항상 안전하다고 생각한다.** Timeout은 성공 여부가 불확실한 상태다. DB 쓰기·결제처럼 멱등하지 않은 연산은 Idempotency Key와 결과 조회 없이 재시도하면 중복 처리가 발생한다.
+- **예외 메시지에 상세 정보를 많이 넣을수록 디버깅이 쉬워진다고 생각한다.** SQL Parameter에 개인정보(이메일·주민번호·카드 번호)가 포함되면 예외 메시지가 로그에 노출된다. matchId·요청 ID 같은 추적 키만 메시지에 넣고 민감 정보는 제외한다.
 
 ## 9. 면접 질문
-### Q1. Checked와 Unchecked Exception의 차이는 무엇인가요?
-Checked Exception은 `catch` 또는 `throws`로 선언해야 Compile이 통과하는 Exception으로, 호출자가 복구를 시도해야 한다는 계약을 API에 드러낼 때 사용합니다. Unchecked Exception은 `RuntimeException` 계열로 Compile Time 강제가 없고, 프로그래밍 오류나 복구 지점이 먼 실패에 사용합니다. 선택 기준은 호출자가 합리적으로 복구할 수 있는지와 API 계약에 노출할 가치가 있는지입니다.
+### Q1. 랭킹 서버에서 Match 결과 저장 요청이 500ms Timeout으로 실패했습니다. 운영팀이 즉시 재시도를 지시했는데 왜 위험하고, 어떤 절차로 처리합니까?
+Timeout은 서버가 성공했는지 불확실한 상태입니다. 즉시 재시도하면 이미 커밋된 matchId에 중복 보상이 지급될 수 있습니다. 처리 절차: ① matchId를 DB Unique Key로 설정해 중복 Insert 시 예외 발생으로 원천 방지 → ② 재시도 큐에 넣어 지연 처리 시 기존 결과를 먼저 조회 후 미처리된 경우만 재실행 → ③ Timeout 원인(DB 과부하·쿼리 느림)을 Slow Query Log·Connection Pool 지표로 별도 분석.
 
-### Q2. try-with-resources는 어떻게 동작하나요?
-`AutoCloseable`을 구현한 자원을 `try (...)` 블록에 선언하면 블록 종료 시 선언의 역순으로 `close()`가 호출됩니다. 본문과 `close()` 모두 예외가 발생하면 본문 예외가 주 예외가 되고 `close()` 예외는 Suppressed Exception으로 주 예외에 첨부됩니다. 기존 `finally` 방식은 `close()` 예외가 본문 예외를 덮어 원래 실패가 사라지는 문제가 있었습니다.
+### Q2. DB 저장 중 `DataAccessException`이 Service 계층까지 직접 노출되어 Service가 DB 세부 구현에 결합되어 있습니다. Exception Translation과 Cause Chain 보존을 어떻게 적용합니까?
+Service 계층에서 `DataAccessException`을 `catch`하고 업무 의미가 있는 `RankingSaveException`으로 Wrap합니다. 원인은 `new RankingSaveException("Failed for matchId=" + matchId, e)` 형태로 cause 보존. Message에는 matchId 같은 추적 키만 넣고 SQL Parameter·개인정보는 제외합니다. 이후 DB를 JPA에서 JDBC로 교체해도 Service 코드 변경이 없습니다.
 
-### Q3. finally가 실행되지 않을 수 있나요?
-`System.exit()` 호출, JVM 강제 종료(kill -9), Process Crash, 전원 장애처럼 정상 Stack Unwinding이 불가능한 상황에서는 실행이 보장되지 않습니다. 또한 `finally` 내에서 새 예외를 던지거나 `return`을 쓰면 원래 예외가 억제됩니다. 중요한 자원 정리는 try-with-resources로 관리하는 것이 더 안전합니다.
+### Q3. 레거시 코드에서 `finally`로 Connection을 닫는데, DB 연결 장애 시 close에서도 예외가 발생해 원래 SQL 오류가 사라집니다. 어떻게 수정하고, try-with-resources와 어떤 차이가 있습니까?
+`finally`에서 close 예외가 발생하면 원래 본문 예외가 덮입니다. try-with-resources로 교체하면 본문 예외가 주 예외, close 예외는 `e.getSuppressed()[0]`으로 보존됩니다. 복수 AutoCloseable은 선언 역순(ps → conn)으로 닫힙니다. `finally` 유지가 불가피하면 close 예외를 try-catch로 잡아 `primaryException.addSuppressed(closeEx)` 형태로 수동 보존하지만 가독성이 낮습니다.
 
-### Q4. Exception Translation은 왜 사용하나요?
-하위 라이브러리의 세부 Exception 타입(예: `SQLException`)을 상위 업무 계층에 직접 노출하면 계층 간 결합도가 높아지고 라이브러리 교체가 어려워집니다. Translation으로 업무 의미가 있는 예외(예: `RankingSaveException`)로 바꾸되 원래 원인은 `cause`로 보존해 Stack Trace 추적이 가능하게 합니다.
+### Q4. Checked Exception `IOException`이 Repository → Service → Controller까지 `throws IOException`으로 기계적으로 전파되고 있습니다. 이 구조의 문제점과 개선 방법은 무엇입니까?
+IOException이 API 계약의 일부로 굳어지고 하위 라이브러리 변경 시 전체 계층이 영향받습니다. 복구 의도가 없는 중간 계층에서는 Unchecked Exception(`RuntimeException` 계열)으로 Wrap해 전달합니다. 최종 처리 경계(Controller 또는 Global ExceptionHandler)에서 Correlation ID와 함께 한 번만 Log. Lombok `@SneakyThrows`는 Throws 선언 없이 Checked를 던질 수 있지만 호출자가 catch를 누락하기 쉬워 Library 공개 API에는 사용을 피합니다.
 
-### Q5. 예외를 어디에서 Log해야 하나요?
-복구하거나 요청 실패를 최종 확정하는 경계에서 Correlation ID·matchId 같은 추적 키와 함께 한 번만 기록합니다. 단순히 예외를 상위로 전달하는 중간 계층에서 Log하면 같은 오류가 여러 줄로 중복되어 원인 파악이 어려워집니다. 민감 정보(개인정보·인증 토큰)는 메시지에 포함하지 않습니다.
+### Q5. 여러 계층에서 같은 예외를 잡아 Log하고 다시 던지는 코드가 있습니다. 운영 로그에서 동일한 예외가 5~6줄 중복으로 나타나는 이유와 수정 방법은 무엇입니까?
+각 계층에서 `catch → log.error → rethrow`를 반복하면 Stack Trace가 여러 번 출력됩니다. 수정: 복구하거나 최종 처리하는 경계(Global ExceptionHandler, Tick Thread 상단)에서만 Correlation ID·matchId와 함께 한 번 Log합니다. 중간 계층은 `log.debug("matchId={} forwarding exception", matchId)` 정도만 남기거나 Log 없이 전달. Datadog·Splunk에서 Correlation ID로 필터링하면 원 예외 한 개만 추적됩니다.
 
-### Q6. 예외 처리에서 멱등성이 왜 중요한가요?
-Timeout 예외는 서버가 실제로 처리를 완료했는지 불확실한 상태입니다. DB 쓰기·결제처럼 부작용이 있는 연산을 Idempotency Key 없이 즉시 재시도하면 중복 보상 지급이나 중복 결제가 발생합니다. `matchId`를 Unique Key로 설정하거나 재시도 큐에 넣어 지연 처리하면 결과 조회 후 중복 여부를 확인할 수 있습니다.
+### Q6. 게임 서버 Tick 루프에서 잘못된 패킷 타입이 들어올 때마다 Exception을 던지도록 구현되어 있습니다. p99 Latency가 예상보다 높고 GC Gen0가 증가했을 때, 예외 남용을 의심하고 개선하는 방법은 무엇입니까?
+JFR Exception Event 또는 `-XX:+TraceExceptions`로 예외 발생 빈도를 확인합니다. Tick당 예외가 10건 이상이면 정상 흐름 분기를 조건문으로 교체합니다. `fillInStackTrace()`를 Override해 Stack Trace 생성을 억제하거나, `static final` 예외 인스턴스를 재사용하면 Allocation 비용이 줄어드나 Stack Trace 정보가 사라집니다. Metric으로 exception_count vs tick_count 비율을 관찰해 임계값 초과 시 알람을 설정합니다.
 
 ## 10. 예상 꼬리질문
-- Checked Exception과 Unchecked Exception 중 무엇을 사용할지 어떻게 결정하나요? 두 가지를 혼합해서 쓰는 패턴도 있나요?
-- try-with-resources에서 Suppressed Exception은 어떻게 확인하나요?
-- Exception을 catch만 하고 아무 처리를 안 하면 어떤 문제가 생기나요?
-- 게임 서버에서 Cause Chain을 유지하는 것이 왜 중요하고, Translation 시 원인을 잃으면 어떤 문제가 생기나요?
-- `RuntimeException`을 extends해서 커스텀 예외를 만드는 기준은 무엇인가요?
-- 예외를 정상적인 Loop 종료나 조건 분기에 사용하면 안 되는 이유는 무엇인가요?
-- Exception이 Hot Path에서 반복 발생할 때 성능에 어떤 영향을 주나요?
+- try-with-resources에서 Connection과 PreparedStatement 두 자원을 선언했을 때, PreparedStatement.close()에서 예외가 발생하면 getSuppressed()로 확인되는지 아니면 주 예외가 되는지 JDK 소스 수준에서 설명하세요.
+- Checked Exception을 Unchecked로 Wrap하는 패턴에서 Lombok @SneakyThrows와의 차이, 그리고 두 방법 모두 적합하지 않은 경우는 언제인가요?
+- Match 결과 저장 Timeout 후 재시도 큐에 100만 건이 쌓였을 때 처리량 부족으로 중복 보상이 발생할 수 있는 시나리오와 방지 방법은 무엇인가요?
+- JFR `-XX:+TraceExceptions`로 Tick 루프에서 초당 5,000건 예외를 탐지했습니다. Stack Trace 생성 비용을 측정하는 방법과 `static final` 예외 재사용 시 Stack Trace가 비어있는 경우 운영 영향은 무엇인가요?
+- Exception Translation 시 cause로 `DataAccessException`을 보존했는데, 외부 API Response에 cause의 getMessage()가 노출되는 코드가 있습니다. 이 정보 누출을 탐지하는 방법과 안전한 External Response 설계는 무엇인가요?
+- `finally` 블록에서 `return`을 사용하면 메서드에서 던진 예외가 어떻게 처리되는지 바이트코드 수준에서 설명하고, SpotBugs에서 이 패턴을 탐지하는 룰 ID는 무엇인가요?
+- `OutOfMemoryError`가 발생했을 때 `catch(Error e)`로 잡아 자원을 정리하려는 코드가 있습니다. OOM 상황에서 catch 블록이 실행된다는 보장이 있는지, 그리고 OOM 이후 JVM 상태를 안전하게 처리하는 운영 패턴은 무엇인가요?
 
 ## 11. 30초 모범답변
 
