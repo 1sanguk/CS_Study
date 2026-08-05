@@ -10,10 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- JVM 실행 흐름(Class Loading → Bytecode → JIT → GC)을 하나의 요청 처리 흐름과 연결해 설명할 수 있다.
-- equals·hashCode 계약, Generic Type Erasure, Exception 경계, Happens-before 같은 정확성 계약을 실무 코드에서 지키는 방법을 설명할 수 있다.
-- 공유 상태 동기화(synchronized·volatile·Atomic·Room Owner)와 Executor·CompletableFuture·Virtual Thread 선택 기준을 설명할 수 있다.
-- GC·Thread·Queue·외부 자원을 동일 시간축에서 관찰하는 운영 진단 접근법을 설명할 수 있다.
+- 로그인 요청 처리에서 JIT Warm-up 전 지연·HashMap hashCode 계약 위반·volatile Snapshot 가시성 문제가 각각 어느 계층에서 발생하는지 판단하고 진단 도구를 결정할 수 있다.
+- 게임 서버 p99 Latency 급등 시 GC Pause·Thread Dump·Executor Queue·외부 I/O·JFR CPU Profile 중 증상에 따른 확인 우선순위를 결정할 수 있다.
+- Room 상태 공유 설계에서 복합 불변식 보호 필요성과 Lock Contention 비용을 기준으로 synchronized·AtomicReference·Room Owner 패턴 중 적합한 방식을 결정할 수 있다.
+- 운영 중 Heap이 지속 증가할 때 MAT Dominator Tree에서 GC Root 참조 경로를 역추적하고 전역 Map remove 누락·static Listener·ThreadLocal 미해제 중 원인을 결정할 수 있다.
 
 ## 1. 개요
 Java 면접의 핵심은 문법 암기가 아니라 Source → JVM 실행 → 객체·Type → Collection → GC → 동시성·비동기 처리를 **하나의 서버 요청 흐름**으로 연결하는 것이다. 각 계층에서 어떤 비용이 발생하고, 어디서 정확성이 깨질 수 있으며, 장애 시 무엇을 측정해야 하는지 설명할 수 있어야 한다.
@@ -242,33 +242,33 @@ Map<String, Session> cache = new WeakHashMap<>();
 
 ## 9. 면접 질문
 
-### Q1. Java 요청 처리 흐름을 Runtime 관점에서 설명해 주세요.
-요청이 들어오면 관련 Class가 로드·초기화되고, Hot Path는 JIT(C1→C2)으로 최적화됩니다. Immutable DTO로 역직렬화하고 Service에서 Collection·Exception·동기화 계약을 지키며 처리합니다. 외부 I/O는 Virtual Thread나 CompletableFuture로 비동기 처리하고, Young GC는 짧게 자주, Old GC는 p99에 영향을 주므로 같은 시간축에서 관찰합니다.
+### Q1. 게임 서버 새 배포 직후 5분간 p99 Latency가 평소의 5배이다가 자연스럽게 정상화됩니다. JIT Warm-up 이외에 어떤 원인이 있을 수 있고 어떻게 단축합니까?
+JIT 외 원인: ① Class Loading 폭발(최초 요청 시 수천 개 Class 로드). ② JVM Young GC 초기화(Heap 세팅 전 Full GC). ③ Connection Pool 초기화(DB·외부 API Cold Connection). ④ CPU Profile 수집이 활성화된 경우 Profiler 오버헤드. 단축 방법: ① `-XX:+TieredCompilation -XX:ReservedCodeCacheSize=256m`으로 JIT Cache 확보. ② `java -Xshare:on` + AppCDS로 Class Loading 캐시. ③ Warmup 전용 요청(로그인 더미 흐름 5회)을 배포 후 자동 실행하는 Readiness Probe 설계. ④ Connection Pool `minimumIdle` 설정으로 배포 전 연결 미리 준비.
 
-### Q2. HashMap Key 설계의 주의점은 무엇인가요?
-`equals`·`hashCode` 계약을 지켜야 하며, 삽입 후 Hash에 영향을 주는 필드를 변경하면 조회 불가 상태가 됩니다. 동시 복합 갱신은 `ConcurrentHashMap.compute`로 원자적으로 처리해야 합니다. `record`나 Immutable 객체를 Key로 쓰면 이 문제를 설계적으로 회피할 수 있습니다.
+### Q2. 로그인 세션 Map에서 플레이어 UUID를 Key로 쓰는데 relogin 시 세션 조회가 null을 반환합니다. Session 객체를 equals·hashCode를 Override해서 Map Key로 쓰다가 Mutable Field(닉네임)를 변경한 상황입니다. 원인과 수정 방법은 무엇입니까?
+원인: `hashCode`가 닉네임 Field 기반이면 닉네임 변경 후 Hash Bucket이 바뀝니다. `get(session)`은 바뀐 Hash로 새 Bucket을 탐색하지만 객체는 이전 Bucket에 있어 null을 반환합니다. 수정: ① Session Key를 Immutable UUID(String)로 교체 — `sessions.get(session.getUUID())`. ② `record SessionKey(UUID id) {}`처럼 불변 Key 객체를 별도 정의. ③ Session의 `hashCode`를 `UUID` 기반으로만 구현 + 닉네임을 Key 계산에서 제외. CI 방지: SpotBugs `HE_INHERITS_EQUALS_USE_HASHCODE`·SonarQube `S2061` 룰 활성화.
 
-### Q3. Java Memory Leak을 어떻게 진단하나요?
-GC 후에도 Heap이 지속 증가하면 Leak을 의심합니다. `jmap -dump`로 Heap Dump를 떠서 MAT(Memory Analyzer Tool)의 Dominator Tree로 누가 가장 많이 점유하는지 확인하고, GC Root 참조 경로를 역추적합니다. 전역 Map에서 `remove`가 빠진 Session, static 리스너 등이 흔한 원인입니다.
+### Q3. 게임 서버 Heap 사용량이 48시간 동안 1GB/일 속도로 증가하고 Full GC 후에도 회수가 안 됩니다. 진단 순서와 먼저 의심해야 할 패턴은 무엇입니까?
+진단 순서: ① GC Log에서 Old 영역 증가 추세 확인. ② `jcmd <pid> VM.native_memory`로 Heap·Metaspace·Thread Stack 각 항목 추세. ③ `jmap -dump:format=b,file=heap.hprof <pid>` Heap Dump 수집. ④ Eclipse MAT Dominator Tree에서 Retained Heap 상위 5개 객체와 Root 참조 Chain 확인. 의심 패턴 순서: ① Static Map에 `sessions.put()` 후 `remove()` 누락. ② EventBus·Listener에 unregister 없는 Handler 누적. ③ Thread Pool ThreadLocal에 `remove()` 없는 누적. ④ Metaspace 증가 시 ClassLoader Leak(동적 Class 생성).
 
-### Q4. 공유 Room 상태를 어떻게 동기화하나요?
-하나의 Worker Thread가 Room을 소유해 `inbox(BlockingQueue)`에서 Action을 순차 소비하는 Room Owner 패턴이 가장 단순합니다. 외부 Thread는 Lock 없이 `volatile Snapshot`을 읽거나 inbox에 Action을 넣습니다. `synchronized`로 복합 불변식 전체를 보호하는 방법도 있지만 경합이 생기면 Tick 지연으로 이어집니다.
+### Q4. GameRoom Tick p99 Latency가 특정 Room에서만 50ms로 급등합니다. async-profiler 결과 `synchronized(room)` Monitor Wait이 80%를 차지합니다. 원인 분석과 Room Owner 패턴으로 전환 설계는 무엇입니까?
+원인: 다수 I/O Thread가 동일 Room의 `synchronized` Monitor를 경합합니다. 특히 DB 조회나 외부 API 호출이 `synchronized` 블록 안에 있으면 Lock 보유 시간이 길어져 대기가 폭증합니다. Room Owner 전환 설계: ① Room마다 `BlockingQueue<PlayerAction> inbox` 추가. ② 단일 Worker Thread(`ScheduledExecutorService`)가 Tick마다 `inbox.drainTo(batch)`로 Action을 일괄 소비. ③ I/O Thread는 `inbox.offer(action)`으로만 접근(Thread-safe). ④ 읽기 전용 상태는 `volatile RoomSnapshot`으로 노출 — I/O Thread가 Lock 없이 읽기. `synchronized` 완전 제거 후 async-profiler 재측정으로 Monitor Wait 0% 확인.
 
-### Q5. p99 지연이 증가하면 무엇을 확인하나요?
-① GC Pause(Young·Old) 시간대와 p99 증가 시간대 일치 여부 → ② `jstack`으로 Thread Dump(Lock 경합·BLOCKED 상태) → ③ Executor Queue 길이 추세 → ④ 외부 I/O(DB·API) 응답 시간 → ⑤ JFR CPU Profile(Hot Method, Allocation)을 동일 시간축에서 비교합니다.
+### Q5. 로그인 파이프라인 `Auth(500ms) → DB(200ms) → Session 등록` thenCompose 체인에서 DB 단계가 간헐적으로 완료되지 않고 스레드가 무한 대기합니다. 원인 진단과 전체 체인에 Deadline을 전파하는 방법은 무엇입니까?
+원인 의심: ① DB Connection Pool 고갈(Semaphore 없는 Virtual Thread 수만 개). ② DB Connection Timeout 미설정으로 무한 대기. ③ `thenComposeAsync` 실행 Executor Thread 고갈. 진단: `jstack`에서 BLOCKED 상태 Thread·DB Driver Stack 확인. `jcmd VM.native_memory`에서 Thread 수 확인. Deadline 전파: `CompletableFuture.supplyAsync(() -> auth(req), vtExecutor).orTimeout(500, MILLISECONDS).thenComposeAsync(userId -> loadPlayer(userId), vtExecutor).orTimeout(700, MILLISECONDS)` — 각 단계별 누적 Deadline 설정. 또는 `Instant deadline`을 파라미터로 전달해 각 단계 시작 전 `if (Instant.now().isAfter(deadline)) throw new DeadlineExceededException()` 검사.
 
-### Q6. Generic Type Erasure가 실무에서 문제를 일으키는 경우는 무엇인가요?
-Runtime에 `List<String>`과 `List<Integer>`를 구분할 수 없어 Raw Type으로 넣은 값이 꺼낼 때 `ClassCastException`을 일으킵니다(Heap Pollution). Packet Handler Registry처럼 `Class<T>` Token을 받아 Map에 저장하는 패턴에서 Raw Type 혼용을 주의해야 합니다. `@SuppressWarnings("unchecked")` 없이 Unchecked Cast가 필요하다면 설계를 다시 검토해야 합니다.
+### Q6. 운영 장애 발생 후 5분 안에 GC·Thread·Queue·외부 I/O 관점에서 어떤 지표를 어떤 도구로 먼저 확인합니까?
+1단계(30초): `kubectl top pod` → CPU·메모리 급등 여부. Prometheus `http_request_duration_seconds_p99` → 어느 엔드포인트에서 급등 시작. 2단계(1분): GC Log `Xlog:gc*` → Old 영역 Full GC Pause 시각이 p99 급등과 일치 여부. 3단계(2분): `jstack <pid>` → BLOCKED/WAITING Thread 수·Lock 보유 Thread 스택 확인. 4단계(3분): Executor Queue 길이 Metric(`executor.queue.size`) → Task 누적 추세. 5단계(4분): DB 응답 시간 Metric·외부 API p99. 6단계(5분): JFR `cpu` + `lock` 이벤트 1분 수집 후 JMC로 Hot Method·Lock Contention 분석. 진단 결론을 Slack 채널에 5분 내 초안 공유.
 
 ## 10. 예상 꼬리질문
 
-- JIT Warm-up 없이 서버 초기 응답을 빠르게 하려면 어떤 방법이 있나요?
-- `ConcurrentHashMap.compute`는 왜 `get` 후 `put`보다 안전한가요?
-- `try-with-resources`에서 close 도중 예외가 발생하면 원래 예외는 어떻게 되나요?
-- `thenCompose`와 `thenApply`를 혼용할 때 실행 Thread가 예상과 달라지는 경우는 어떤 경우인가요?
-- G1GC와 ZGC 중 어떤 기준으로 선택하나요?
-- Room Owner 패턴에서 inbox가 가득 찼을 때 Backpressure를 어떻게 처리하나요?
-- Virtual Thread에서 `synchronized` Pinning을 진단하는 방법은 무엇인가요?
+- JIT Warm-up 단축을 위해 CDS(Class Data Sharing)와 AppCDS를 적용하는 절차와 GraalVM AOT 대비 Trade-off는 무엇입니까?
+- `ConcurrentHashMap.compute`가 `get` 후 `put`보다 안전한 이유와 compute 내부에서 DB I/O가 있을 때 발생하는 문제는 무엇입니까?
+- `try-with-resources`에서 `close()` 도중 예외가 발생하면 원래 예외와 close 예외가 어떻게 처리되고 `getSuppressed()`로 어떻게 꺼냅니까?
+- G1GC Full GC 500ms가 발생하는 상황에서 ZGC로 전환하기 전 `G1HeapRegionSize` 조정과 `InitiatingHeapOccupancyPercent` 낮추기를 먼저 시도하는 이유는 무엇입니까?
+- Room Owner 패턴에서 inbox `ArrayBlockingQueue`가 가득 찰 때 Action Drop vs Sender 대기 중 어떤 기준으로 선택하고 Drop 발생 시 Prometheus Alert 임계값은 어떻게 설정합니까?
+- Virtual Thread Pinning과 synchronized Monitor Wait을 동시에 진단할 때 JFR `jdk.VirtualThreadPinned`와 `jdk.JavaMonitorWait` 이벤트를 함께 분석하는 방법은 무엇입니까?
+- 동시성 버그를 CI에서 사전 탐지하기 위해 SpotBugs `@GuardedBy`·Error Prone `@Immutable`·ThreadSafe Annotation 중 어떤 조합을 적용하고 각각의 탐지 범위와 False Positive 비율은 어떻습니까?
 
 ## 11. 30초 모범답변
 > Java 서버는 JVM에서 Bytecode를 실행하고 Hot Path를 JIT 최적화하며 GC로 객체를 회수합니다. 정확성은 equals·hashCode·Generic·Exception·Happens-before 계약에서 나오고, 공유 상태는 synchronized·Atomic·Room Owner 패턴으로 보호합니다. 외부 I/O는 Virtual Thread나 CompletableFuture로 처리하되 DB 연결 같은 외부 자원은 Semaphore로 상한을 둡니다. 운영에서는 GC Pause·Thread·Queue·외부 I/O를 동일 시간축에서 관찰합니다.

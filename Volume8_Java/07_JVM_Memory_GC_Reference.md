@@ -10,10 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- JVM Memory 영역(Heap, Thread Stack, Metaspace, Code Cache, Native Memory)의 역할과 RSS와의 관계를 설명할 수 있다.
-- GC Root 기반 도달 가능성과 세대별 GC(Minor/Major) 동작 원리를 설명할 수 있다.
-- Java Memory Leak의 발생 원인(Global Map·Listener·ThreadLocal 미해제)을 진단하고 해결 방법을 적용할 수 있다.
-- Weak·Soft·Phantom Reference의 회수 시점 차이와 적합한 사용 사례를 설명할 수 있다.
+- 게임 서버 Heap이 24시간 동안 100MB/시간씩 증가하는 현상을 JFR Allocation Profile과 Heap Dump Dominator Tree로 진단하고, Global Map·Listener·ThreadLocal 미해제 중 어느 원인인지 수정 순서를 결정할 수 있다.
+- Container(4GB 제한)가 OOM으로 종료됐는데 Heap이 2GB만 사용 중일 때, Thread Stack·Metaspace·Direct Buffer·Code Cache 관점에서 RSS 초과 원인을 진단하고 JVM 설정을 결정할 수 있다.
+- WeakHashMap으로 세션 캐시를 구현했는데 Cache Miss Rate가 40%를 넘을 때, Weak Reference 회수 시점의 비결정성이 원인임을 파악하고 Caffeine 같은 명시적 크기·TTL 캐시로 교체하는 판단 기준을 결정할 수 있다.
+- 게임 서버 p99 Latency 스파이크가 G1GC Full GC Pause(500ms)와 일치할 때, GC Log에서 Humongous Allocation·Promotion Failure를 분석하고 Heap 조정 대 ZGC 전환이 적합한 시점을 결정할 수 있다.
 
 ## 1. 개요
 JVM은 Heap, Thread Stack, Method Area 성격의 Metadata 영역과 Native Memory를 사용하며 GC는 도달할 수 없는 Heap 객체를 회수한다.
@@ -145,41 +145,41 @@ static Map<UUID, Session> sessions = new HashMap<>(); // Static Field → GC Roo
 Memory 사용량이 예상보다 높을 때 Heap만 확인하지 않는다. `jcmd <pid> VM.native_memory`로 Native Memory Tracking을 확인하고 Thread 수 × Stack Size가 큰 비중을 차지하는지 확인한다. Container OOM은 Heap Dump와 함께 `-Xss` 설정과 Thread 수도 점검한다.
 
 ## 8. 자주 하는 오해
-- Heap 크기를 줄이면 Process RSS가 비례해 줄어든다고 생각한다. RSS에는 Thread Stack, Metaspace, JIT Code Cache, Direct Buffer, Native Library Allocation이 포함된다. Heap만 줄여도 나머지 영역이 크면 RSS는 크게 감소하지 않는다.
-- GC가 사용하지 않는 모든 객체를 자동으로 회수한다고 생각한다. GC는 참조 도달 가능성 기준으로 회수한다. Global Map·Static Field·Listener·ThreadLocal이 객체를 계속 참조하면 논리적으로 불필요해도 회수되지 않는다(논리적 Memory Leak).
-- WeakReference가 일반 캐시의 좋은 대체제라고 생각한다. Weak Reference는 GC 시점이 비결정적이어서 캐시 크기와 TTL을 제어할 수 없다. 명시적 크기 제한과 TTL이 있는 캐시(Guava Cache, Caffeine 등)가 예측 가능하다.
-- Young Generation에서 살아남으면 즉시 Old로 이동한다고 생각한다. 생존 횟수(Tenuring Threshold, 기본 15회)를 초과해야 Old로 Promote된다. 중간에 Survivor Space를 오가며 단수명 객체인지 판별한다.
-- 큰 Heap이 항상 성능에 유리하다고 생각한다. Heap이 클수록 GC 회수 대상이 많아 Pause가 길어질 수 있고, 장애 시 Heap Dump 크기가 커져 진단이 어려워진다. Container 메모리 제한, Native Memory Headroom을 포함해 적절히 설정한다.
-- `System.gc()`를 호출하면 즉시 GC가 실행된다고 생각한다. `System.gc()`는 JVM에 GC를 권고할 뿐 즉시 실행을 보장하지 않는다. `-XX:+DisableExplicitGC`로 무시할 수도 있다.
-- Metaspace는 무제한으로 늘어나므로 OOM이 발생하지 않는다고 생각한다. Metaspace는 Native Memory를 사용하지만 `-XX:MaxMetaspaceSize`로 상한을 지정하지 않으면 Native Memory를 소진할 수 있다. 동적 Class Loading이 많은 환경(플러그인 서버 등)에서는 Class 언로드와 상한을 확인한다.
+- **Heap 크기를 줄이면 Process RSS가 비례해 줄어든다고 생각한다.** RSS에는 Thread Stack, Metaspace, JIT Code Cache, Direct Buffer, Native Library Allocation이 포함된다. Heap만 줄여도 나머지 영역이 크면 RSS는 크게 감소하지 않는다.
+- **GC가 사용하지 않는 모든 객체를 자동으로 회수한다고 생각한다.** GC는 참조 도달 가능성 기준으로 회수한다. Global Map·Static Field·Listener·ThreadLocal이 객체를 계속 참조하면 논리적으로 불필요해도 회수되지 않는다(논리적 Memory Leak).
+- **WeakReference가 일반 캐시의 좋은 대체제라고 생각한다.** Weak Reference는 GC 시점이 비결정적이어서 캐시 크기와 TTL을 제어할 수 없다. 명시적 크기 제한과 TTL이 있는 캐시(Guava Cache, Caffeine 등)가 예측 가능하다.
+- **Young Generation에서 살아남으면 즉시 Old로 이동한다고 생각한다.** 생존 횟수(Tenuring Threshold, 기본 15회)를 초과해야 Old로 Promote된다. 중간에 Survivor Space를 오가며 단수명 객체인지 판별한다.
+- **큰 Heap이 항상 성능에 유리하다고 생각한다.** Heap이 클수록 GC 회수 대상이 많아 Pause가 길어질 수 있고, 장애 시 Heap Dump 크기가 커져 진단이 어려워진다. Container 메모리 제한, Native Memory Headroom을 포함해 적절히 설정한다.
+- **`System.gc()`를 호출하면 즉시 GC가 실행된다고 생각한다.** `System.gc()`는 JVM에 GC를 권고할 뿐 즉시 실행을 보장하지 않는다. `-XX:+DisableExplicitGC`로 무시할 수도 있다.
+- **Metaspace는 무제한으로 늘어나므로 OOM이 발생하지 않는다고 생각한다.** Metaspace는 Native Memory를 사용하지만 `-XX:MaxMetaspaceSize`로 상한을 지정하지 않으면 Native Memory를 소진할 수 있다. 동적 Class Loading이 많은 환경(플러그인 서버 등)에서는 Class 언로드와 상한을 확인한다.
 
 ## 9. 면접 질문
-### Q1. JVM Memory 영역을 설명해 주세요.
-Heap은 대부분의 객체가 생성되는 GC 관리 영역이고, Thread별 Stack은 메서드 호출 Frame과 로컬 변수를 저장합니다. Metaspace(Java 8+)는 Class Metadata를 Native Memory에 저장하고, Code Cache는 JIT 컴파일된 Native Code를 저장합니다. Direct Buffer·JNI Allocation 같은 Native Memory도 있어 Process RSS는 Heap보다 크게 나타납니다.
+### Q1. 게임 서버를 24시간 운영하니 Heap 사용량이 100MB/시간씩 증가하고 Full GC 후에도 완전히 회수되지 않습니다. 어떤 순서로 진단합니까?
+1단계: GC Log(`-Xlog:gc*`)에서 Old 영역 증가 추세를 시간축으로 확인. 2단계: `jmap -dump:format=b,file=heap.hprof <pid>` 또는 JFR으로 Heap Dump 수집. 3단계: Eclipse MAT Dominator Tree에서 Retained Heap이 큰 객체의 Root 참조 Chain 추적. 4단계: 종료된 Session 객체가 EventBus·Global Map·ThreadLocal에 남아 있는지 확인. 5단계: Session 종료 핸들러에 `listeners.remove(sessionId)`, `threadLocal.remove()` 추가하고 Allocation Profile(JFR)으로 누가 많이 생성하는지 추가 확인.
 
-### Q2. GC Root와 Reachability는 무엇인가요?
-GC Root는 실행 중인 Thread의 Stack 변수, Static Field, JNI Reference 등입니다. GC는 Root에서 강한 참조로 도달 가능한 객체를 살리고 나머지를 회수합니다. Root에서 참조 Chain이 끊어진 객체만 회수 대상이 되므로 Global Map·Listener가 계속 참조하면 사용하지 않아도 회수되지 않습니다.
+### Q2. Container(4GB 제한)가 OOM으로 kill됐는데 Heap은 2GB만 사용 중입니다. RSS가 제한에 근접한 이유와 진단 방법은 무엇입니까?
+RSS = Heap + Thread Stack(`-Xss` × Thread 수) + Metaspace + Code Cache + Direct Buffer + Native Library. 진단: `jcmd <pid> VM.native_memory` → 각 영역별 사용량 확인. Thread 수 500개, `-Xss1m` 기본값이면 Thread Stack만 500MB. Direct Buffer를 대량 사용하면 추가 수 GB 가능. 조치: `-Xss256k`로 Stack 감소, `-XX:MaxMetaspaceSize=256m`, `-XX:MaxDirectMemorySize=512m` 설정, Container 설정은 Heap + Native 합산 + Headroom 200m으로 결정.
 
-### Q3. Java에서도 Memory Leak이 발생하나요?
-GC가 있어도 논리적 Memory Leak은 발생합니다. 종료된 Session 객체를 Global Map·EventBus·ThreadLocal이 계속 참조하면 GC Root에서 도달 가능 상태가 유지되어 회수되지 않습니다. Heap Dump의 Dominator Tree로 Retained Heap이 큰 객체가 어디서 참조되는지 Root Chain을 추적합니다.
+### Q3. Heap Dump Dominator Tree 분석 결과 `SessionEventHandler` 인스턴스 5만 개가 Old 영역에 누적되어 GC가 회수하지 못합니다. 어떤 구조가 붙잡고 있을지 의심할 수 있는 패턴과 해제 방법은 무엇입니까?
+의심 패턴: ① Static `EventBus.listeners` Map에 sessionId → Handler 매핑 잔류. ② `ScheduledExecutorService` Runnable이 Handler 참조를 보유. ③ Thread Pool ThreadLocal에 Handler 참조 누적. Eclipse MAT에서 해당 인스턴스의 Incoming References를 따라 GC Root까지 Chain 확인. 해제: Session 종료 시 `EventBus.unsubscribe(sessionId)`, `future.cancel(false)`, `threadLocal.remove()` 호출. 재발 방지: Session 종료 이벤트에 cleanup callback 등록.
 
-### Q4. Young·Old Generation의 목적은 무엇인가요?
-세대 가설(대부분 객체는 짧게 산다)을 기반으로 새 객체를 Eden에서 자주 효율적으로 회수하고(Minor GC), Tenuring Threshold를 넘긴 오래된 객체를 Old로 Promote해 별도 관리합니다. Minor GC는 Young 영역만 스캔해 Old GC보다 빠르고 Pause가 짧습니다.
+### Q4. 게임 서버 p99 Latency 스파이크가 GC Log 분석 결과 G1GC Full GC Pause(500ms)와 정확히 일치합니다. Full GC 원인 진단과 단기·장기 조치 방법은 무엇입니까?
+원인 확인: GC Log에서 `GC(Full) cause` 항목 확인. Humongous Allocation(Region Size의 50% 초과 객체)이면 `-XX:G1HeapRegionSize` 2배 증가로 기준 상향. Promotion Failure(Old 공간 부족)이면 Heap 증설(-Xmx 확대) 또는 Allocation Rate 감소(Object Pool). Concurrent Mark 실패이면 `-XX:InitiatingHeapOccupancyPercent` 낮춰 GC 조기 시작. 장기: JFR으로 Humongous Object 생성 위치 확인 후 재사용 가능하면 Pool 적용. Full GC가 여전하면 ZGC 전환 검토(p99 수 ms).
 
-### Q5. Heap과 Process RSS가 다른 이유는 무엇인가요?
-RSS(Resident Set Size)에는 Heap 외에 Thread Stack(`-Xss` × Thread 수), Metaspace(Class Metadata), JIT Code Cache, Direct Buffer(`-XX:MaxDirectMemorySize`), Native Library Allocation이 모두 포함됩니다. Container 메모리 제한 설정 시 이 모든 항목을 합산한 값을 기준으로 여유(Headroom)를 두어야 합니다.
+### Q5. WeakHashMap으로 세션 메타데이터를 캐시했는데 GC 후 캐시가 자주 비워져 Cache Miss Rate가 40%를 넘습니다. 문제 원인과 대안은 무엇입니까?
+WeakHashMap Key에 대한 강한 참조가 끊어지면 다음 Minor GC에서 즉시 회수됩니다. 게임 서버에서 Session 객체가 Tick 처리 중에만 Stack에 참조되고 이후 사라지면 WeakHashMap 캐시도 즉시 무효화됩니다. 대안: ① Caffeine `maximumSize(10_000).expireAfterAccess(10, MINUTES)` → 크기·TTL 명시적 제어. ② Session 종료 시 `cache.invalidate(sessionId)` 호출하는 일반 Map. ③ Cache Miss Rate를 Metric으로 수집해 임계값 초과 시 알람 설정.
 
-### Q6. GC Collector 선택 기준은 무엇인가요?
-Pause 목표, Throughput, Heap 크기, JDK 버전을 기준으로 선택합니다. 대용량 힙에서 예측 가능한 짧은 Pause가 필요하면 G1GC(Java 9+ 기본)를 사용하고, 수 ms 이하 극저지연이 필요하면 ZGC(Java 15+ 안정)를 고려합니다. GC Log에서 Allocation Rate, Pause 원인, Old 영역 증가와 Promotion Failure 징후를 시간축으로 비교합니다.
+### Q6. Metaspace 크기가 점진적으로 증가하다 `-XX:MaxMetaspaceSize` 없이 서버가 OOM으로 종료됩니다. 원인과 방지 방법은 무엇입니까?
+원인: 동적 Class Loading이 많고 ClassLoader가 회수되지 않음. 게임 Plugin 시스템, 스크립팅 엔진(Groovy), CGLIB·Mockito 같은 바이트코드 생성 라이브러리가 대표적 원인. 진단: `jcmd <pid> VM.native_memory` Metaspace 항목 추세 확인, MAT에서 ClassLoader 인스턴스가 GC Root에서 참조되는 Chain 추적. 방지: `-XX:MaxMetaspaceSize=512m` 설정 후 OOM 알람. ClassLoader Leak 제거: Plugin ClassLoader를 Plugin 비활성화 시 명시적 해제, 강한 참조 제거 후 WeakReference로 보유.
 
 ## 10. 예상 꼬리질문
-- Heap 크기를 줄여도 RSS가 감소하지 않을 때 어디를 확인하나요? (Thread Stack, Metaspace, Direct Buffer)
-- GC Root에는 어떤 종류가 포함되나요? Static Field, ThreadLocal도 포함되나요?
-- Java Memory Leak을 진단하는 도구와 순서를 설명해 주세요. (JFR → Heap Dump → MAT Dominator)
-- Weak Reference와 Soft Reference의 회수 시점은 어떻게 다른가요?
-- G1GC와 ZGC의 가장 큰 차이점은 무엇인가요?
-- Metaspace OOM이 발생하는 원인과 해결 방법은 무엇인가요?
-- ThreadLocal을 사용한 후 반드시 `remove()`를 호출해야 하는 이유는 무엇인가요?
+- G1GC Humongous Object가 반복 생성될 때 `G1HeapRegionSize` 조정과 Object Pool 중 어떤 기준으로 선택합니까? (Allocation Rate, 객체 생명주기)
+- 게임 Tick마다 1MB짜리 `byte[]` 배열을 생성하면 GC 세대 이동에 어떤 영향을 주고 JFR Allocation Profile로 어떻게 탐지합니까?
+- Thread Pool에서 `ThreadLocal.remove()` 없이 Thread를 반환하면 어떤 Memory Leak이 발생하고, Spring `RequestScope`는 어떻게 안전하게 관리합니까?
+- `Phantom Reference`·`Cleaner` API와 try-with-resources 중 Native 자원(Direct Buffer, File Handle) 정리에 어떤 것을 선택하고 그 이유는 무엇입니까?
+- ZGC로 전환 후 p99 Latency가 5ms 이하가 되었지만 Throughput이 10~15% 감소했습니다. 이 Trade-off를 수용할 기준은 무엇입니까?
+- Custom ClassLoader가 Metaspace Leak을 일으킬 때 Eclipse MAT에서 ClassLoader 인스턴스를 추적하는 방법과 회수 조건은 무엇입니까?
+- `jcmd VM.native_memory`에서 Reserved와 Committed의 차이는 무엇이고, RSS와 어느 쪽을 비교해야 합니까?
 
 ## 11. 30초 모범답변
 > JVM GC는 Reference Count가 아니라 GC Root에서의 도달 가능성을 기준으로 Heap 객체를 회수합니다. GC가 있어도 Global Map·Listener·ThreadLocal이 객체를 계속 참조하면 논리적 Memory Leak이 발생합니다. Process RSS는 Heap 외에 Thread Stack, Metaspace, Code Cache, Direct Buffer까지 포함하므로 Heap만 줄여도 RSS는 크게 감소하지 않을 수 있습니다.

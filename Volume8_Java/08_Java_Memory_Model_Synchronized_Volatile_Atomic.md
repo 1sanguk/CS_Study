@@ -10,10 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- Java Memory Model(JMM)의 Happens-before 관계와 멀티코어에서 가시성 보장이 필요한 이유를 설명할 수 있다.
-- synchronized(상호 배제+가시성), volatile(가시성만), Atomic(CAS 원자 연산)의 차이와 한계를 설명할 수 있다.
-- volatile count++가 안전하지 않은 이유와 복합 불변식 보호에 적합한 동기화 방법을 선택할 수 있다.
-- 게임 서버 Room 상태 소유권 패턴으로 Lock 범위를 최소화하는 설계를 적용할 수 있다.
+- 게임 서버 킬 카운터를 20개 Worker Thread가 동시 갱신할 때 volatile count++ Lost Update가 발생하는 이유를 JMM Read-Modify-Write 비원자성으로 진단하고 AtomicInteger vs synchronized 선택 기준을 결정할 수 있다.
+- HP·alive 두 Field를 동시 갱신해야 하는 복합 불변식에서 개별 AtomicInteger 두 연산 사이의 불일치 구간을 파악하고 AtomicReference<ImmutableState> 교체 vs Lock 사용 중 적합한 방식을 결정할 수 있다.
+- SessionManager constructor에서 EventBus.register(this) this escape가 있을 때 final Field가 0으로 보이는 버그를 진단하고 static Factory 메서드로 안전한 공개 구조로 재작성할 수 있다.
+- Room 상태를 I/O Thread와 Game Worker가 동시 접근하는 구조에서 synchronized Monitor Wait p99 급등 원인을 확인하고 단일 Worker Owner + volatile RoomSnapshot 교체 패턴으로 전환 여부를 결정할 수 있다.
 
 ## 1. 개요
 Java Memory Model은 Thread 간 Read·Write가 언제 보이는지 정의하고 synchronized, volatile과 Atomic API는 Happens-before 관계와 원자성을 구성한다.
@@ -160,41 +160,41 @@ class SharedCounter {
 공유 지표(접속자 수, 총 패킷 카운트)는 `AtomicLong`으로 관리한다. synchronized는 여러 필드가 동시에 바뀌어야 일관성이 보장되는 영역(예: Ranking Map + 개인 기록)에 사용하고, 범위를 최소화하고 Lock 안에서 외부 호출을 넣지 않는다.
 
 ## 8. 자주 하는 오해
-- volatile이면 count++ 같은 복합 연산도 원자적이라고 생각한다. `count++`는 Read→계산→Write 세 단계로 원자적이지 않다. 두 Thread가 동시에 같은 값을 읽어 증가 하나를 잃는 Lost Update가 발생한다. AtomicInteger의 `incrementAndGet` 또는 synchronized를 사용한다.
-- synchronized는 가시성만 제공한다고 생각한다. synchronized는 상호 배제(한 번에 한 Thread만 임계 구역 진입)와 가시성(Monitor Unlock→Lock 사이 Happens-before) 두 가지를 모두 제공한다.
-- 여러 Atomic 연산을 연속으로 사용하면 복합 불변식도 안전하다고 생각한다. 두 Atomic 연산 사이에 다른 Thread가 개입할 수 있다. 복합 불변식은 `AtomicReference<Immutable상태>`로 교체하거나 Lock으로 보호한다.
-- Happens-before는 실제 시계 순서를 의미한다고 생각한다. Happens-before는 Memory Model의 가시성 관계이며 물리적 시간 순서가 아니다. 같은 Monitor Unlock은 이후 Lock보다, volatile Write는 이후 같은 변수 Read보다 앞서는 관계다.
-- final Field는 항상 다른 Thread에 안전하게 보인다고 생각한다. final Field의 안전한 공개는 Constructor가 완료된 후 Reference가 공개될 때 보장된다. Constructor 안에서 `this`를 다른 Thread에 노출(this escape)하면 final Field도 0이나 null로 보일 수 있다.
-- CAS(Atomic 연산)는 항상 synchronized보다 빠르다고 생각한다. CAS는 경합이 낮을 때 빠르지만 경합이 높아지면 Retry가 증가해 CPU 낭비가 커진다. Lock은 경합 시 Thread를 대기시켜 CPU 낭비가 없다. 경합 수준을 측정해 선택한다.
-- ThreadLocal을 사용하면 동시성 문제가 완전히 해결된다고 생각한다. ThreadLocal은 Thread 간 공유를 없애지만 Thread Pool 환경에서 이전 요청의 값이 남아 있을 수 있다. 요청 처리 후 반드시 `threadLocal.remove()`를 호출해야 한다.
+- **volatile이면 count++ 같은 복합 연산도 원자적이라고 생각한다.** `count++`는 Read→계산→Write 세 단계로 원자적이지 않다. 두 Thread가 동시에 같은 값을 읽어 증가 하나를 잃는 Lost Update가 발생한다. AtomicInteger의 `incrementAndGet` 또는 synchronized를 사용한다.
+- **synchronized는 가시성만 제공한다고 생각한다.** synchronized는 상호 배제(한 번에 한 Thread만 임계 구역 진입)와 가시성(Monitor Unlock→Lock 사이 Happens-before) 두 가지를 모두 제공한다.
+- **여러 Atomic 연산을 연속으로 사용하면 복합 불변식도 안전하다고 생각한다.** 두 Atomic 연산 사이에 다른 Thread가 개입할 수 있다. 복합 불변식은 `AtomicReference<Immutable상태>`로 교체하거나 Lock으로 보호한다.
+- **Happens-before는 실제 시계 순서를 의미한다고 생각한다.** Happens-before는 Memory Model의 가시성 관계이며 물리적 시간 순서가 아니다. 같은 Monitor Unlock은 이후 Lock보다, volatile Write는 이후 같은 변수 Read보다 앞서는 관계다.
+- **final Field는 항상 다른 Thread에 안전하게 보인다고 생각한다.** final Field의 안전한 공개는 Constructor가 완료된 후 Reference가 공개될 때 보장된다. Constructor 안에서 `this`를 다른 Thread에 노출(this escape)하면 final Field도 0이나 null로 보일 수 있다.
+- **CAS(Atomic 연산)는 항상 synchronized보다 빠르다고 생각한다.** CAS는 경합이 낮을 때 빠르지만 경합이 높아지면 Retry가 증가해 CPU 낭비가 커진다. Lock은 경합 시 Thread를 대기시켜 CPU 낭비가 없다. 경합 수준을 측정해 선택한다.
+- **ThreadLocal을 사용하면 동시성 문제가 완전히 해결된다고 생각한다.** ThreadLocal은 Thread 간 공유를 없애지만 Thread Pool 환경에서 이전 요청의 값이 남아 있을 수 있다. 요청 처리 후 반드시 `threadLocal.remove()`를 호출해야 한다.
 
 ## 9. 면접 질문
-### Q1. Java Memory Model은 왜 필요한가요?
-멀티코어 환경에서 Compiler와 CPU가 성능 최적화를 위해 명령어를 재배치하거나 CPU Cache를 사용하기 때문에 Thread 간 관찰 순서를 Source 코드 순서만으로 판단할 수 없습니다. JMM은 `synchronized`, `volatile`, `final` 등을 통해 Happens-before 관계를 정의해 가시성과 순서를 보장합니다.
+### Q1. 게임 서버 접속자 수 카운터를 50개 Thread가 동시 증가시키는데 실제 접속 수보다 낮게 표시됩니다. `volatile int count`를 사용 중입니다. 원인 진단과 수정 방법은 무엇입니까?
+원인: `volatile`은 가시성만 보장하고 `count++`의 Read→계산→Write 세 단계를 원자화하지 않습니다. 50개 Thread가 동시에 같은 값을 읽어 각각 +1을 쓰면 Lost Update가 발생합니다. 수정: ① 단순 카운터라면 `AtomicLong.incrementAndGet()` 사용. ② 경합 극심 시 `LongAdder.increment()` + 읽기 시 `sum()` 사용(근사값 허용). ③ 카운터 갱신과 다른 상태가 함께 바뀌어야 하면 `synchronized` 블록으로 묶어 복합 불변식 보호.
 
-### Q2. synchronized와 volatile의 차이는 무엇인가요?
-synchronized는 Monitor로 임계 구역에 한 번에 한 Thread만 진입하는 상호 배제와 가시성을 동시에 제공합니다. volatile은 임계 구역 없이 해당 변수의 Read·Write에만 가시성과 순서를 보장하고 상호 배제가 없어 복합 연산을 원자화하지 않습니다.
+### Q2. 플레이어 사망 처리에서 HP 0이 되면 alive=false로 함께 변경해야 하는데 "hp=0이면서 alive=true"인 순간 버그가 발생합니다. `AtomicInteger hp`와 `AtomicBoolean alive`를 각각 사용 중입니다. 근본 원인과 수정 방법은 무엇입니까?
+원인: 두 Atomic 연산 사이(hp CAS 후 ~ alive CAS 전)에 다른 Thread가 개입할 수 있습니다. 각 Field의 원자성은 보장되지만 두 Field의 일관성은 보장되지 않습니다. 수정: `AtomicReference<PlayerState>` + `record PlayerState(int hp, boolean alive) {}`로 상태를 Immutable 객체로 묶어 한 번의 CAS로 교체. `state.updateAndGet(s -> s.hp() > 0 ? s : new PlayerState(0, false))` 형태로 적용. 두 Field가 항상 일관된 Snapshot으로 읽힙니다.
 
-### Q3. volatile count++가 안전하지 않은 이유는 무엇인가요?
-`count++`는 Read→+1 계산→Write 세 단계로 이루어져 원자적이지 않습니다. 두 Thread가 같은 값을 동시에 읽고 각각 +1을 써서 결과적으로 증가 하나가 사라지는 Lost Update가 발생합니다. `AtomicInteger.incrementAndGet()`(CAS) 또는 synchronized를 사용합니다.
+### Q3. SessionManager Constructor에서 `EventBus.register(this)`를 호출한 다음 `final int sessionId`를 초기화합니다. 정적 분석 도구(SpotBugs CT_CONSTRUCTOR_INVOKES_OVERRIDABLE_METHOD, SonarQube)가 경고를 냅니다. 실제 버그 발생 시나리오와 수정 방법은 무엇입니까?
+시나리오: `EventBus.register(this)` 직후 다른 Thread가 EventBus를 통해 Session을 조회하면 `sessionId`가 아직 할당되지 않아 0으로 보입니다. final Field의 안전한 공개는 Constructor 완료 후 Reference 공개 시 보장되는데 this escape가 그 전에 공개합니다. 수정: ① static Factory 메서드로 변경 — Constructor를 private으로, `SessionManager.create()` 안에서 `new SessionManager()` 완료 후 `EventBus.register(session)` 호출. ② 또는 lazy 등록 — 최초 사용 시 `registerOnce()` 패턴.
 
-### Q4. CAS의 장단점은 무엇인가요?
-CAS(Compare-And-Swap)는 현재 값이 기대값과 같을 때만 새 값으로 교체하는 하드웨어 원자 명령입니다. Blocking 없이 단일 값을 조건부로 갱신할 수 있어 경합이 낮을 때 Lock보다 빠릅니다. 그러나 경합이 높으면 Retry가 증가해 CPU 낭비가 커지고, 여러 필드를 함께 갱신하는 복합 불변식 표현이 어렵습니다.
+### Q4. Room 상태 접근에 `synchronized(this)`를 걸었는데 I/O Thread가 100개로 늘자 async-profiler에서 Monitor Wait이 70%를 차지하고 p99 Latency가 50ms로 급등합니다. 원인 진단과 설계 개선 방법은 무엇입니까?
+원인: 100개 I/O Thread가 모두 같은 Room 객체의 Monitor를 획득하려 경합합니다. synchronized는 공정성 없이 대기하므로 특정 Thread는 수십 ms를 기다립니다. 개선: ① **단일 Worker Owner 패턴** — Room 상태를 담당 Worker Thread 하나만 변경. I/O Thread는 상태 변경을 Message Queue로 전달, Worker가 직렬 처리. ② **volatile Snapshot 교체** — Worker가 Tick마다 `volatile RoomSnapshot latestSnapshot`을 교체, I/O Thread는 volatile read만 수행 → Lock 없이 읽기. ③ Snapshot 내부 Collection은 `List.copyOf()`로 Immutable화해 Thread-safe 보장.
 
-### Q5. 안전한 객체 공개(Safe Publication)란 무엇인가요?
-객체의 초기화 결과가 다른 Thread에 올바르게 보이도록 Happens-before를 통해 Reference를 전달하는 것입니다. final Field를 사용하거나 volatile Reference에 저장하거나 synchronized 블록을 통해 공개합니다. Constructor에서 `this`를 다른 Thread에 노출(this escape)하면 초기화가 완료되기 전에 다른 Thread가 접근할 수 있어 안전하지 않습니다.
+### Q5. 세션 통계를 관리하는 코드에서 `ConcurrentHashMap.get(sessionId)` 후 값이 없으면 `put(sessionId, new Stats())`을 호출했는데 Stats 객체가 두 개 생성되는 Race Condition이 발생합니다. Data Race와 Race Condition의 차이와 올바른 수정 방법은 무엇입니까?
+Data Race: JMM 차원에서 동기화 없이 두 Thread가 같은 변수에 접근하고 하나가 Write인 경우. ConcurrentHashMap은 Thread-safe하므로 Data Race는 없습니다. Race Condition: 동기화가 있어도 check-then-act 연산 사이 다른 Thread가 개입해 논리적으로 잘못된 결과가 나오는 버그. `get`이 null을 반환한 시점과 `put` 시점 사이에 다른 Thread가 먼저 `put`할 수 있습니다. 수정: `computeIfAbsent(sessionId, k -> new Stats())` 한 번의 원자적 연산으로 교체. `merge(sessionId, delta, Stats::add)`도 갱신에 활용 가능.
 
-### Q6. Data Race와 Race Condition의 차이는 무엇인가요?
-Data Race는 동기화 없이 두 Thread가 같은 변수에 접근하고 그 중 하나가 Write일 때 발생하는 JMM 위반입니다. Race Condition은 동기화가 있어도 연산 순서에 따라 잘못된 결과가 나오는 논리적 버그입니다. 예를 들어 ConcurrentHashMap의 `get`→`put`은 Data Race는 없지만 Race Condition(check-then-act 문제)이 발생할 수 있습니다.
+### Q6. Game Worker가 매 Tick마다 `volatile RoomSnapshot latestSnapshot`을 새 객체로 교체하고 I/O Thread가 읽는데 Snapshot 내부 `List<PlayerState> players`가 오래된 값으로 보입니다. 원인과 Immutable Snapshot 설계 방법은 무엇입니까?
+원인: `volatile`은 Reference 자체의 가시성만 보장합니다. 새 Snapshot 객체를 가리키는 Reference 교체는 I/O Thread에 즉시 보이지만, Snapshot 내부 `players` List가 Mutable이라면 Worker가 List를 수정하는 동안 I/O Thread가 중간 상태를 읽을 수 있습니다. 수정: Snapshot을 완전 Immutable로 설계. `record RoomSnapshot(List<PlayerState> players, long tickId) {}` + `List.copyOf(players)` 사용. Snapshot 객체 생성 완료 후 `latestSnapshot = snapshot` 한 번만 쓰면 내부 필드도 안전하게 공개됩니다(JMM final Field 안전 공개 규칙).
 
 ## 10. 예상 꼬리질문
-- Happens-before가 성립하지 않으면 어떤 현상이 발생할 수 있나요? (Stale Read, 재배치)
-- AtomicReference와 synchronized의 차이는 어떤 상황에서 나타나나요?
-- ReentrantLock을 synchronized 대신 사용하는 이유는 무엇인가요? (tryLock, Timeout, fairness)
-- Deadlock 발생 조건은 무엇이고 어떻게 방지하나요?
-- ThreadLocal을 Thread Pool에서 사용할 때 주의해야 할 점은 무엇인가요?
-- CAS의 ABA 문제란 무엇이고 어떻게 해결하나요?
-- volatile Reference로 Snapshot을 교체할 때 Snapshot 내부 필드의 가시성은 어떻게 보장되나요?
+- CAS ABA 문제가 발생하는 게임 서버 시나리오(Session 풀 재사용)와 `AtomicStampedReference`로 Stamp를 같이 교체해 해결하는 방법은 무엇입니까?
+- Tick 루프에서 `ReentrantLock.tryLock(0, MILLISECONDS)`으로 Lock 획득 실패 시 어떤 전략을 취하고(스킵 vs 큐 적재), fairness=true 설정이 Throughput에 미치는 영향은 무엇입니까?
+- Room 100개를 FixedThreadPool(n=CPU 코어 수) vs ForkJoinPool 중 어떤 기준으로 선택하고 async-profiler `--event cpu` 결과로 어떻게 병목을 검증합니까?
+- `volatile RoomSnapshot`을 교체할 때 Snapshot 내부 `List`를 `List.copyOf()`로 Immutable화하는 비용이 크면 CopyOnWriteArrayList vs Epoch-based 읽기 전용 공개 중 어떤 대안을 선택합니까?
+- `ThreadLocal<ByteBuffer>`을 Tick마다 재사용하는 서버에서 `clear()` 누락으로 이전 Tick 데이터가 혼입됐을 때 JFR Custom Event 또는 `-XX:+PrintStringDeduplicationStatistics`로 어떻게 탐지합니까?
+- `synchronized` 블록 안에서 DB 조회 RPC 호출이 있어 p99 Latency가 200ms를 넘습니다. Deadlock은 없는데 Monitor Wait이 지배적일 때 Lock 범위를 어떻게 축소하고 async-profiler Lock Contention 보고서로 어떻게 검증합니까?
+- `AtomicLong` vs `LongAdder` 선택 기준이 되는 경합 임계값을 JMH `@Group`으로 측정하는 방법과 접속자 카운터에서 `LongAdder.sum()`의 근사값을 허용할 수 있는 조건은 무엇입니까?
 
 ## 11. 30초 모범답변
 > Java Memory Model은 Thread 간 가시성과 순서를 Happens-before로 정의합니다. synchronized는 상호 배제와 가시성을, volatile은 단일 변수 가시성만 제공합니다. volatile count++는 Read-Modify-Write가 원자적이지 않아 Lost Update가 발생하므로 AtomicInteger 또는 synchronized를 사용합니다. 복합 불변식은 Lock 또는 Immutable 상태를 AtomicReference로 교체하는 방식으로 보호합니다.

@@ -10,10 +10,10 @@ importance: 5
 > 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
-- ThreadPoolExecutor의 Core/Max Thread·Queue·Rejection Policy 설계 원칙과 Shutdown 순서를 설명할 수 있다.
-- CompletableFuture의 thenApply·thenCompose 차이, 실행 Thread 선택, 예외 전파·Cancellation 처리를 설명할 수 있다.
-- Virtual Thread(JDK 21)가 해결하는 문제와 CPU-bound·외부 자원(DB Connection Pool, Rate Limit) 한계를 설명할 수 있다.
-- 게임 서버에서 I/O-bound 작업(로그인 외부 API)과 CPU-bound 작업(Pathfinding)을 분리하는 설계를 설명할 수 있다.
+- ThreadPoolExecutor에서 무제한 LinkedBlockingQueue로 Task가 누적되고 maximumPoolSize가 작동하지 않는 원인을 진단하고 ArrayBlockingQueue Bounded Queue 전환 여부를 결정할 수 있다.
+- 로그인 파이프라인에서 thenApply 안에 DB 조회를 넣어 Common Pool이 고갈되는 문제를 진단하고 thenApplyAsync(fn, ioExecutor)로 실행 Thread를 분리하는 방향을 결정할 수 있다.
+- Virtual Thread 도입 후 synchronized 블록 내 I/O 대기로 Pinning이 발생하는 구간을 `-Djdk.tracePinnedThreads=full`로 확인하고 ReentrantLock 교체 여부를 결정할 수 있다.
+- Fire-and-forget CompletableFuture에서 예외가 조용히 사라지는 구조를 파악하고 whenComplete 예외 관찰 또는 전역 UnhandledExceptionHandler 등록으로 수정 방향을 결정할 수 있다.
 
 ## 1. 개요
 Java에서 동시성 코드를 작성할 때 `new Thread()`를 직접 호출하면 생성·종료·예외·자원 상한을 각자 관리해야 한다. Executor는 Task 제출과 Thread 실행 정책을 분리하고, CompletableFuture는 비동기 결과의 조합·예외 전파를 체계화한다. Virtual Thread(JDK 21)는 I/O 대기가 많은 Thread-per-request 코드를 Platform Thread 수천 개 없이 구현하게 해 준다.
@@ -219,33 +219,33 @@ void shutdown(ExecutorService pool) throws InterruptedException {
 
 ## 9. 면접 질문
 
-### Q1. Executor를 직접 Thread 생성보다 선호하는 이유는 무엇인가요?
-Task 제출과 Thread 실행 정책(수·Queue·Rejection·Shutdown)을 분리해 자원을 중앙에서 제한할 수 있기 때문입니다. `new Thread()` 직접 호출은 개수 상한·Graceful Shutdown이 없어 OOM·요청 유실 위험이 있습니다.
+### Q1. 로그인 서버에서 `ThreadPoolExecutor(corePoolSize=10, maximumPoolSize=50, LinkedBlockingQueue)` 설정인데 Thread 수가 10개에서 늘어나지 않고 Queue에 Task가 1만 개 쌓입니다. 원인과 수정 방법은 무엇입니까?
+원인: `LinkedBlockingQueue`는 용량 제한이 없어 Queue가 항상 비어 있는 것처럼 보입니다. `ThreadPoolExecutor`는 Queue가 **가득 찼을 때**만 maximumPoolSize까지 Thread를 추가하므로 무제한 Queue에서 Thread 수는 corePoolSize=10에서 늘어나지 않습니다. Task는 Queue에 무한 누적되고 지연이 증가합니다. 수정: `ArrayBlockingQueue(200)`으로 교체 → Queue가 200개 찰 때 Thread 추가 → 50개 초과 시 `CallerRunsPolicy`로 Rejection. 더불어 로그인 작업이 I/O-bound라면 `newVirtualThreadPerTaskExecutor()`로 전환 검토.
 
-### Q2. thenApply와 thenCompose의 차이는 무엇인가요?
-`thenApply(fn)`은 결과를 동기 변환해 `CompletableFuture<U>`를 반환하고, `thenCompose(fn)`은 fn 자체가 `CompletableFuture<U>`를 반환할 때 중첩 없이 평탄화합니다. DB 조회처럼 다음 단계도 비동기라면 `thenCompose`를 써야 `CompletableFuture<CompletableFuture<U>>`가 생기지 않습니다.
+### Q2. 로그인 인증 체인에서 `thenApply` 안에 DB 조회를 넣었더니 Common Fork/Join Pool 스레드가 고갈되고 다른 CompletableFuture 처리까지 지연됩니다. 원인과 수정 방법은 무엇입니까?
+원인: `thenApply(fn)`(Async 접미사 없음)은 이전 Stage를 처리한 Thread에서 fn을 직접 실행합니다. 이전 Stage가 Common Fork/Join Pool에서 완료됐다면 DB Blocking 조회가 그 Pool Thread를 점유합니다. Common Pool 크기(보통 CPU 코어 수)가 모두 Blocking 상태가 되면 새 Task가 대기합니다. 수정: DB 조회를 `thenComposeAsync(res -> loadPlayer(res), ioExecutor)`로 교체. ioExecutor는 `Executors.newVirtualThreadPerTaskExecutor()` 또는 전용 I/O Pool. CPU-bound 변환만 `thenApply`에 남깁니다.
 
-### Q3. CompletableFuture 예외는 어떻게 처리하나요?
-`exceptionally(fn)`은 예외가 발생한 경우에만 처리하고 정상 결과는 통과시킵니다. `handle(fn)`은 정상·예외 모두 받아 분기 처리할 수 있습니다. `whenComplete`는 사이드이펙트용이며 결과를 그대로 통과시킵니다. Fire-and-forget Future는 `whenComplete`로 예외를 반드시 로깅해야 합니다.
+### Q3. Virtual Thread로 전환 후 p95 Latency가 오히려 올라갔습니다. `-Djdk.tracePinnedThreads=full` 로그에서 `synchronized` 블록 내 Pinning이 초당 수백 건 발생합니다. 원인 진단과 수정 방법은 무엇입니까?
+원인: Virtual Thread는 `synchronized` 블록 내에서 I/O 대기 시 Platform Thread에 Pinned(고정)돼 unmount되지 않습니다. 수만 개 VT가 동시에 `synchronized` 블록에서 Blocking되면 Platform Thread(보통 코어 수 기준)가 모두 Pinned되어 다른 VT를 실행하지 못합니다. 확인: JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 지속 시간·스택 확인. 수정: 핫 경로의 `synchronized` → `ReentrantLock`으로 교체(`lock.lock(); try { ... } finally { lock.unlock(); }`). `lock()`은 VT가 await 중 unmount를 허용합니다.
 
-### Q4. Virtual Thread의 장점과 한계는 무엇인가요?
-JDK 21에서 I/O 대기 중 Platform Thread에서 unmount해 수만 개 동시 Task를 적은 Platform Thread로 처리합니다. 단, CPU-bound 작업 속도는 빨라지지 않으며, DB Connection Pool·외부 API Capacity 같은 외부 자원 한계는 Semaphore나 Pool로 별도 보호해야 합니다.
+### Q4. 게임 매치 결과 로그 저장에 Fire-and-forget `CompletableFuture`를 사용하는데 운영 중 로그가 간헐적으로 누락됩니다. 예외가 어디에서 발생했는지 추적할 방법이 없습니다. 구조 문제와 수정 방법은 무엇입니까?
+구조 문제: `CompletableFuture.runAsync(() -> logService.save(result), pool)`의 반환값을 아무것도 보유하지 않으면 예외가 내부 CompletionException으로 포장돼 조용히 사라집니다. GC 이전에 아무도 `get()`·`join()` 또는 `whenComplete`를 호출하지 않으면 예외 관찰 기회가 없습니다. 수정: `CompletableFuture.runAsync(...).whenComplete((r, ex) -> { if (ex != null) log.error("Match log failed", ex); Metrics.counter("log.fail").increment(); })`. 또는 전역 UncaughtExceptionHandler에서 `CompletionException` 수집. 결과 필요 없어도 예외 관찰은 필수.
 
-### Q5. 게임 서버에서 I/O-bound와 CPU-bound 작업을 어떻게 분리하나요?
-외부 API 호출·DB 조회 같은 I/O-bound는 `Executors.newVirtualThreadPerTaskExecutor()`로 처리하고, Pathfinding·물리 연산 같은 CPU-bound는 `newFixedThreadPool(cores)`로 격리합니다. 두 Pool을 분리하면 CPU 포화가 I/O 대기 Task에 영향을 주지 않습니다.
+### Q5. Virtual Thread 서버에서 DB 조회가 10만 VT가 동시에 실행돼 DB Connection Pool이 고갈됩니다. Semaphore로 DB 접근을 제한할 때 VT에서 `acquire()`가 Blocking되면 Platform Thread를 점유합니까?
+점유 여부: `Semaphore.acquire()`는 `synchronized` 내부가 아니므로 VT가 Blocking 시 Platform Thread를 반환하고 unmount됩니다(Pinning 없음). DB Connection Pool 크기 30이면 `Semaphore(30)` 설정. `acquire()` 대기 중인 VT는 Platform Thread를 사용하지 않습니다. 주의: `Semaphore.acquire()` 내부에서 Exception 발생 시 반드시 `finally { permits.release(); }`로 반환. 실용적 패턴: `try { permits.acquire(); return db.query(...); } finally { permits.release(); }`.
 
-### Q6. ThreadPoolExecutor에서 maximumPoolSize가 제대로 작동하지 않는 경우는 언제인가요?
-기본 `LinkedBlockingQueue`는 용량 제한이 없어 Queue가 항상 비어 있는 것처럼 보이기 때문입니다. `ThreadPoolExecutor`는 Queue가 **가득 찼을 때**만 maximumPoolSize까지 Thread를 추가합니다. 따라서 무제한 Queue에서는 Thread 수가 corePoolSize에서 늘어나지 않습니다. `ArrayBlockingQueue(n)`처럼 Bounded Queue를 사용해야 maximumPoolSize가 의도대로 작동합니다.
+### Q6. `CompletableFuture.allOf(f1, f2, f3)`으로 외부 API 3개를 동시 호출하는데 f2가 실패해도 f1·f3 결과를 사용해야 합니다. `allOf()`의 예외 동작 문제와 개별 결과를 수집하는 대안 설계는 무엇입니까?
+문제: `allOf(f1, f2, f3).get()`은 하나라도 예외가 나면 첫 번째 예외로 즉시 실패합니다. 나머지 Future의 결과는 완료됐어도 `allOf()` 수준에서 꺼낼 수 없습니다. 대안: 각 Future에 `handle((r, ex) -> ex == null ? Optional.of(r) : Optional.empty())`를 붙여 예외를 Optional로 변환 후 `allOf()`로 완료 대기. 완료 후 각 Future에서 `f1.join()` 등으로 결과 수집. 또는 `CompletableFuture.allOf(f1.exceptionally(e -> fallback1), ...)` 패턴으로 각 단계에서 Fallback 처리.
 
 ## 10. 예상 꼬리질문
 
-- `CallerRunsPolicy`와 `AbortPolicy`·`DiscardPolicy` 중 어떤 기준으로 선택하나요?
-- Common Fork/Join Pool을 Blocking 작업에 쓰면 어떤 문제가 생기나요?
-- `CompletableFuture.allOf`와 `anyOf`의 예외 동작 차이는 무엇인가요?
-- Virtual Thread에서 `synchronized`로 Pinning이 발생하면 어떻게 진단하나요?
-- `get(timeout)`과 `orTimeout()`의 차이는 무엇인가요?
-- Semaphore로 DB 연결을 제한할 때 Virtual Thread에서 `acquire()`가 Blocking되면 Platform Thread를 잡나요?
-- `ThreadLocal`을 Virtual Thread에서 쓸 때 메모리 문제가 생기는 이유와 대안은 무엇인가요?
+- `CallerRunsPolicy`를 Rejection으로 설정했는데 호출자가 Tick Loop Main Thread일 때 어떤 위험이 생기고 `DiscardOldestPolicy`와 어떤 기준으로 선택합니까?
+- Common Fork/Join Pool이 Blocking 작업으로 고갈됐을 때 `ForkJoinPool.ManagedBlocker`를 사용하는 방법과 그 한계는 무엇입니까?
+- `orTimeout(500, MILLISECONDS)` vs `get(500, MILLISECONDS)` 차이와 Timeout 후 downstream Stage 취소 여부는 어떻게 다릅니까?
+- Virtual Thread 수만 개 환경에서 `ThreadLocal<byte[]>` 1KB 버퍼를 각 VT마다 보유하면 메모리가 어떻게 증가하고 `ScopedValue`로 대체 시 코드 변경 범위는 얼마나 됩니까?
+- `CompletableFuture.allOf()` 중 한 Future가 예외를 내면 나머지 결과를 수집하기 위해 각각 `handle()`을 붙이는 패턴과 예외를 묶어 한 번에 처리하는 방법은 무엇입니까?
+- Graceful Shutdown 시 `shutdownNow()`가 반환하는 대기 중 `Runnable` 목록을 재처리하는 방법과 이미 실행 중인 Task에 `InterruptedException`을 전달해 중단하는 방법은 무엇입니까?
+- JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 지속 시간을 수집하는 방법과 Pinning이 100ms 이상 지속될 때 Alert 임계값 설정 기준은 무엇입니까?
 
 ## 11. 30초 모범답변
 > Executor는 Task와 실행 정책을 분리해 Thread 수·Queue·Rejection을 중앙 관리합니다. CompletableFuture는 비동기 결과 조합·예외 전파를 체인으로 표현합니다. Virtual Thread는 JDK 21에서 도입돼 I/O 대기 중 Platform Thread를 반환하므로 수만 개 동시 연결을 적은 자원으로 처리할 수 있습니다. 단, CPU-bound와 외부 자원(DB Connection, Rate Limit) 상한은 별도로 관리해야 합니다.
