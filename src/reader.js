@@ -1,5 +1,17 @@
 'use strict';
 
+/* GitHub Pages에서는 .md 파일을 직접 fetch할 수 없어
+   raw.githubusercontent.com으로 우회한다. */
+function rawUrl(path) {
+  if (window.location.hostname.endsWith('github.io')) {
+    const [username] = window.location.hostname.split('.');
+    const repo = window.location.pathname.split('/').filter(Boolean)[0];
+    const cleanPath = path.replace(/^\.\.\//, '');
+    return `https://raw.githubusercontent.com/${username}/${repo}/main/${cleanPath}`;
+  }
+  return path;
+}
+
 marked.setOptions({
   highlight: (code, lang) => {
     if (lang && hljs.getLanguage(lang)) {
@@ -25,7 +37,7 @@ class TextbookReader {
   /* ── Bootstrap ──────────────────────────────────────────── */
   async _init() {
     try {
-      const resp = await fetch('src/manifest.json');
+      const resp = await fetch(rawUrl('src/manifest.json'));
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       this.manifest = await resp.json();
     } catch {
@@ -120,7 +132,7 @@ class TextbookReader {
 
     let md;
     try {
-      const resp = await fetch(ch.path);
+      const resp = await fetch(rawUrl(ch.path));
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       md = await resp.text();
     } catch {

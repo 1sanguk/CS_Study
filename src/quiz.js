@@ -1,5 +1,15 @@
 'use strict';
 
+function rawUrl(path) {
+  if (window.location.hostname.endsWith('github.io')) {
+    const [username] = window.location.hostname.split('.');
+    const repo = window.location.pathname.split('/').filter(Boolean)[0];
+    const cleanPath = path.replace(/^\.\.\//, '');
+    return `https://raw.githubusercontent.com/${username}/${repo}/main/${cleanPath}`;
+  }
+  return path;
+}
+
 class QuizApp {
   constructor() {
     this.questions    = [];
@@ -26,7 +36,7 @@ class QuizApp {
 
     let markdown;
     try {
-      const resp = await fetch(path);
+      const resp = await fetch(rawUrl(path));
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       markdown = await resp.text();
     } catch {
