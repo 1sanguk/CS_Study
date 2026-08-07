@@ -268,7 +268,7 @@ Outbox Queue 패턴을 적용합니다. (1) **Tick Thread**: 상태 변경을 �
 - Game Loop는 입력·Simulation·전파를 고정 Tick Rate로 반복하는 서버의 주 실행 구조다.
 - Fixed Delta는 결정론적 시뮬레이션과 Replay를 가능하게 한다.
 - Catch-up 횟수 상한으로 Overrun 시 Spiral of Death를 방지한다.
-- Simulation Tick Rate(30~64Hz)와 Snapshot 전송(10~20Hz)을 분리해 트래픽을 제어한다.
+- Simulation Tick Rate(20~60Hz)와 Snapshot 전송(10~20Hz)을 분리해 트래픽을 제어한다.
 - Client Timestamp를 신뢰하지 않으며 단조 증가 Server Clock으로 허용 Window를 설정한다.
 - DB 쓰기는 Outbox Queue·비동기 Worker로 분리해 Tick Thread 블로킹을 방지한다.
 - Tick p99, Overrun 횟수, Queue 깊이를 Traffic과 같은 시간축으로 모니터링한다.

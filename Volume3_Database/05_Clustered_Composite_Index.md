@@ -125,14 +125,14 @@ WHERE A = 1 AND C = 5     -- A 범위 후 C는 잔여 필터 (탐색 경계 아�
 
 ```sql
 -- InnoDB Clustered Key 선택: UUID PK vs BIGINT PK
--- BAD: UUID PK → 16바이트가 모든 Secondary Index 리프에 반복
+-- BAD: UUID PK → CHAR(36)은 36바이트가 모든 Secondary Index 리프에 반복
 CREATE TABLE player (
     player_id CHAR(36) PRIMARY KEY,
     nickname  VARCHAR(32),
     score     INT
 );
 CREATE INDEX idx_score ON player (score);
--- idx_score 리프: (score, player_id UUID 16바이트) 반복
+-- idx_score 리프: (score, player_id CHAR(36) = 36바이트) 반복
 
 -- GOOD: 짧은 BIGINT PK → Secondary Index 크기 감소
 CREATE TABLE player (
@@ -256,7 +256,7 @@ Secondary Index로 조건에 맞는 행을 찾은 뒤 인덱스에 없는 열이
 
 ## 12. 1~2분 확장답변
 
-> 클러스터드 인덱스는 행 저장 구조와 연결되어 Clustered Key로 직접 행을 찾으면 Lookup이 없지만 Secondary Index는 Row Locator로 다시 탐색하는 Lookup이 발생합니다. Clustered Key는 짧고 안정적인 값이 유리하며 UUID를 쓰면 모든 Secondary Index 리프에 16바이트가 반복됩니다. 복합 인덱스는 선두 열부터 사전식으로 정렬되어 동등 조건 Prefix 뒤에 범위·정렬 열을 배치하는 것이 일반적입니다. 열 집합이 같아도 순서가 다르면 지원하는 쿼리가 달라집니다. 인덱스는 중요 쿼리에서 역설계해 동등·범위·ORDER BY·LIMIT와 반환 열을 분석하고 실행 계획으로 검증합니다.
+> 클러스터드 인덱스는 행 저장 구조와 연결되어 Clustered Key로 직접 행을 찾으면 Lookup이 없지만 Secondary Index는 Row Locator로 다시 탐색하는 Lookup이 발생합니다. Clustered Key는 짧고 안정적인 값이 유리하며 UUID를 CHAR(36)으로 쓰면 모든 Secondary Index 리프에 36바이트가 반복됩니다 (BINARY(16) 저장 시 16바이트). 복합 인덱스는 선두 열부터 사전식으로 정렬되어 동등 조건 Prefix 뒤에 범위·정렬 열을 배치하는 것이 일반적입니다. 열 집합이 같아도 순서가 다르면 지원하는 쿼리가 달라집니다. 인덱스는 중요 쿼리에서 역설계해 동등·범위·ORDER BY·LIMIT와 반환 열을 분석하고 실행 계획으로 검증합니다.
 
 ## 13. 핵심 요약
 

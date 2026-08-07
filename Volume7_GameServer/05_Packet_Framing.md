@@ -203,7 +203,7 @@ void OnRecv(Session& session, std::span<const uint8_t> data) {
 | 방식 | 원리 | 장점 | 단점 | 적합한 상황 |
 |------|------|------|------|------------|
 | **Fixed-size** | 모든 Frame 크기 고정 | 파싱 단순, Zero-copy 쉬움 | 짧은 Packet도 공간 낭비 | 상태 동기화처럼 크기가 고정된 경우 |
-| **Delimiter** | 특수 문자(`\r\n`)로 경계 표시 | 사람이 읽기 쉬움 | Payload 내 Escape 필요, O(n) 스캔 | HTTP/1.x, Redis 같은 텍스트 Protocol |
+| **Delimiter** | 특수 문자(`\r\n`)로 경계 표시 | 사람이 읽기 쉬움 | Payload 내 Escape 필요, O(n) 스캔 | HTTP/1.x 헤더 (Redis RESP는 Delimiter + 길이 prefix 혼합) |
 | **Length-prefix** | Header에 Payload 길이 기록 | 유연, Multi-frame 파싱 효율 | Length 검증 필수, Header 오버헤드 | 게임 서버 바이너리 Protocol |
 | **Chunk encoding** | 가변 Chunk 크기 반복 | Streaming 친화적 | 파싱 복잡 | HTTP/1.1 chunked, 스트리밍 API |
 

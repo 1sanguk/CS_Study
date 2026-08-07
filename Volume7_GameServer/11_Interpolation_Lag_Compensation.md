@@ -206,7 +206,7 @@ ScopedHitboxRestore가 예외 경로에서 복원을 누락하는 경우를 먼�
 Extrapolation 상한은 Snapshot 주기(예: 50ms, 20Hz)의 2~3배를 권장합니다. 50ms 주기라면 최대 150ms까지 추정하고 이후에는 마지막 알려진 위치에 정지합니다. 방향 전환이 잦은 FPS는 오버슈팅 위험이 크므로 100ms로 줄입니다. 이동 속도가 낮은 MMORPG는 200ms까지 허용할 수 있습니다. Extrapolation 활성 시간과 오버슈팅 거리를 Prometheus로 집계해 상한이 적절한지 검증합니다.
 
 ### Q6. 보간에 Slerp 대신 Linear Interpolation을 써서 회전이 최단 경로로 보간되지 않는 버그가 발생했습니다. 증상과 수정 방법을 설명하세요.
-Quaternion을 Linear Interpolation(Lerp)하면 길이가 1에서 벗어나 정규화해야 하고, 180° 이상 차이가 있을 때 긴 경로로 회전하는 Gimbal Lock 유사 현상이 생깁니다. Slerp는 구면 선형 보간으로 항상 최단 호를 따라 회전합니다. Quaternion 내적이 음수이면 한쪽을 부정(negate)해 단축 경로를 선택하는 처리가 선행돼야 합니다. 회전 보간 구간이 짧고(< 10도) 성능이 중요할 때는 NLerp(정규화 Lerp)로 대체할 수 있습니다.
+Quaternion을 Linear Interpolation(Lerp)하면 길이가 1에서 벗어나 정규화해야 하고, 두 가지 문제가 생깁니다. ① 내적이 음수일 때(두 회전이 180° 이상 차이) 짧은 경로 대신 긴 경로로 회전하는 문제(한쪽을 negate해 해결), ② 보간 구간 중간에서 각속도가 균일하지 않은 문제입니다. Quaternion은 Euler Angle과 달리 Gimbal Lock이 발생하지 않는 표현 방식이므로, Lerp의 긴 경로 회전 문제를 "Gimbal Lock 유사 현상"으로 부르는 것은 부정확합니다. Slerp는 구면 선형 보간으로 항상 최단 호를 따라 균일한 각속도로 회전합니다. 회전 보간 구간이 짧고(< 10도) 성능이 중요할 때는 NLerp(정규화 Lerp)로 대체할 수 있습니다.
 
 ## 10. 예상 꼬리질문
 

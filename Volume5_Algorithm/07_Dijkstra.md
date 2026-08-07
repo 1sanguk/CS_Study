@@ -120,13 +120,13 @@ class DijkstraExample
         }
         path.Reverse();
 
-        Console.WriteLine($"A→E 최단 거리: {dist["E"]}");     // 9
+        Console.WriteLine($"A→E 최단 거리: {dist["E"]}");     // 7
         Console.WriteLine($"경로: {string.Join(" → ", path)}"); // A → C → B → D → E
     }
 }
 ```
 
-A에서 출발해 C(비용 1) → B(비용 3) → D(비용 4) → E(비용 7) 순으로 확정된다. A→B 직행(비용 4)보다 A→C→B(비용 3)가 짧아 Relaxation으로 갱신되는 과정이 핵심이다. 최종 최단 거리는 9이고 경로는 A → C → B → D → E다.
+A에서 출발해 C(비용 1) → B(비용 3) → D(비용 4) → E(비용 7) 순으로 확정된다. A→B 직행(비용 4)보다 A→C→B(비용 3)가 짧아 Relaxation으로 갱신되는 과정이 핵심이다. 최종 최단 거리는 7이고 경로는 A → C → B → D → E다 (1+2+1+3=7).
 
 ## 4. 핵심 용어와 Relaxation
 
