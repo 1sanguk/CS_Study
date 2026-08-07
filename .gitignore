@@ -3,4 +3,5 @@ node_modules/
 .claude/
 _workspace/
 CLAUDE.md
-*.json
+package-lock.json
+!src/manifest.json
