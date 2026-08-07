@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CS 면접 교재</title>
+  <link rel="stylesheet" href="src/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- 사이드바 -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">📚</span>
+          <span class="logo-text">CS 면접 교재</span>
+        </div>
+      </div>
+      <nav id="toc"></nav>
+    </aside>
+
+    <!-- 메인 영역 -->
+    <div id="main-wrapper">
+
+      <!-- 툴바 -->
+      <header id="toolbar">
+        <button id="sidebar-toggle" aria-label="목차 열기/닫기">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <span id="breadcrumb"></span>
+        <div class="toolbar-right">
+          <button id="quiz-btn" class="quiz-btn">✏️ 문제 풀기</button>
+          <button id="bookmark-btn" class="icon-btn" title="북마크">☆</button>
+        </div>
+      </header>
+
+      <!-- 리더 영역 -->
+      <div id="reader-area">
+        <button id="btn-prev" class="nav-btn" aria-label="이전 챕터">&#8249;</button>
+        <article id="content">
+          <div class="loading-placeholder">
+            <div class="spinner"></div>
+            <p>로딩 중...</p>
+          </div>
+        </article>
+        <button id="btn-next" class="nav-btn" aria-label="다음 챕터">&#8250;</button>
+      </div>
+
+      <!-- 푸터 -->
+      <footer id="page-footer">
+        <span id="page-info"></span>
+        <div class="footer-nav">
+          <button onclick="reader && reader.navigateTo(reader.currentIndex - 1, 'prev')" class="footer-btn">← 이전</button>
+          <button onclick="reader && reader.navigateTo(reader.currentIndex + 1, 'next')" class="footer-btn">다음 →</button>
+        </div>
+      </footer>
+
+    </div>
+  </div>
+
+  <!-- 모바일 사이드바 오버레이 -->
+  <div id="sidebar-overlay"></div>
+
+  <script src="src/reader.js"></script>
+</body>
+</html>
