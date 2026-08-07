@@ -7,7 +7,6 @@ importance: 5
 
 # 14. Login, Chat, Ranking Server
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 

@@ -7,7 +7,6 @@ importance: 5
 
 # 09. Executor·CompletableFuture와 Virtual Thread
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - ThreadPoolExecutor에서 무제한 LinkedBlockingQueue로 Task가 누적되고 maximumPoolSize가 작동하지 않는 원인을 진단하고 ArrayBlockingQueue Bounded Queue 전환 여부를 결정할 수 있다.

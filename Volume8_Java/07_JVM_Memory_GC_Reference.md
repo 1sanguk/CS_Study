@@ -7,7 +7,6 @@ importance: 5
 
 # 07. JVM Memory·GC와 Reference
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - 게임 서버 Heap이 24시간 동안 100MB/시간씩 증가하는 현상을 JFR Allocation Profile과 Heap Dump Dominator Tree로 진단하고, Global Map·Listener·ThreadLocal 미해제 중 어느 원인인지 수정 순서를 결정할 수 있다.

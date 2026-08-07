@@ -140,7 +140,8 @@ class TextbookReader {
          + `로컬 테스트: \`python3 -m http.server 8080\``;
     }
 
-    content.innerHTML = marked.parse(md);
+    const { meta, body } = this._parseFrontmatter(md);
+    content.innerHTML = this._metaBadge(meta) + marked.parse(body);
     document.querySelectorAll('#content pre code').forEach(el => hljs.highlightElement(el));
     content.scrollTop = 0;
 
@@ -279,6 +280,42 @@ class TextbookReader {
         else        this.navigateTo(this.currentIndex - 1, 'prev');
       }
     }, { passive: true });
+  }
+
+  /* ── Frontmatter ────────────────────────────────────────── */
+  _parseFrontmatter(md) {
+    const match = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!match) return { meta: {}, body: md };
+
+    const meta = {};
+    for (const line of match[1].split('\n')) {
+      const [key, ...rest] = line.split(':');
+      if (key && rest.length) meta[key.trim()] = rest.join(':').trim();
+    }
+    return { meta, body: md.slice(match[0].length) };
+  }
+
+  _stars(value, max = 5) {
+    const n = Math.min(Math.max(parseInt(value) || 0, 0), max);
+    return Array.from({ length: max }, (_, i) =>
+      `<span class="${i < n ? 'star-on' : 'star-off'}">${i < n ? '★' : '☆'}</span>`
+    ).join('');
+  }
+
+  _metaBadge(meta) {
+    const fields = [
+      { key: 'difficulty',          label: '난이도' },
+      { key: 'interview_frequency', label: '면접 빈도' },
+      { key: 'importance',          label: '중요도' }
+    ];
+    const items = fields
+      .filter(f => meta[f.key] !== undefined)
+      .map(f => `<span class="meta-item">
+        <span class="meta-label">${f.label}</span>
+        <span class="meta-stars">${this._stars(meta[f.key])}</span>
+      </span>`)
+      .join('');
+    return items ? `<div class="meta-badge">${items}</div>` : '';
   }
 }
 

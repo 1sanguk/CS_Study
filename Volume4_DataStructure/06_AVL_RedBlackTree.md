@@ -7,7 +7,6 @@ importance: 4
 
 # 06. AVL Tree와 Red-Black Tree
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 

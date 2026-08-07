@@ -7,7 +7,6 @@ importance: 5
 
 # 06. Generics·Type Erasure와 Wildcard
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - Packet Handler Registry `dispatch()` 메서드에서 런타임 ClassCastException이 발생했을 때, Raw Type Heap Pollution과 Unchecked Cast 범위 문제 중 어느 원인인지 진단하고 수정하는 방법을 결정할 수 있다.

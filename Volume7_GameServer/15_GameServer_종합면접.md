@@ -7,7 +7,6 @@ importance: 5
 
 # 15. Game Server 종합면접
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - Tick p99가 평소 8ms에서 50ms로 급등했을 때, Logic Queue 깊이·Worker CPU·단일 Tick 연산 비용·DB Latency 중 어느 경로가 병목인지 Prometheus 지표로 진단 순서를 결정할 수 있다.

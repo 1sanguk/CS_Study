@@ -7,7 +7,6 @@ importance: 5
 
 # 01. Game Server Architecture
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - Stateful Game Instance 노드에서 CPU·Memory가 임계값을 초과하거나 Tick p99가 기준을 벗어날 때 신규 Room 배치를 중단하고 Drain해야 하는 시점 기준과, Sticky Routing이 Hot Spot을 유발하는 조건을 진단해 조치 우선순위를 판단할 수 있다.

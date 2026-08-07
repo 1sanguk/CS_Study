@@ -7,7 +7,6 @@ importance: 5
 
 # 08. Java Memory Model·synchronized·volatile·Atomic
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - 게임 서버 킬 카운터를 20개 Worker Thread가 동시 갱신할 때 volatile count++ Lost Update가 발생하는 이유를 JMM Read-Modify-Write 비원자성으로 진단하고 AtomicInteger vs synchronized 선택 기준을 결정할 수 있다.

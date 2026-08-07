@@ -7,7 +7,6 @@ importance: 5
 
 # 10. Java 종합면접
 
-> 게임 서버·백엔드 개발자를 위한 CS 면접 교재
 
 ## 학습 목표
 - 로그인 요청 처리에서 JIT Warm-up 전 지연·HashMap hashCode 계약 위반·volatile Snapshot 가시성 문제가 각각 어느 계층에서 발생하는지 판단하고 진단 도구를 결정할 수 있다.
