@@ -5,3 +5,6 @@ _workspace/
 CLAUDE.md
 package-lock.json
 !src/manifest.json
+_videos/
+make_video.py
+__pycache__/make_video.cpython-312.pyc
