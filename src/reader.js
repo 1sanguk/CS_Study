@@ -143,7 +143,8 @@ class TextbookReader {
     const { meta, body } = this._parseFrontmatter(md);
     content.innerHTML = this._metaBadge(meta) + marked.parse(body);
     document.querySelectorAll('#content pre code').forEach(el => hljs.highlightElement(el));
-    content.scrollTop = 0;
+    this._addCopyButtons();
+    document.getElementById('reader-area').scrollTop = 0;
 
     if (direction !== 'none') {
       const enterCls = direction === 'next' ? 'enter-right' : 'enter-left';
@@ -280,6 +281,32 @@ class TextbookReader {
         else        this.navigateTo(this.currentIndex - 1, 'prev');
       }
     }, { passive: true });
+  }
+
+  /* ── Copy buttons ───────────────────────────────────────── */
+  _addCopyButtons() {
+    document.querySelectorAll('#content pre').forEach(pre => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'code-block-wrapper';
+      pre.parentNode.insertBefore(wrapper, pre);
+      wrapper.appendChild(pre);
+
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = '복사';
+      btn.addEventListener('click', () => {
+        const code = pre.querySelector('code');
+        navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
+          btn.textContent = '✓ 복사됨';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = '복사';
+            btn.classList.remove('copied');
+          }, 2000);
+        });
+      });
+      wrapper.appendChild(btn);
+    });
   }
 
   /* ── Frontmatter ────────────────────────────────────────── */
