@@ -10,7 +10,7 @@ importance: 4
 
 ## 학습 목표
 
-- 길드 동맹·서버 분할 등 Connectivity 판단이 필요한 상황에서 Union-Find와 BFS/DFS 중 어느 것을 선택할지 결정할 수 있다.
+- 길드 동맹·서버 분할 등 Connectivity 판단이 필요한 상황에서 Union-Find와 BFS(Breadth-First Search)/DFS(Depth-First Search) 중 어느 것을 선택할지 결정할 수 있다.
 - Tree 편향이 우려되는 조건에서 경로 압축과 Rank·Size 결합의 효과를 비교하고 적합한 최적화 조합을 선택할 수 있다.
 - Union-Find의 O(α(n)) 비용이 성립하는 조건과 Rollback·동시성 요구 시 포기해야 하는 최적화를 구분하여 설계 결정을 내릴 수 있다.
 - 연결 요소 수 관리, 무방향 Cycle 판정, Kruskal 선택 조건 중 어느 기법을 사용해야 하는지 각 상황의 요구 조건에 따라 구분하고 결정을 내릴 수 있다.

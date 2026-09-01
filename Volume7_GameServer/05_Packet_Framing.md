@@ -25,7 +25,7 @@ TCP의 Send·Receive 호출 경계가 보존되지 않으므로 부분 수신과
 ```text
 receive buffer→need header length→validate size→wait full body→dispatch→consume
 ```
-고정 길이는 단순하지만 낭비가 있고, 구분자는 Escape 문제가 있으며, Length Prefix는 효율적이지만 길이 검증이 필수다. UDP는 Datagram 경계가 있지만 내부 Message 형식은 필요하다.
+고정 길이는 단순하지만 낭비가 있고, 구분자는 Escape 문제가 있으며, Length Prefix는 효율적이지만 길이 검증이 필수다. UDP(User Datagram Protocol)는 Datagram 경계가 있지만 내부 Message 형식은 필요하다.
 
 상태의 최종 소유자, Message 순서, Timeout과 실패 후 재처리 기준을 명시한다.
 
@@ -92,7 +92,7 @@ Frame 하나를 얻은 후 Buffer에 남은 Byte로 다음 Frame도 즉시 파�
 
 ### UDP와 Framing
 
-UDP Datagram은 Message 경계를 보존하지만 MTU를 넘으면 IP Fragmentation이나 Application 분할이 필요하다. Datagram 안에도 Type·Sequence·Version·Payload Length와 무결성 검증을 둘 수 있다.
+UDP Datagram은 Message 경계를 보존하지만 MTU(Maximum Transmission Unit)를 넘으면 IP(Internet Protocol) Fragmentation이나 Application 분할이 필요하다. Datagram 안에도 Type·Sequence·Version·Payload Length와 무결성 검증을 둘 수 있다.
 
 UDP에서 선언 Length가 실제 Datagram 길이와 일치하는지 확인한다. 분할 재조립은 Message ID, Fragment Index·Count, Timeout과 전체 크기 상한이 필요하며 공격자가 불완전 Fragment로 Memory를 점유하지 못하게 한다.
 
@@ -112,7 +112,7 @@ Optional Field와 Message Version을 Payload에 둘 수 있다. Rolling Deployme
 
 압축 전후 길이, 최대 해제 크기와 압축 비율을 제한해 Compression Bomb을 막는다. 작은 Packet은 압축 Header·CPU가 더 클 수 있다.
 
-TLS 같은 Stream Encryption 위에서도 Application Framing은 필요하다. 자체 암호화를 설계하면 Nonce·인증 Tag·Replay 보호가 복잡하므로 검증된 Protocol을 사용한다.
+TLS(Transport Layer Security) 같은 Stream Encryption 위에서도 Application Framing은 필요하다. 자체 암호화를 설계하면 Nonce·인증 Tag·Replay 보호가 복잡하므로 검증된 Protocol을 사용한다.
 
 ### 장애와 관찰
 

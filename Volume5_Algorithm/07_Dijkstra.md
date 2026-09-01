@@ -36,7 +36,7 @@ A→C→D = 3  ← 최단
 
 ## 2. 왜 필요한가
 
-BFS는 모든 Edge 비용이 같을 때 최소 Edge 수를 구한다. 실제 이동에서는 길이, 통행 시간, 위험도, Network 지연처럼 Edge마다 비용이 다를 수 있다. 이때 최소 Hop 경로가 최소 비용 경로와 다르다.
+BFS(Breadth-First Search)는 모든 Edge 비용이 같을 때 최소 Edge 수를 구한다. 실제 이동에서는 길이, 통행 시간, 위험도, Network 지연처럼 Edge마다 비용이 다를 수 있다. 이때 최소 Hop 경로가 최소 비용 경로와 다르다.
 
 Dijkstra는 가능한 모든 경로를 열거하지 않고 다음 정보를 이용한다.
 
@@ -298,12 +298,12 @@ for source in sources:
 | 가중치 0·1 | 0-1 BFS | O(V+E) | Deque 사용 |
 | 음수 없음 | Dijkstra | O((V+E)logV) | 오래된 Entry |
 | 음수 Edge 가능 | Bellman-Ford | O(VE) | 음수 Cycle 탐지 |
-| DAG | Topological Relaxation | O(V+E) | 음수 Edge도 가능 |
+| DAG(Directed Acyclic Graph) | Topological Relaxation | O(V+E) | 음수 Edge도 가능 |
 | 모든 쌍·작은 Dense Graph | Floyd-Warshall | O(V³) | O(V²) Memory |
 
 A*는 목적지까지의 Heuristic을 이용해 탐색 범위를 줄이는 Best-first Search다. Heuristic이 Admissible하고 조건을 만족하면 최적성을 유지할 수 있다. Dijkstra는 Heuristic이 0인 A*로 볼 수 있다.
 
-최소 신장 트리 MST와 최단 경로 Tree는 목적이 다르다. MST는 전체 Vertex를 잇는 Edge 합을 최소화하고, Dijkstra Tree는 한 시작점에서 각 Vertex까지의 경로를 최소화한다.
+최소 신장 트리 MST(Minimum Spanning Tree)와 최단 경로 Tree는 목적이 다르다. MST는 전체 Vertex를 잇는 Edge 합을 최소화하고, Dijkstra Tree는 한 시작점에서 각 Vertex까지의 경로를 최소화한다.
 
 ## 13. 정수 Overflow와 INF
 

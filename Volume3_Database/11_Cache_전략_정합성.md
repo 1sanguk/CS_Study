@@ -19,7 +19,7 @@ importance: 5
 
 캐시는 느린 원본 앞에 자주 쓰는 데이터를 두어 지연과 부하를 줄이며 정합성 전략은 원본과 캐시의 갱신 순서와 실패 처리를 정한다.
 
-캐시(Cache)는 원본 데이터의 일부를 더 빠르고 가까운 저장소에 복제해 반복 계산과 I/O를 줄인다. 애플리케이션 프로세스 내부 메모리, Redis 같은 분산 캐시, CDN과 DB Buffer Pool 모두 넓은 의미의 캐시지만 이 문서는 애플리케이션과 원본 DB 사이의 읽기 캐시를 중심으로 다룬다.
+캐시(Cache)는 원본 데이터의 일부를 더 빠르고 가까운 저장소에 복제해 반복 계산과 I/O(Input/Output)를 줄인다. 애플리케이션 프로세스 내부 메모리, Redis 같은 분산 캐시, CDN과 DB Buffer Pool 모두 넓은 의미의 캐시지만 이 문서는 애플리케이션과 원본 DB 사이의 읽기 캐시를 중심으로 다룬다.
 
 캐시를 추가하면 상태가 하나에서 둘 이상으로 늘어난다. 원본이 바뀌었는데 캐시가 남거나, 캐시를 먼저 바꾼 뒤 DB 쓰기가 실패하는 문제가 생긴다. "Cache Hit Ratio를 높인다"보다 어떤 데이터가 원본이고 얼마 동안 오래된 값을 허용하며 실패 후 어떻게 복구할지를 먼저 정한다.
 
@@ -59,7 +59,7 @@ T1: DB Commit
 결과: 이전 Cache가 다시 남음
 ```
 
-DB Commit 후 삭제도 완벽한 원자성은 아니다. Commit과 삭제 사이에 Reader가 이전 Cache를 읽을 수 있고, Commit 뒤 Process가 죽으면 삭제가 누락된다. Cache-Aside는 짧은 Stale Window를 허용하고 TTL·이벤트·재처리로 수렴시키는 전략이다.
+DB Commit 후 삭제도 완벽한 원자성은 아니다. Commit과 삭제 사이에 Reader가 이전 Cache를 읽을 수 있고, Commit 뒤 Process가 죽으면 삭제가 누락된다. Cache-Aside는 짧은 Stale Window를 허용하고 TTL(Time To Live)·이벤트·재처리로 수렴시키는 전략이다.
 
 ### Write-Through
 
@@ -218,7 +218,7 @@ public PlayerProfile getProfileSingleFlight(Jedis jedis, long playerId) {
 **캐시의 장점**
 
 - 지연과 원본 부하를 줄이고 트래픽 Burst를 흡수한다.
-- 계산 비용이 큰 결과를 재사용해 DB·CPU를 절약한다.
+- 계산 비용이 큰 결과를 재사용해 DB·CPU(Central Processing Unit)를 절약한다.
 - TTL 기반으로 점진 수렴하여 구조가 단순하다.
 
 **캐시의 단점**

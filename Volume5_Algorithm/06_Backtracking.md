@@ -79,7 +79,7 @@ FindCombinations(1, 3, new List<int>());
 
 ## 4. DFS와 Backtracking의 차이
 
-DFS는 Graph나 Tree를 깊이 우선으로 방문하는 순회 순서다. Backtracking은 선택 상태를 변경하고, 제약을 검사하며, 돌아올 때 상태를 복구하는 문제 해결 Pattern이다. Backtracking은 대개 DFS 형태로 구현하지만 모든 DFS가 Backtracking은 아니다.
+DFS(Depth-First Search)는 Graph나 Tree를 깊이 우선으로 방문하는 순회 순서다. Backtracking은 선택 상태를 변경하고, 제약을 검사하며, 돌아올 때 상태를 복구하는 문제 해결 Pattern이다. Backtracking은 대개 DFS 형태로 구현하지만 모든 DFS가 Backtracking은 아니다.
 
 | 구분 | DFS | Backtracking |
 |------|-----|--------------|

@@ -19,7 +19,7 @@ importance: 5
 
 DB 면접의 핵심은 데이터 불변식, 접근 패턴, 동시성, 장애 복구와 확장 전략을 하나의 흐름으로 설명하는 것이다.
 
-좋은 답변은 "인덱스를 쓰면 빠르다"나 "트랜잭션은 ACID다"에서 끝나지 않는다. 어떤 업무 규칙을 Schema와 제약으로 지키고, 어떤 Query에 어떤 Index가 필요한지, 동시에 변경될 때 어떤 이상을 막으며, 장애와 Timeout 뒤 무엇을 재처리할지를 연결한다.
+좋은 답변은 "인덱스를 쓰면 빠르다"나 "트랜잭션은 ACID(Atomicity, Consistency, Isolation, Durability)다"에서 끝나지 않는다. 어떤 업무 규칙을 Schema와 제약으로 지키고, 어떤 Query에 어떤 Index가 필요한지, 동시에 변경될 때 어떤 이상을 막으며, 장애와 Timeout 뒤 무엇을 재처리할지를 연결한다.
 
 Cache, Replica와 Shard는 원본 DB의 정확성을 대체하는 마법이 아니다. 성능과 가용성을 위해 상태 사본과 배치 경계를 늘리는 선택이다. 허용 가능한 Staleness, 부분 실패, 원본과 재구축 경로를 함께 설명해야 한다.
 
@@ -44,11 +44,11 @@ InventoryItem(item_instance_id PK, player_id FK, item_code)
 PurchaseRequest(request_id UNIQUE, player_id, status, created_at)
 ```
 
-대리키를 써도 닉네임·요청 ID 같은 업무상 유일성에는 별도 UNIQUE가 필요하다. FK는 존재하지 않는 Player를 참조하는 Item을 막고 CHECK는 값 범위를 보호한다. 정규화는 같은 사실의 중복과 삽입·수정·삭제 이상을 줄인다.
+대리키를 써도 닉네임·요청 ID 같은 업무상 유일성에는 별도 UNIQUE가 필요하다. FK(Foreign Key)는 존재하지 않는 Player를 참조하는 Item을 막고 CHECK는 값 범위를 보호한다. 정규화는 같은 사실의 중복과 삽입·수정·삭제 이상을 줄인다.
 
 ### 2단계: Query와 Index
 
-SQL은 원하는 결과를 선언하고 Optimizer가 통계와 Index로 실행 계획을 선택한다. 추정 행과 실제 행, 읽은 Page, Join 방식, Sort·Spill과 Lookup을 확인한다.
+SQL(Structured Query Language)은 원하는 결과를 선언하고 Optimizer가 통계와 Index로 실행 계획을 선택한다. 추정 행과 실제 행, 읽은 Page, Join 방식, Sort·Spill과 Lookup을 확인한다.
 
 ```text
 Query Pattern
@@ -191,8 +191,8 @@ Cache의 잔액은 화면 표시용일 수 있지만 구매 승인에는 사용�
 | Key / Index | 논리 식별·제약 / 물리 접근 구조 |
 | JOIN 종류 / JOIN 알고리즘 | 결과에 남길 행 / 결과 계산 방법 |
 | Atomicity / Isolation | 한 Transaction의 전체 반영 / 동시 Transaction 상호작용 |
-| MVCC / Optimistic Version | DB 내부 Row Version / App의 변경 충돌 검증 |
-| Cache / Replica | 선택 Data의 TTL 복사 / DB Log 기반 사본 |
+| MVCC(Multi-Version Concurrency Control) / Optimistic Version | DB 내부 Row Version / App의 변경 충돌 검증 |
+| Cache / Replica | 선택 Data의 TTL(Time To Live) 복사 / DB Log 기반 사본 |
 | Replication / Sharding | 같은 Data 복제 / Data 분할 |
 | Deadlock / Lock Wait | 순환해 진행 불가 / 보유자 종료 후 진행 가능한 대기 |
 
@@ -206,7 +206,7 @@ Cache의 잔액은 화면 표시용일 수 있지만 구매 승인에는 사용�
 
 ## 6. 장점과 단점
 
-**RDBMS 단일 서버의 장점**
+**RDBMS(Relational Database Management System) 단일 서버의 장점**
 
 - Schema 제약과 Transaction으로 불변식 보호가 명확하다.
 - 유연한 JOIN·집계와 검증된 복구 생태계가 있다.
@@ -240,7 +240,7 @@ Cache의 잔액은 화면 표시용일 수 있지만 구매 승인에는 사용�
 5. Index 추가 후 읽기뿐 아니라 쓰기·Log·공간 변화를 비교한다.
 
 **DB 지연 폭증 진단:**
-CPU·I/O·Memory, Active Connection과 Queue, Lock Blocking Chain·Deadlock, WAL Flush, 오래된 Snapshot·Version Cleanup, Replica Lag와 Cache Miss 급증을 같은 시간축에서 본다. 평균 Query 시간보다 가장 느린 Shard·Replica와 Hot Key를 찾는다.
+CPU(Central Processing Unit)·I/O(Input/Output)·Memory, Active Connection과 Queue, Lock Blocking Chain·Deadlock, WAL(Write-Ahead Logging) Flush, 오래된 Snapshot·Version Cleanup, Replica Lag와 Cache Miss 급증을 같은 시간축에서 본다. 평균 Query 시간보다 가장 느린 Shard·Replica와 Hot Key를 찾는다.
 
 **장애 복구:**
 Failover 중 성공 응답 여부가 불명확한 Write는 요청 ID와 원장으로 판정한다. Replica는 사용자 실수도 복제하므로 Backup과 시점 복구를 별도로 시험한다. Cache·Read Model은 원본 DB와 Event Log에서 재구축 가능해야 한다.

@@ -10,14 +10,14 @@ importance: 5
 
 ## 학습 목표
 
-- 배포 직후 CPU가 급등할 때, JIT Compile Thread 부하인지 GC 압박인지 Application 로직 부하인지 JFR과 GC Log로 진단 순서를 결정할 수 있다.
+- 배포 직후 CPU(Central Processing Unit)가 급등할 때, JIT(Just-In-Time compilation) Compile Thread 부하인지 GC(Garbage Collection) 압박인지 Application 로직 부하인지 JFR과 GC Log로 진단 순서를 결정할 수 있다.
 - Plugin 서버에서 같은 이름의 Class를 사용하는데 ClassCastException이 발생했을 때, Class Loader 계층 충돌인지 Static Initializer 예외인지 좁혀 수정 방향을 결정할 수 있다.
-- Container 환경에서 JVM이 Host CPU·Memory를 기준으로 동작해 OOM·Thread 과다 문제가 발생했을 때, MaxRAMPercentage·ActiveProcessorCount 설정으로 제한을 명시하는 방법을 결정할 수 있다.
-- 장기 실행 게임 서버와 Serverless Function 각각에 JIT 또는 AOT(GraalVM Native Image)를 선택해야 할 때, 시작 지연·최대 처리량·Reflection 의존성 기준으로 적합한 실행 모드를 판단할 수 있다.
+- Container 환경에서 JVM이 Host CPU·Memory를 기준으로 동작해 OOM(OutOfMemoryError)·Thread 과다 문제가 발생했을 때, MaxRAMPercentage·ActiveProcessorCount 설정으로 제한을 명시하는 방법을 결정할 수 있다.
+- 장기 실행 게임 서버와 Serverless Function 각각에 JIT 또는 AOT(Ahead-Of-Time compilation, GraalVM Native Image)를 선택해야 할 때, 시작 지연·최대 처리량·Reflection 의존성 기준으로 적합한 실행 모드를 판단할 수 있다.
 
 ## 1. 개요
 
-JVM(Java Virtual Machine)은 Java Bytecode를 실행하는 가상 머신이며 JRE는 실행 환경, JDK는 컴파일러와 개발 도구까지 포함한 개발 키트다.
+JVM(Java Virtual Machine)은 Java Bytecode를 실행하는 가상 머신이며 JRE(Java Runtime Environment)는 실행 환경, JDK(Java Development Kit)는 컴파일러와 개발 도구까지 포함한 개발 키트다.
 
 ## 2. 왜 필요한가
 
@@ -161,7 +161,7 @@ Container 환경에서는 `-XX:MaxRAMPercentage=75` 등으로 JVM이 Container �
 ## 9. 면접 질문
 
 ### Q1. 게임 서버 배포 직후 CPU 사용률이 비정상적으로 높습니다. JIT Compile Thread, GC 압박, Application 로직 부하를 어떻게 구분하고 진단하겠습니까?
-JFR 녹화에서 JIT Compile 이벤트 비중을 확인합니다. Compile 이벤트가 집중되면 Warm-up 기간이므로 트래픽을 점진적으로 투입하고 Readiness Probe를 Warm-up 완료 후로 조정합니다. GC Log에서 Pause 빈도와 GC Cause를 확인해 Allocation 압박인지 구분합니다. Thread Dump에서 Worker Thread가 BLOCKED·WAITING이면 Lock 경합이나 외부 I/O 지연입니다.
+JFR 녹화에서 JIT Compile 이벤트 비중을 확인합니다. Compile 이벤트가 집중되면 Warm-up 기간이므로 트래픽을 점진적으로 투입하고 Readiness Probe를 Warm-up 완료 후로 조정합니다. GC Log에서 Pause 빈도와 GC Cause를 확인해 Allocation 압박인지 구분합니다. Thread Dump에서 Worker Thread가 BLOCKED·WAITING이면 Lock 경합이나 외부 I/O(Input/Output) 지연입니다.
 
 ### Q2. Plugin 서버에서 같은 이름의 Class를 사용하는데 ClassCastException이 발생합니다. 원인과 수정 방법은 무엇입니까?
 같은 이름이라도 Class Loader가 다르면 JVM은 서로 다른 Type으로 취급합니다. `obj.getClass().getClassLoader()`와 캐스트 대상 Class의 Loader를 비교해 다른지 확인합니다. Plugin과 Core가 공유해야 하는 Class는 Bootstrap 또는 Platform Loader에서 로딩하도록 Loader 위임 정책을 정의합니다. Plugin API 인터페이스를 별도 모듈로 분리하고 Plugin ClassLoader가 해당 모듈을 위임하게 구성합니다.

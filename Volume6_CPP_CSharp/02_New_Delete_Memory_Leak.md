@@ -27,7 +27,7 @@ delete session;                     // destruct + deallocate
 
 Memory Leak은 더 이상 필요하지 않은 동적 Memory나 Resource를 반환하지 않아 Process가 계속 보유하는 문제다. 주소를 잃어 해제할 방법이 없는 누수뿐 아니라, 논리적으로 불필요하지만 참조가 남아 수명이 계속 연장되는 경우도 운영상 누수처럼 보일 수 있다.
 
-현대 C++에서는 `new`와 `delete`를 Business Logic에서 직접 짝짓기보다 값 Type, Standard Container, RAII와 Smart Pointer로 소유권을 표현하는 것이 기본이다.
+현대 C++에서는 `new`와 `delete`를 Business Logic에서 직접 짝짓기보다 값 Type, Standard Container, RAII(Resource Acquisition Is Initialization)와 Smart Pointer로 소유권을 표현하는 것이 기본이다.
 
 ## 2. 저장 공간과 객체 수명
 
@@ -168,7 +168,7 @@ Leak은 Heap Memory만의 문제가 아니다. File Descriptor, Socket, Mutex, D
 
 | 오류 | 의미 | 대표 결과 |
 |---|---|---|
-| Memory Leak | 불필요 Memory를 반환하지 않음 | RSS 증가, OOM |
+| Memory Leak | 불필요 Memory를 반환하지 않음 | RSS(Resident Set Size) 증가, OOM(Out of Memory) |
 | Dangling Pointer | 수명이 끝난 객체 주소를 보유 | 잘못된 접근 가능 |
 | Use-after-free | 해제된 객체를 실제 사용 | 데이터 손상·Crash |
 | Double Free | 같은 Allocation을 두 번 해제 | Allocator 손상·Crash |
@@ -275,7 +275,7 @@ void BeginSend(Session* session)
 
 단순 Raw Pointer Capture는 Use-after-free 위험이 있다. 가능한 전략은 다음과 같다.
 
-- I/O Context가 Session을 단일 소유하고 완료 후 파괴
+- I/O(Input/Output) Context가 Session을 단일 소유하고 완료 후 파괴
 - `shared_ptr` Capture로 작업까지 수명 연장
 - `weak_ptr` Lock 성공 시에만 접근
 - Stable ID·Generation으로 실행 시 재조회

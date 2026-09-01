@@ -42,9 +42,9 @@ Pointer와 Reference는 다음 상황에 사용한다.
 - 동적 다형성과 Runtime 객체 선택
 - Linked List·Tree·Graph 같은 연결 구조
 - 연속 Memory의 배열·Buffer 순회
-- 선택적 객체, Callback과 C API 연동
+- 선택적 객체, Callback과 C API(Application Programming Interface) 연동
 
-두 기능은 소유권을 자동 결정하지 않는다. Raw Pointer가 가리키는 객체를 누가 파괴해야 하는지, Reference가 대상보다 오래 남지 않는지는 별도 계약이다. 현대 C++에서는 소유 자원은 RAII·Smart Pointer·Container로 표현하고 Raw Pointer·Reference는 주로 비소유 접근에 사용한다.
+두 기능은 소유권을 자동 결정하지 않는다. Raw Pointer가 가리키는 객체를 누가 파괴해야 하는지, Reference가 대상보다 오래 남지 않는지는 별도 계약이다. 현대 C++에서는 소유 자원은 RAII(Resource Acquisition Is Initialization)·Smart Pointer·Container로 표현하고 Raw Pointer·Reference는 주로 비소유 접근에 사용한다.
 
 ## 3. Pointer의 핵심 동작
 
@@ -302,7 +302,7 @@ Slot을 재사용할 때 Generation을 증가시키면 오래된 Handle이 새 E
 
 ### Session과 비동기 Callback
 
-Network Callback이 Session Raw Pointer를 Capture했는데 Callback 실행 전에 Session이 종료되면 Use-after-free가 난다. 공유 소유가 필요한지, 단일 I/O Thread가 소유할지, `weak_ptr`로 존재 여부를 확인할지 설계한다.
+Network Callback이 Session Raw Pointer를 Capture했는데 Callback 실행 전에 Session이 종료되면 Use-after-free가 난다. 공유 소유가 필요한지, 단일 I/O(Input/Output) Thread가 소유할지, `weak_ptr`로 존재 여부를 확인할지 설계한다.
 
 `shared_ptr` Capture는 안전해 보여도 작업 Queue가 Session을 예상보다 오래 살려 Memory를 증가시킬 수 있다. 수명 연장도 운영 비용이다.
 

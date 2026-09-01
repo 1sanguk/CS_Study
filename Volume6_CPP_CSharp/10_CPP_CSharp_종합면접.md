@@ -10,9 +10,9 @@ importance: 5
 
 ## 학습 목표
 
-- C++ 서버에서 RSS가 지속 증가할 때 Heap Profiler와 Sanitizer가 탐지하지 못하는 Dangling·Use-after-free 패턴과 탐지 가능한 패턴을 구분하고, 어떤 도구 조합(AddressSanitizer·LeakSanitizer·Heap Profiler)과 코드 경로 검토 순서를 선택할지 판단할 수 있다.
-- C# 서버에서 세션 종료 후 RSS가 줄지 않을 때 GC Retention(Static·Event·Closure)과 Native 자원 미해제 중 어느 쪽인지 Memory Dump의 Root Path·Allocation Rate·Finalizer Queue 지표로 구분하고, 적합한 해제 패턴(명시적 Unsubscribe·WeakReference·IDisposable)을 결정할 수 있다.
-- 비동기 경계에서 C++의 Buffer Move RAII와 C#의 ArrayPool try/finally 패턴 중 Task 취소·예외 발생 시 자원이 누출되는 조건을 코드 경로 수준에서 진단하고, 수명 보장 설계(IMemoryOwner<byte>·Span 경계 제한·RAII Move Scope)를 결정할 수 있다.
+- C++ 서버에서 RSS(Resident Set Size)가 지속 증가할 때 Heap Profiler와 Sanitizer가 탐지하지 못하는 Dangling·Use-after-free 패턴과 탐지 가능한 패턴을 구분하고, 어떤 도구 조합(AddressSanitizer·LeakSanitizer·Heap Profiler)과 코드 경로 검토 순서를 선택할지 판단할 수 있다.
+- C# 서버에서 세션 종료 후 RSS가 줄지 않을 때 GC(Garbage Collection) Retention(Static·Event·Closure)과 Native 자원 미해제 중 어느 쪽인지 Memory Dump의 Root Path·Allocation Rate·Finalizer Queue 지표로 구분하고, 적합한 해제 패턴(명시적 Unsubscribe·WeakReference·IDisposable)을 결정할 수 있다.
+- 비동기 경계에서 C++의 Buffer Move RAII(Resource Acquisition Is Initialization)와 C#의 ArrayPool try/finally 패턴 중 Task 취소·예외 발생 시 자원이 누출되는 조건을 코드 경로 수준에서 진단하고, 수명 보장 설계(IMemoryOwner<byte>·Span 경계 제한·RAII Move Scope)를 결정할 수 있다.
 - 게임 서버 Tick p99 Spike가 이벤트 패치 후 발생했을 때, C++ 서버(dynamic_cast 추가·new 빈번)와 C# 서버(LINQ 체인·Gen 0 빈도 증가) 각각에서 어떤 진단 지표(VTune Cache Miss·dotnet-counters Allocation Rate·GC Pause)로 병목을 확인하고 조치 우선순위를 판단할 수 있다.
 
 ## 1. 개요

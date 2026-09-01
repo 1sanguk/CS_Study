@@ -49,7 +49,7 @@ Page Table에 현재 처리 가능한 Mapping 없음
        OS가 Mapping 보완 또는 접근 거부
 ```
 
-TLB(Translation Lookaside Buffer)는 최근 주소 변환을 캐시한다. TLB Miss는 하드웨어나 운영체제가 페이지 테이블을 탐색해 유효한 매핑을 찾으면 OS 개입 없이 해결된다. 유효한 매핑이 없을 때 Page Fault가 발생한다.
+TLB(Translation Lookaside Buffer)는 최근 주소 변환을 캐시한다. TLB Miss는 하드웨어나 운영체제가 페이지 테이블을 탐색해 유효한 매핑을 찾으면 OS(Operating System) 개입 없이 해결된다. 유효한 매핑이 없을 때 Page Fault가 발생한다.
 
 ### Page Fault 처리 흐름
 
@@ -113,7 +113,7 @@ find /data/maps -name "*.bin" -exec cat {} > /dev/null \;
 |---|---|---|---|
 | CPU Cache Miss | 최근 Data·명령 | 하위 Cache 또는 RAM 접근 | 하드웨어 지연 |
 | TLB Miss | 가상→물리 주소 변환 | Page Table Walk | OS 개입 없이 해결 가능 |
-| Minor Page Fault | 현재 Mapping 보완 | Frame 연결·COW 등 | Kernel 진입, Disk I/O 없음 |
+| Minor Page Fault | 현재 Mapping 보완 | Frame 연결·COW(Copy-On-Write) 등 | Kernel 진입, Disk I/O 없음 |
 | Major Page Fault | 저장장치의 Page 필요 | File·Swap Read | 큰 지연 가능 |
 | Protection Fault | 허용되지 않은 접근 | SIGSEGV·프로세스 종료 | 정상 Paging과 구분 |
 

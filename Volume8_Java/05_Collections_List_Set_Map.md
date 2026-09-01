@@ -12,7 +12,7 @@ importance: 5
 
 - Tick 루프에서 세션 조회 지연이 급증했을 때, HashMap·ConcurrentHashMap·ArrayDeque 중 어느 구조를 교체해야 하는지 연산 요구와 Thread-safety 관점에서 결정할 수 있다.
 - 운영 중 특정 playerId HashMap 조회가 null을 반환하는 버그를 발견했을 때, Mutable Key로 인한 hashCode 변경이 원인인지 확인하고 불변 Key로 수정하는 방법을 결정할 수 있다.
-- ConcurrentHashMap에서 get 후 put 패턴으로 킬 카운터를 구현했는데 Race Condition으로 값이 낮게 집계될 때, compute·merge 중 어떤 API를 사용해야 하는지 결정할 수 있다.
+- ConcurrentHashMap에서 get 후 put 패턴으로 킬 카운터를 구현했는데 Race Condition으로 값이 낮게 집계될 때, compute·merge 중 어떤 API(Application Programming Interface)를 사용해야 하는지 결정할 수 있다.
 - 점수 동점 플레이어를 TreeMap에 저장했는데 Comparator가 0을 반환해 한 플레이어가 사라지는 버그를 발견했을 때, Comparator에 보조 Key 추가 또는 `Map<Long, List<Player>>` 구조 변경 중 어떤 방법이 적합한지 결정할 수 있다.
 
 ## 1. 개요
@@ -62,11 +62,11 @@ HashMap은 일반적으로 삽입 순서를 계약하지 않는다. LinkedHashMa
 - **Key 안정성**: HashMap에 넣은 Key의 equals·hashCode 관련 Field를 변경하지 않는다. Player ID처럼 불변 식별자를 Key로 사용한다.
 - **순회 변경**: 일반 Iterator 순회 중 구조를 직접 바꾸지 않는다. Iterator remove, 별도 수집 후 변경 또는 목적에 맞는 Concurrent Collection을 사용한다.
 - **정렬 계약**: Comparator는 반사성·추이성과 일관된 순서를 제공해야 한다. 점수 동점 규칙까지 넣어 재시작 후에도 결정적인 결과를 만든다.
-- **복합 원자성**: ConcurrentHashMap의 compute 계열을 사용할 때 Mapping Function을 짧게 유지한다. 외부 I/O나 같은 Map의 복잡한 재진입을 피한다.
+- **복합 원자성**: ConcurrentHashMap의 compute 계열을 사용할 때 Mapping Function을 짧게 유지한다. 외부 I/O(Input/Output)나 같은 Map의 복잡한 재진입을 피한다.
 
 ### 게임 서버 사례
 
-Session 조회는 playerId HashMap, Tick 입력 순서는 Queue, Timer 만료는 PriorityQueue처럼 요구별 구조를 나눈다. Top Ranking과 전체 원본 저장도 같은 구조로 해결하지 않는다. 부하 Test에서는 평균 시간 외에 Rehash 순간, GC Allocation과 Hot Key 경쟁을 관찰한다.
+Session 조회는 playerId HashMap, Tick 입력 순서는 Queue, Timer 만료는 PriorityQueue처럼 요구별 구조를 나눈다. Top Ranking과 전체 원본 저장도 같은 구조로 해결하지 않는다. 부하 Test에서는 평균 시간 외에 Rehash 순간, GC(Garbage Collection) Allocation과 Hot Key 경쟁을 관찰한다.
 
 ## 4. 쉬운 예시
 
@@ -179,7 +179,7 @@ get→put 사이에 다른 Thread가 개입해 이전 값으로 덮어씁니다.
 TreeMap은 Comparator가 0이면 같은 Key로 취급해 기존 Value를 덮어씁니다. equals와 무관하게 Comparator 결과만으로 Key 동등성을 판단합니다. 수정 방법: ① Comparator에 보조 Key 추가 `score 비교 → 0이면 playerId.compareTo(...)` → 동점도 별도 엔트리로 보관. ② 구조 변경 `TreeMap<Long, List<Player>>` → 같은 점수에 여러 플레이어를 List로 보관 후 descendingKeySet()으로 Top N 조회.
 
 ### Q4. 게임 서버 Tick 루프에서 세션 HashMap의 순간 지연이 발생합니다. async-profiler flame graph 결과 HashMap.transfer()가 상위에 올라왔습니다. 원인과 방지 방법은 무엇입니까?
-Load Factor 초과로 Rehash가 발생할 때 모든 원소를 새 배열로 재배치합니다. 기본 Capacity(16) + Load Factor(0.75)라면 12번째 삽입부터 Rehash 시작. 방지: 예상 세션 최대치를 알면 초기 Capacity를 `size / 0.75 + 1`로 지정. 예: 세션 1,000개 → `new HashMap<>(1334)`. Rehash 빈도는 JFR HashMap 이벤트 또는 async-profiler의 HashMap.resize() 호출 수로 확인.
+Load Factor 초과로 Rehash가 발생할 때 모든 원소를 새 배열로 재배치합니다. 기본 Capacity(16) + Load Factor(0.75)라면 12번째 삽입부터 Rehash 시작. 방지: 예상 세션 최대치를 알면 초기 Capacity를 `size / 0.75 + 1`로 지정. 예: 세션 1,000개 → `new HashMap<>(1334)`. Rehash 빈도는 JFR(Java Flight Recorder) HashMap 이벤트 또는 async-profiler의 HashMap.resize() 호출 수로 확인.
 
 ### Q5. 게임 서버 코드 리뷰에서 `for (Player p : sessions.values()) { if (p.isDisconnected()) sessions.remove(p.id); }` 패턴을 발견했습니다. 어떤 문제가 있고 어떻게 수정합니까?
 일반 Map에서 순회 중 구조 변경 시 ConcurrentModificationException이 발생합니다. ConcurrentHashMap은 ConcurrentModificationException은 없지만 순회 중 제거가 스냅샷을 보장하지 않아 일부 항목을 건너뛸 수 있습니다. 수정: ① `sessions.values().removeIf(p -> p.isDisconnected())` — ConcurrentHashMap에서 Thread-safe. ② 분리 수집 후 제거: disconnectedIds를 먼저 List로 수집 후 `sessions.keySet().removeAll(disconnectedIds)`. ③ Iterator.remove() 패턴 사용.

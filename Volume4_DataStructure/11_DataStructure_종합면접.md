@@ -57,7 +57,7 @@ importance: 5
 
 ### 3단계: 성능 경계
 
-평균 처리량만 보지 않고 최악 복잡도와 p99 지연을 본다. Hash 충돌, BST 편향, Dynamic Array 재할당, 한 Tick의 Timer 폭증처럼 드문 사건이 서버 지연을 만들 수 있다.
+평균 처리량만 보지 않고 최악 복잡도와 p99 지연을 본다. Hash 충돌, BST(Binary Search Tree) 편향, Dynamic Array 재할당, 한 Tick의 Timer 폭증처럼 드문 사건이 서버 지연을 만들 수 있다.
 
 ### 4단계: 운영 조건
 
@@ -69,8 +69,8 @@ importance: 5
 |---|---|---|---|
 | Array·Dynamic Array | O(1) Index, 연속 순회 | 중간 삽입·삭제 O(n), 재할당 | Entity 순회, Packet Buffer |
 | Linked List | 위치를 알 때 O(1) 연결 변경 | 탐색 O(n), Cache·할당 비용 | LRU 순서, 안정적 Node 연결 |
-| Stack | LIFO O(1) | Top 외 접근 제한 | 호출·Undo·DFS |
-| Queue·Deque | FIFO·양끝 O(1) | 임의 검색 부적합 | 작업 전달, BFS, Sliding Window |
+| Stack | LIFO O(1) | Top 외 접근 제한 | 호출·Undo·DFS(Depth-First Search) |
+| Queue·Deque | FIFO·양끝 O(1) | 임의 검색 부적합 | 작업 전달, BFS(Breadth-First Search), Sliding Window |
 | Hash Table | 정확한 Key 평균 O(1) | 순서 없음, 충돌·Rehash | Session ID, Cache Lookup |
 | 균형 BST | 정렬·범위, 최악 O(log n) | Pointer·회전 비용 | Sorted Map, 시간·점수 범위 |
 | Heap | Top O(1), Push·Pop O(log n) | 임의 검색 O(n) | Timer, Priority Scheduler, Top-K |
@@ -82,7 +82,7 @@ importance: 5
 
 ## 4. Array와 Linked List 선택
 
-Array는 원소가 연속 Memory에 있어 Index 접근과 전체 순회가 빠르다. CPU Cache는 인접 데이터를 한 번에 가져오므로 게임 Tick처럼 모든 Entity를 반복 순회하는 작업에 유리하다.
+Array는 원소가 연속 Memory에 있어 Index 접근과 전체 순회가 빠르다. CPU(Central Processing Unit) Cache는 인접 데이터를 한 번에 가져오므로 게임 Tick처럼 모든 Entity를 반복 순회하는 작업에 유리하다.
 
 Dynamic Array는 Capacity가 부족할 때 더 큰 공간을 할당하고 원소를 이동한다. 한 번의 Push가 O(n)일 수 있지만 여러 Push의 평균은 분할 상환 O(1)이다. 재할당 후 기존 Pointer·Reference·Iterator가 무효화될 수 있다.
 
@@ -237,7 +237,7 @@ Container 수정 후 참조가 유효한지도 중요하다. Array 재할당은 
 - Immutable Snapshot을 교체해 읽기를 Lock 없이 만든다.
 - 검증된 Concurrent Container를 사용한다.
 
-`Contains` 후 `Insert`처럼 여러 호출로 이뤄진 논리는 각 메서드가 Thread-safe여도 Atomic하지 않다. 조건 확인과 변경을 하나의 임계 구역 또는 원자 API로 묶어야 한다.
+`Contains` 후 `Insert`처럼 여러 호출로 이뤄진 논리는 각 메서드가 Thread-safe여도 Atomic하지 않다. 조건 확인과 변경을 하나의 임계 구역 또는 원자 API(Application Programming Interface)로 묶어야 한다.
 
 ## 13. 게임 서버 설계 예시
 

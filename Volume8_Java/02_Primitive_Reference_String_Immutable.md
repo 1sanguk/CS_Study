@@ -11,7 +11,7 @@ importance: 5
 ## 학습 목표
 
 - 게임 Tick Broadcast 시 Mutable Position 객체를 Snapshot과 공유했을 때 어떤 버그가 발생하는지 파악하고, Immutable DTO(record)로 전환해야 하는 시점을 결정할 수 있다.
-- GC 지표에서 단수명 Integer 객체 Allocation이 급증할 때, JFR Allocation Profiling으로 Hot Path Autoboxing을 확인하고 Primitive 전용 컬렉션 도입 여부를 판단할 수 있다.
+- GC(Garbage Collection) 지표에서 단수명 Integer 객체 Allocation이 급증할 때, JFR(Java Flight Recorder) Allocation Profiling으로 Hot Path Autoboxing을 확인하고 Primitive 전용 컬렉션 도입 여부를 판단할 수 있다.
 - Immutable 클래스 설계에서 final Field 선언만으로는 불충분한 시나리오를 식별하고, Defensive Copy(생성자)와 Unmodifiable View(Getter)를 적용해야 하는 지점을 결정할 수 있다.
 - Integer == 비교가 Cache 범위(-128~127) 밖에서 간헐적 버그를 유발하는 코드를 발견했을 때, 운영 영향 범위를 추정하고 equals 전환 우선순위를 결정할 수 있다.
 
@@ -66,7 +66,7 @@ Wrapper Type은 Collection과 Generic에서 Primitive 값을 객체로 다룰 �
 
 ### 게임 서버 점검 예시
 
-PlayerSnapshot이 Mutable Inventory List를 그대로 보유하면 Snapshot 전송 전 원본 변경이 Packet 내용까지 바꿀 수 있다. Snapshot 생성 시 필요한 값만 복사하고 생성 뒤 상태를 변경하지 않는다. Profile에서 Boxing과 문자열 Allocation이 실제 Hot Path인지 확인한 뒤 Primitive 전용 구조나 Buffer API를 검토한다.
+PlayerSnapshot이 Mutable Inventory List를 그대로 보유하면 Snapshot 전송 전 원본 변경이 Packet 내용까지 바꿀 수 있다. Snapshot 생성 시 필요한 값만 복사하고 생성 뒤 상태를 변경하지 않는다. Profile에서 Boxing과 문자열 Allocation이 실제 Hot Path인지 확인한 뒤 Primitive 전용 구조나 Buffer API(Application Programming Interface)를 검토한다.
 
 ## 4. 쉬운 예시
 

@@ -10,8 +10,8 @@ importance: 5
 
 ## 학습 목표
 
-- Tick p99 Spike가 ThreadPool Starvation에서 비롯된 것인지, Blocking I/O 호출인지 Profiler 지표(ThreadPool Queue Length·Thread Count·Wait Time)로 구분하고, Starvation을 유발한 코드 경로를 특정할 수 있다.
-- I/O-bound 작업에서 `await`가 Thread를 반환하는 조건과, CPU-bound 작업에 `await`·`Task.Run`을 잘못 적용했을 때 Thread 낭비가 발생하는 패턴을 진단하고, 게임 서버 I/O·Tick 분리 설계에서 적합한 방식을 결정할 수 있다.
+- Tick p99 Spike가 ThreadPool Starvation에서 비롯된 것인지, Blocking I/O(Input/Output) 호출인지 Profiler 지표(ThreadPool Queue Length·Thread Count·Wait Time)로 구분하고, Starvation을 유발한 코드 경로를 특정할 수 있다.
+- I/O-bound 작업에서 `await`가 Thread를 반환하는 조건과, CPU(Central Processing Unit)-bound 작업에 `await`·`Task.Run`을 잘못 적용했을 때 Thread 낭비가 발생하는 패턴을 진단하고, 게임 서버 I/O·Tick 분리 설계에서 적합한 방식을 결정할 수 있다.
 - 단일 Thread Context에서 Sync-over-async가 Deadlock을 유발하는 정확한 조건과, ThreadPool Thread가 Blocking으로 소진되어 Starvation이 발생하는 경로를 코드 수준에서 진단하고, `async all the way` 전파 경계를 판단할 수 있다.
 - Session 종료 시 Outstanding Task·Capture된 Closure·CancellationToken 전파가 연결되지 않아 자원이 유지되는 패턴을 진단하고, 종료 순서와 정리 불변식을 설계 결정할 수 있다.
 
@@ -137,7 +137,7 @@ catch (ProtocolException ex)
 
 ## 10. Cancellation과 Timeout
 
-CancellationToken은 강제 Thread 종료가 아니라 협력적 취소 신호다. API는 Token을 하위 I/O와 반복 계산에 전파하고 안전한 지점에서 중단한다.
+CancellationToken은 강제 Thread 종료가 아니라 협력적 취소 신호다. API(Application Programming Interface)는 Token을 하위 I/O와 반복 계산에 전파하고 안전한 지점에서 중단한다.
 
 ```csharp
 await database.QueryAsync(query, token);

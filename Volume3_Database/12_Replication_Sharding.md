@@ -27,7 +27,7 @@ importance: 5
 
 읽기 트래픽이 쓰기보다 훨씬 크면 Primary 하나에 모든 조회를 보내지 않고 Replica로 분산할 수 있다. 그러나 Replica가 적용하지 못한 최신 변경을 읽으면 사용자에게 이전 상태를 보여 줄 수 있다.
 
-데이터와 쓰기량이 한 DB 서버의 CPU, Memory, Storage·IOPS 한계를 넘으면 Replica를 늘려도 모든 쓰기가 여전히 Primary에 모인다. Sharding은 플레이어별 쓰기를 여러 Primary로 분산한다. 대신 한 트랜잭션·JOIN으로 처리하던 관계가 Shard를 넘으면 분산 조정과 부분 실패를 다뤄야 한다.
+데이터와 쓰기량이 한 DB 서버의 CPU(Central Processing Unit), Memory, Storage·IOPS 한계를 넘으면 Replica를 늘려도 모든 쓰기가 여전히 Primary에 모인다. Sharding은 플레이어별 쓰기를 여러 Primary로 분산한다. 대신 한 트랜잭션·JOIN으로 처리하던 관계가 Shard를 넘으면 분산 조정과 부분 실패를 다뤄야 한다.
 
 ## 3. 핵심 동작 원리
 
@@ -49,7 +49,7 @@ Replica A → Log 수신 → 적용 → Read 제공
 Replica B → Log 수신 → 적용 → Read 제공
 ```
 
-Primary가 WAL·Binlog 성격의 변경 로그를 보내고 Replica가 순서대로 적용한다. Replica가 로그를 받은 시점과 Query에 보이도록 적용한 시점은 다를 수 있다. Lag를 시간 하나로만 측정하지 않고 수신 위치와 재생 위치, Byte·Transaction 차이를 함께 본다.
+Primary가 WAL(Write-Ahead Logging)·Binlog 성격의 변경 로그를 보내고 Replica가 순서대로 적용한다. Replica가 로그를 받은 시점과 Query에 보이도록 적용한 시점은 다를 수 있다. Lag를 시간 하나로만 측정하지 않고 수신 위치와 재생 위치, Byte·Transaction 차이를 함께 본다.
 
 #### 동기·비동기 복제
 
@@ -77,7 +77,7 @@ Replica B (log position 98)  → A를 따라 Catch-up
 Clients → 새 Endpoint
 ```
 
-장애 감지는 Network 분할과 느린 서버를 구분하기 어렵다. 이전 Primary가 살아 있는데 격리되지 않은 채 쓰기를 받으면 Split-brain과 상충 데이터가 생긴다. Fencing, Lease·Consensus 기반 관리와 단일 쓰기 Endpoint가 필요하다. Failover는 장애 감지 → 승격 → DNS·Proxy·Connection Pool 갱신 → Application Retry까지의 RTO를 측정한다. 데이터 손실 허용 범위는 RPO로 정의한다.
+장애 감지는 Network 분할과 느린 서버를 구분하기 어렵다. 이전 Primary가 살아 있는데 격리되지 않은 채 쓰기를 받으면 Split-brain과 상충 데이터가 생긴다. Fencing, Lease·Consensus 기반 관리와 단일 쓰기 Endpoint가 필요하다. Failover는 장애 감지 → 승격 → DNS·Proxy·Connection Pool 갱신 → Application Retry까지의 RTO(Recovery Time Objective)를 측정한다. 데이터 손실 허용 범위는 RPO(Recovery Point Objective)로 정의한다.
 
 ### 3.2 Sharding
 

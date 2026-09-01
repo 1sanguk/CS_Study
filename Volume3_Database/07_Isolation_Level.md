@@ -19,7 +19,7 @@ importance: 5
 
 격리 수준은 동시 트랜잭션이 서로의 중간 결과를 어느 정도 관찰할지 정하는 기준이다.
 
-격리 수준(Isolation Level)은 동시에 실행되는 트랜잭션의 결과를 어떤 직렬 실행처럼 보이게 할지, 어떤 이상 현상을 허용할지 정한다. SQL 표준에서 흔히 Read Uncommitted, Read Committed, Repeatable Read, Serializable 단계로 설명하지만 같은 이름의 실제 Lock·MVCC 동작은 DBMS마다 다를 수 있다.
+격리 수준(Isolation Level)은 동시에 실행되는 트랜잭션의 결과를 어떤 직렬 실행처럼 보이게 할지, 어떤 이상 현상을 허용할지 정한다. SQL 표준에서 흔히 Read Uncommitted, Read Committed, Repeatable Read, Serializable 단계로 설명하지만 같은 이름의 실제 Lock·MVCC(Multi-Version Concurrency Control) 동작은 DBMS마다 다를 수 있다.
 
 격리는 데이터가 최신인지 여부만 다루는 설정이 아니다. 읽기 Snapshot의 범위, 충돌 쓰기의 대기·실패, 조건 범위에 새 행이 들어오는지와 불변식 검증에 영향을 준다. 트랜잭션별 업무 규칙을 먼저 정의하고 제품 문서와 동시성 테스트로 보장을 확인한다.
 

@@ -25,12 +25,12 @@ Packet과 임시 객체의 높은 할당률이 GC Pause, Allocator 경쟁과 메
 ```text
 rent→initialize→use→clear sensitive state→return→reuse
 ```
-Pool은 할당을 줄이지만 Peak 크기 메모리 유지, 오래된 상태, Double Return과 Use-after-return 위험이 있다. 작은·드문 객체에는 복잡도만 늘 수 있다.
+Pool은 할당을 줄이지만 Peak 크기 RAM(Random Access Memory) 유지, 오래된 상태, Double Return과 Use-after-return 위험이 있다. 작은·드문 객체에는 복잡도만 늘 수 있다.
 
 Object Pool과 Buffer Pool 관점에서는 Sequence, Timestamp, Session Generation과 상태 Version으로 오래되거나 중복된 Message를 식별한다.
 ### Pool의 목적과 비용
 
-고빈도 Packet 객체는 Allocator 경쟁, Heap Fragmentation이나 GC 압력을 만들 수 있다. Pool은 반환 객체를 재사용해 Allocation과 지연 변동을 줄인다. 평균 속도보다 Tick 중 갑자기 발생하는 GC Pause를 줄이는 목적이 중요하다.
+고빈도 Packet 객체는 Allocator 경쟁, Heap Fragmentation이나 GC(Garbage Collection) 압력을 만들 수 있다. Pool은 반환 객체를 재사용해 Allocation과 지연 변동을 줄인다. 평균 속도보다 Tick 중 갑자기 발생하는 GC Pause를 줄이는 목적이 중요하다.
 
 Pool도 동기화, 초기화, 최대 크기와 Lifetime 관리가 필요하다. 사용량보다 큰 Memory를 오래 잡을 수 있으므로 Profile에서 Allocation이 병목일 때 도입한다.
 
@@ -41,7 +41,7 @@ Rent → initialize → use → reset → Return
        실패 경로에서도 반드시 Return
 ```
 
-반환 객체에는 이전 Player ID, Collection, Callback과 민감 데이터가 남을 수 있다. Reset 계약을 명확히 한다. C++에서는 RAII Handle, C#에서는 `try/finally`나 `IDisposable`로 반환 누락을 막는다. 반환 뒤 참조를 보관하면 다른 요청이 재사용한 객체를 수정하는 Use-after-return이 생긴다.
+반환 객체에는 이전 Player ID, Collection, Callback과 민감 데이터가 남을 수 있다. Reset 계약을 명확히 한다. C++에서는 RAII(Resource Acquisition Is Initialization) Handle, C#에서는 `try/finally`나 `IDisposable`로 반환 누락을 막는다. 반환 뒤 참조를 보관하면 다른 요청이 재사용한 객체를 수정하는 Use-after-return이 생긴다.
 
 비동기 Callback까지 객체가 필요하면 Lifetime을 연장하거나 안전하게 Copy한다. Pool 객체가 넓은 범위로 Escape하지 않게 한다.
 

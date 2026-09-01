@@ -11,7 +11,7 @@ importance: 5
 ## 학습 목표
 
 - 함수에 복수의 종료 경로(Early Return, 예외)가 있을 때, RAII 패턴이 Manual cleanup보다 유리한지 판단할 수 있다.
-- 공동 소유가 필요한 비동기 I/O 수명 설계에서 `unique_ptr`, `shared_ptr`, `weak_ptr` 중 어느 것을 어디에 배치할지 결정할 수 있다.
+- 공동 소유가 필요한 비동기 I/O(Input/Output) 수명 설계에서 `unique_ptr`, `shared_ptr`, `weak_ptr` 중 어느 것을 어디에 배치할지 결정할 수 있다.
 - Party–Player처럼 양방향 참조가 생기는 설계에서 Cycle 누수 위험을 판단하고 `weak_ptr`로 해소할 수 있다.
 - `shared_ptr`의 Reference Count가 Thread-safe함에도 객체 접근에 별도 동기화가 필요한 조건을 판단할 수 있다.
 
@@ -91,7 +91,7 @@ private:
 
 ### Stack Unwinding과 Destructor 주의사항
 
-Constructor가 성공한 Member와 Base만 파괴된다. Destructor는 일반적으로 예외를 밖으로 던지지 않아야 한다. 이미 다른 예외를 처리하며 Stack Unwinding 중인데 Destructor가 또 예외를 던지면 `std::terminate`로 이어질 수 있다. 실패 가능한 정리는 명시적인 `Close`·`Commit` API로 결과를 반환하고, Destructor는 안전한 Fallback 정리를 수행하는 식으로 설계한다.
+Constructor가 성공한 Member와 Base만 파괴된다. Destructor는 일반적으로 예외를 밖으로 던지지 않아야 한다. 이미 다른 예외를 처리하며 Stack Unwinding 중인데 Destructor가 또 예외를 던지면 `std::terminate`로 이어질 수 있다. 실패 가능한 정리는 명시적인 `Close`·`Commit` API(Application Programming Interface)로 결과를 반환하고, Destructor는 안전한 Fallback 정리를 수행하는 식으로 설계한다.
 
 ## 4. unique_ptr
 

@@ -168,7 +168,7 @@ CREATE INDEX idx_score ON player (score);
 
 **Clustered Index의 장점**
 
-- Key 범위의 행이 물리적으로 인접해 범위 조회 I/O가 줄어든다.
+- Key 범위의 행이 물리적으로 인접해 범위 조회 I/O(Input/Output)가 줄어든다.
 - Clustered 키로 직접 행을 찾으면 Lookup이 없다.
 
 **Clustered Index의 단점**

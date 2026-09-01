@@ -34,7 +34,7 @@ Blocking `recv`는 데이터가 없으면 호출 Thread를 기다리게 한다. 
 
 ### Non-blocking과 I/O Multiplexing
 
-Non-blocking Socket은 지금 처리할 수 없으면 `EAGAIN` 또는 `WOULDBLOCK`을 반환한다. 계속 반복 호출하면 Busy Loop가 되므로 `epoll`, `kqueue` 같은 방식으로 준비된 Socket만 찾는다.
+Non-blocking Socket은 지금 처리할 수 없으면 `EAGAIN` 또는 `WOULDBLOCK`을 반환한다. 계속 반복 호출하면 Busy Loop가 되므로 `epoll(event poll)`, `kqueue` 같은 방식으로 준비된 Socket만 찾는다.
 
 ```text
 Event Loop
@@ -49,7 +49,7 @@ Level-triggered는 준비 상태가 남으면 다시 알리고 Edge-triggered는
 
 ### Readiness와 Completion
 
-Readiness는 “지금 시도하면 막히지 않는다”를, Completion은 “등록한 작업이 끝났다”를 알린다. Linux epoll은 대표적인 Readiness 방식이고 Windows IOCP는 Completion 방식이다. 둘 다 많은 연결을 적은 Thread로 다루지만 Buffer 소유권, 취소와 오류 계약이 다르다.
+Readiness는 “지금 시도하면 막히지 않는다”를, Completion은 “등록한 작업이 끝났다”를 알린다. Linux epoll은 대표적인 Readiness 방식이고 Windows IOCP(I/O Completion Port)는 Completion 방식이다. 둘 다 많은 연결을 적은 Thread로 다루지만 Buffer 소유권, 취소와 오류 계약이 다르다.
 
 ### 부분 송수신
 
@@ -160,7 +160,7 @@ void FlushSendQueue(Session& session) {
 | **Thread-per-connection (Blocking)** | recv가 데이터 올 때까지 대기 | 연결당 1 Thread | 수백 연결 | 코드 단순 |
 | **Select/Poll (Readiness)** | 준비된 FD 중 하나를 알림 | 공유 Thread | 수천 연결 | FD Set 복사 O(n) |
 | **epoll (Readiness)** | Kernel이 준비된 FD만 반환 | 공유 Thread | 수만 연결 | ET/LT 구분 필요 |
-| **IOCP (Completion)** | 작업 완료 후 Buffer와 함께 통지 | Thread Pool | 수만 연결 | Buffer Lifetime 관리 |
+| **IOCP(I/O Completion Port) (Completion)** | 작업 완료 후 Buffer와 함께 통지 | Thread Pool | 수만 연결 | Buffer Lifetime 관리 |
 | **io_uring (Completion)** | Ring Buffer로 시스템 콜 배치 | Thread Pool | 수만 연결 | 비교적 최신 API |
 
 ## 6. 장점과 단점

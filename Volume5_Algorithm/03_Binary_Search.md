@@ -246,7 +246,7 @@ Binary Search는 Random Access가 가능한 연속 배열에 잘 맞는다. Link
 
 균형 BST도 비교로 탐색 범위를 줄여 O(log n)에 Key를 찾지만 Node Pointer를 따라간다. 정렬 배열은 Cache 지역성이 좋고 조회 중심 데이터에 유리하며, Tree는 삽입·삭제와 범위 갱신에 유리하다.
 
-DB Index의 B+Tree 검색도 계층적으로 범위를 줄이지만 Binary Search와 동일한 자료구조는 아니다. Page I/O를 줄이기 위해 한 Node에 많은 Key와 자식을 둔다.
+DB Index의 B+Tree 검색도 계층적으로 범위를 줄이지만 Binary Search와 동일한 자료구조는 아니다. Page I/O(Input/Output)를 줄이기 위해 한 Node에 많은 Key와 자식을 둔다.
 
 Binary Search는 정렬 배열에서만 동작하므로, 삽입·삭제가 빈번하면 균형 BST나 Hash Table이 적합하다.
 

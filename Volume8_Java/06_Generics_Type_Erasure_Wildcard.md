@@ -18,7 +18,7 @@ importance: 5
 Generics는 Type을 Parameter로 받아 Compile Time Type Safety와 재사용성을 제공하며 Java Compiler는 대체로 Type Erasure로 이를 구현한다.
 
 ## 2. 왜 필요한가
-Object와 Cast에 의존하던 Container API에서 잘못된 Type을 Compile 시점에 막고 공통 Algorithm을 Type-safe하게 재사용한다.
+Object와 Cast에 의존하던 Container API(Application Programming Interface)에서 잘못된 Type을 Compile 시점에 막고 공통 Algorithm을 Type-safe하게 재사용한다.
 
 ## 3. 핵심 동작 원리
 ```text
@@ -186,7 +186,7 @@ Type Erasure로 두 메서드가 Erasure 후 동일한 Signature `void process(L
 Generic Varargs는 내부에서 `T[]` 배열을 생성하는데 배열은 공변이므로 `Handler<String>[]`에 `Handler<Integer>`가 저장 가능 → 읽는 쪽에서 ClassCastException. Heap Pollution 시나리오: `handlers[0] = (Handler<String>) handlers[0]`처럼 배열 내부를 외부에 노출하거나 다른 메서드에 넘길 때 발생. `@SafeVarargs` 조건: ① varargs 배열을 외부에 노출하지 않음 ② 배열에 엉뚱한 타입을 저장하지 않음 ③ final·static·private 메서드에만 적용 가능. 조건 불확실하면 `List<Handler<T>>`로 대체.
 
 ### Q6. Reflection으로 클래스의 메서드를 탐색했는데 소스 코드에 없는 `compareTo(Object)` 메서드가 나타납니다. `isSynthetic()=true`입니다. 이 메서드가 무엇이고 왜 생성됐습니까?
-Compiler가 Type Erasure 후 Override 다형성을 유지하기 위해 자동으로 생성한 Bridge Method입니다. `class Foo implements Comparable<Foo>`에서 Erasure 후 JVM이 `Comparable.compareTo(Object)`를 요구하는데 실제 구현은 `compareTo(Foo)`. Compiler가 `compareTo(Object o) { return compareTo((Foo) o); }` Bridge Method를 합성해 JVM dispatch가 동작하도록 합니다. Source에 없는 정상 코드이며 Stack Trace에 나타나면 그 아래 실제 구현 메서드를 확인합니다.
+Compiler가 Type Erasure 후 Override 다형성을 유지하기 위해 자동으로 생성한 Bridge Method입니다. `class Foo implements Comparable<Foo>`에서 Erasure 후 JVM(Java Virtual Machine)이 `Comparable.compareTo(Object)`를 요구하는데 실제 구현은 `compareTo(Foo)`. Compiler가 `compareTo(Object o) { return compareTo((Foo) o); }` Bridge Method를 합성해 JVM dispatch가 동작하도록 합니다. Source에 없는 정상 코드이며 Stack Trace에 나타나면 그 아래 실제 구현 메서드를 확인합니다.
 
 ## 10. 예상 꼬리질문
 - `TypeReference<List<Player>>`를 사용할 때 익명 서브클래스가 제네릭 타입 정보를 유지하는 원리와, 이 방법이 Type Erasure를 피할 수 있는 이유와 한계는 무엇인가요?

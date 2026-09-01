@@ -17,7 +17,7 @@ importance: 4
 
 ## 1. 개요
 
-DNS(Domain Name System)는 도메인 이름을 IP 주소 등 자원 정보로 변환한다. ARP(Address Resolution Protocol)는 IPv4 로컬 네트워크에서 다음 대상 IP에 대응하는 MAC 주소를 알아낸다. ICMP(Internet Control Message Protocol)는 IP 전달 중 오류와 진단 정보를 운반한다.
+DNS(Domain Name System)는 도메인 이름을 IP(Internet Protocol) 주소 등 자원 정보로 변환한다. ARP(Address Resolution Protocol)는 IPv4 로컬 네트워크에서 다음 대상 IP에 대응하는 MAC(Media Access Control) 주소를 알아낸다. ICMP(Internet Control Message Protocol)는 IP 전달 중 오류와 진단 정보를 운반한다.
 
 세 프로토콜은 모두 통신을 돕지만 대상 계층과 범위가 다르다.
 
@@ -50,7 +50,7 @@ Stub Resolver → Recursive Resolver
 - MX: 메일 서버 지정
 - TXT: 텍스트 기반 검증·정책 정보
 
-DNS는 일반적으로 UDP 53을 사용하지만 큰 응답, 영역 전송, 일부 상황에서는 TCP도 사용한다. DNS over HTTPS나 TLS처럼 암호화된 전달 방식도 있다.
+DNS는 일반적으로 UDP(User Datagram Protocol) 53을 사용하지만 큰 응답, 영역 전송, 일부 상황에서는 TCP(Transmission Control Protocol)도 사용한다. DNS over HTTPS나 TLS(Transport Layer Security)처럼 암호화된 전달 방식도 있다.
 
 TTL을 낮추면 변경 반영이 빨라질 수 있지만 조회량이 증가한다. TTL이 끝나도 모든 클라이언트가 즉시 같은 순간에 바뀌는 것은 아니며 캐시와 연결 재사용을 고려해야 한다.
 

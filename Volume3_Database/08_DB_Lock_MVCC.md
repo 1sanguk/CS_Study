@@ -21,7 +21,7 @@ DB Lock은 충돌하는 접근을 대기시켜 일관성을 지키고 MVCC는 �
 
 DB 잠금(Lock)은 여러 트랜잭션이 같은 데이터에 접근할 때 허용 가능한 조합만 동시에 실행하도록 한다. MVCC(Multi-Version Concurrency Control)는 행의 여러 버전과 트랜잭션 가시성 정보를 이용해 독자가 자신의 Snapshot에 맞는 버전을 읽도록 한다. 일반 읽기가 Writer의 미커밋 변경을 기다리지 않게 할 수 있어 읽기 동시성을 높인다.
 
-두 방식은 배타적인 선택이 아니다. MVCC DB도 같은 행을 동시에 변경하는 Writer 사이에는 Lock이나 충돌 검사가 필요하고, 명시적 `FOR UPDATE` 읽기와 DDL에는 잠금을 사용한다. "Lock 방식 DB"와 "MVCC 방식 DB"로 단순 양분하기보다 읽기와 쓰기별 실제 동작을 본다.
+두 방식은 배타적인 선택이 아니다. MVCC DB도 같은 행을 동시에 변경하는 Writer 사이에는 Lock이나 충돌 검사가 필요하고, 명시적 `FOR UPDATE` 읽기와 DDL(Data Definition Language)에는 잠금을 사용한다. "Lock 방식 DB"와 "MVCC 방식 DB"로 단순 양분하기보다 읽기와 쓰기별 실제 동작을 본다.
 
 ## 2. 왜 필요한가
 
@@ -81,7 +81,7 @@ T2: X Lock Player 2 → Player 1 대기
 
 DBMS는 Wait-for Graph의 순환을 탐지하고 한 트랜잭션을 희생자로 Rollback할 수 있다. Lock Timeout만으로 모든 Deadlock을 처리하는 것은 아니다. Deadlock은 대기 순환이지만 단순 Lock Wait은 아직 Deadlock이 아닌 대기다.
 
-자원 접근 순서를 통일하고, 필요한 인덱스를 두며, 사용자 입력과 외부 I/O를 Lock 보유 중 기다리지 않는다.
+자원 접근 순서를 통일하고, 필요한 인덱스를 두며, 사용자 입력과 외부 I/O(Input/Output)를 Lock 보유 중 기다리지 않는다.
 
 ### MVCC Row Version
 

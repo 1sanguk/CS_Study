@@ -17,11 +17,11 @@ importance: 5
 
 ## 1. 개요
 
-RDBMS는 행과 열의 테이블, 관계, 제약 조건으로 데이터를 관리하고 SQL은 이를 정의·조회·변경하는 선언적 언어다.
+RDBMS(Relational Database Management System)는 행과 열의 테이블, 관계, 제약 조건으로 데이터를 관리하고 SQL(Structured Query Language)은 이를 정의·조회·변경하는 선언적 언어다.
 
-관계형 데이터베이스 관리 시스템(RDBMS)은 데이터를 릴레이션(Relation)이라는 논리 구조로 표현한다. 실무에서는 릴레이션을 테이블, 튜플(Tuple)을 행, 속성(Attribute)을 열로 대응해 설명한다. 각 열은 허용되는 타입과 제약을 가지고 행은 하나의 사실을 나타낸다.
+관계형 데이터베이스 관리 시스템인 RDBMS는 데이터를 릴레이션(Relation)이라는 논리 구조로 표현한다. 실무에서는 릴레이션을 테이블, 튜플(Tuple)을 행, 속성(Attribute)을 열로 대응해 설명한다. 각 열은 허용되는 타입과 제약을 가지고 행은 하나의 사실을 나타낸다.
 
-SQL(Structured Query Language)은 "어떤 반복문으로 데이터를 찾을지"보다 "어떤 결과가 필요한지"를 선언한다. DBMS의 옵티마이저가 인덱스와 통계, 조인 순서를 이용해 물리 실행 계획을 선택한다. SQL이 짧다고 실행 비용도 작은 것은 아니다.
+SQL은 "어떤 반복문으로 데이터를 찾을지"보다 "어떤 결과가 필요한지"를 선언한다. DBMS의 옵티마이저가 인덱스와 통계, 조인 순서를 이용해 물리 실행 계획을 선택한다. SQL이 짧다고 실행 비용도 작은 것은 아니다.
 
 ## 2. 왜 필요한가
 
@@ -37,7 +37,7 @@ RDBMS는 임의 조건 필터, 정렬, 집계와 조인을 제공해 접근 패�
 SQL parse → optimize plan → execute operators → storage pages → result
 ```
 
-DDL은 구조, DML은 데이터, DCL은 권한, TCL은 트랜잭션을 다룬다. 논리 SQL 순서와 실제 실행 계획은 다를 수 있다.
+DDL(Data Definition Language)은 구조, DML(Data Manipulation Language)은 데이터, DCL(Data Control Language)은 권한, TCL은 트랜잭션을 다룬다. 논리 SQL 순서와 실제 실행 계획은 다를 수 있다.
 
 ### 관계형 모델의 기본 요소
 
@@ -159,7 +159,7 @@ CREATE TABLE player (
 | 집계 함수 사용 | 불가 | 가능 |
 | 인덱스 활용 | 가능 | 제한적 |
 
-NoSQL은 SQL을 절대 지원하지 않거나 정합성이 없다는 뜻이 아니다. 제품마다 Query, Transaction과 일관성 수준이 다르다. 저장소 범주보다 실제 보장과 접근 패턴을 확인한다.
+NoSQL(Not Only SQL)은 SQL을 절대 지원하지 않거나 정합성이 없다는 뜻이 아니다. 제품마다 Query, Transaction과 일관성 수준이 다르다. 저장소 범주보다 실제 보장과 접근 패턴을 확인한다.
 
 ## 6. 장점과 단점
 
@@ -173,7 +173,7 @@ NoSQL은 SQL을 절대 지원하지 않거나 정합성이 없다는 뜻이 아�
 **RDBMS의 단점**
 
 - 인덱스는 읽기를 가속하지만 쓰기 시 모든 인덱스를 함께 갱신해야 한다.
-- 대규모 조인과 집계는 CPU·메모리·I/O를 소모한다.
+- 대규모 조인과 집계는 CPU(Central Processing Unit)·메모리·I/O(Input/Output)를 소모한다.
 - 스키마 변경이 운영 중 대형 테이블에서 오래 걸릴 수 있다.
 - 단일 노드 강한 트랜잭션 경계를 여러 샤드로 분산하면 복잡성이 커진다.
 

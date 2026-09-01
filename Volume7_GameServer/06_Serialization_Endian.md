@@ -25,7 +25,7 @@ importance: 5
 ```text
 object fields→schema/version→encode bytes→network→decode/validate→object
 ```
-Binary는 작고 빠를 수 있지만 Debug와 호환성 관리가 필요하고 Text는 가독성이 좋지만 크기·Parsing 비용이 크다. Network Byte Order는 Big Endian이다.
+Binary는 작고 빠를 수 있지만 Debug와 호환성 관리가 필요하고 Text는 가독성이 좋지만 크기·Parsing 비용이 크다. Network Byte Order는 Big Endian(MSB(Most Significant Byte) 우선)이다.
 
 상태의 최종 소유자, Message 순서, Timeout과 실패 후 재처리 기준을 명시한다.
 ### Schema와 Wire Format
@@ -43,7 +43,7 @@ PlayerMove
 
 ### Text와 Binary
 
-JSON은 사람이 읽고 도구로 확인하기 쉽지만 Field Name 반복, Parsing과 Allocation 비용이 있다. Protocol Buffers나 MessagePack 같은 Binary 형식은 크기와 처리 비용을 줄이기 좋지만 Schema와 Debug 도구가 필요하다. 운영 API에는 JSON, 고빈도 이동 Packet에는 Binary가 적합할 수 있다. 실제 Payload 크기, CPU와 Allocation을 측정해 선택한다.
+JSON(JavaScript Object Notation)은 사람이 읽고 도구로 확인하기 쉽지만 Field Name 반복, Parsing과 Allocation 비용이 있다. Protocol Buffers나 MessagePack 같은 Binary 형식은 크기와 처리 비용을 줄이기 좋지만 Schema와 Debug 도구가 필요하다. 운영 API에는 JSON, 고빈도 이동 Packet에는 Binary가 적합할 수 있다. 실제 Payload 크기, CPU와 Allocation을 측정해 선택한다.
 
 ### Endian
 
@@ -193,7 +193,7 @@ Schema .proto 파일을 서버·클라이언트 공용 저장소에서 단일 �
 - **Protobuf를 쓰면 Schema 버전 관리가 필요 없다**: Field 번호 재사용이나 필수 필드 제거는 Breaking Change다. 번호를 Reserved 처리하고 삭제한 필드는 재사용하지 않아야 한다.
 - **고정 폭 숫자를 쓰면 범위 초과 걱정이 없다**: uint16으로 받은 좌표가 맵 크기를 벗어날 수 있다. 타입 범위 내에서도 논리 범위 검증이 별도로 필요하다.
 - **UTF-8로 보내면 문자열 Encoding 문제가 해결된다**: Null 종료 여부, 최대 Byte 길이, 제어 문자 처리도 명시해야 한다. 이름 필드에 제어 문자나 SQL 삽입 시도가 올 수 있다.
-- **Float를 그대로 직렬화하면 결정론적 시뮬레이션이 가능하다**: Float 연산은 FPU 설정과 컴파일러 최적화(-ffast-math 등)에 따라 결과가 달라진다. 서버 Authoritative 시뮬레이션에는 정수 고정소수점이 필요하다.
+- **Float를 그대로 직렬화하면 결정론적 시뮬레이션이 가능하다**: Float 연산은 FPU(Floating Point Unit) 설정과 컴파일러 최적화(-ffast-math 등)에 따라 결과가 달라진다. 서버 Authoritative 시뮬레이션에는 정수 고정소수점이 필요하다.
 - **Endian만 맞추면 플랫폼 간 호환성이 완전히 보장된다**: 구조체 Padding, 비트 필드 순서, `int` 크기 차이가 여전히 남는다. Field를 명시적으로 Encode·Decode해야 안전하다.
 - **역직렬화 실패 시 연결을 끊으면 그만이다**: 단순 파싱 오류인지 악의적 공격인지 구분하고, 오류 빈도를 IP별로 집계해 Rate Limit을 적용해야 한다.
 - **Zero-copy 역직렬화를 쓰면 성능이 항상 좋다**: Buffer를 Handler가 소비하기 전에 Pool로 반환하면 Dangling Pointer가 생긴다. Lifetime 관리 비용이 복사보다 클 수 있다.

@@ -156,7 +156,7 @@ Key는 불변 값으로 사용하거나 변경하려면 기존 Key로 삭제한 
 
 ### Hash Flooding
 
-공격자가 같은 버킷에 들어가는 많은 문자열을 보내면 평균 O(1)이 O(N)으로 악화되어 CPU DoS가 될 수 있다. 외부 입력 키에는 프로세스마다 무작위 Seed를 사용하는 Hash, 충돌 Chain Tree 변환, 요청 크기·키 수 제한을 사용한다.
+공격자가 같은 버킷에 들어가는 많은 문자열을 보내면 평균 O(1)이 O(N)으로 악화되어 CPU(Central Processing Unit) DoS가 될 수 있다. 외부 입력 키에는 프로세스마다 무작위 Seed를 사용하는 Hash, 충돌 Chain Tree 변환, 요청 크기·키 수 제한을 사용한다.
 
 암호학적 Hash가 일반 Map에 항상 필요한 것은 아니다. 보안 Hash는 계산 비용이 더 크다. 위협 모델과 런타임의 내장 Hash 방어를 확인한다.
 
@@ -229,7 +229,7 @@ Hash Set은 Value 없이 Key 존재만 관리하는 Hash Table로 볼 수 있다
 - O(1) 평균 조회·삽입·삭제 (단, 충돌·Rehash 시 최악 O(N))
 - Key 기반 직접 접근으로 탐색 불필요
 - 동적 크기 조정(Rehash)으로 미리 정확한 크기를 알 필요 없음
-- LRU Cache, 빈도수 집계 등 다른 구조와 조합 용이
+- LRU(Least Recently Used) Cache, 빈도수 집계 등 다른 구조와 조합 용이
 
 **단점**
 - Rehash 시 O(N) 복사 + p99 Stutter 발생

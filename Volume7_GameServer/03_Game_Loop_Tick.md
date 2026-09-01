@@ -42,7 +42,7 @@ Tick Start
 Tick End
 ```
 
-20 Hz면 Tick 간격은 50ms, 60 Hz면 약 16.67ms다. 높은 Tick Rate는 반응과 시간 해상도를 높이지만 CPU·Network 비용도 증가한다.
+20 Hz면 Tick 간격은 50ms, 60 Hz면 약 16.67ms다. 높은 Tick Rate는 반응과 시간 해상도를 높이지만 CPU(Central Processing Unit)·Network 비용도 증가한다.
 
 ### Fixed와 Variable Delta
 
@@ -100,7 +100,7 @@ Tick Count는 Wraparound와 Server 재시작을 고려하고, 영속 Deadline은
 
 System을 병렬화하면 Barrier와 의존성이 생긴다. Read-only Snapshot, Spatial Partition과 Job Graph로 충돌을 줄인다. 작은 Job을 너무 많이 만들면 Queue·Synchronization 비용이 커진다.
 
-World State를 한 Thread가 소유하고 I/O·Persistence만 외부 Worker로 분리하는 구조는 단순한 출발점이다. Profile에서 CPU 병목이 확인된 뒤 병렬화한다.
+World State를 한 Thread가 소유하고 I/O(Input/Output)·Persistence만 외부 Worker로 분리하는 구조는 단순한 출발점이다. Profile에서 CPU 병목이 확인된 뒤 병렬화한다.
 
 ### Replication 주기
 
@@ -181,7 +181,7 @@ def tick_loop(hz=20):
 | 물리 안정성 | 높음 (고정 적분 간격) | 낮음 (큰 Delta에서 발산 가능) |
 | Replay·디버깅 | 쉬움 (Input·Seed 기록) | 어려움 (타이밍 재현 불가) |
 | CPU 예측 | 일정 | 부하 Spike에 따라 가변 |
-| 적합한 경우 | Competitive·MMORPG | PvE Casual·Demo |
+| 적합한 경우 | Competitive·MMORPG(Massively Multiplayer Online Role-Playing Game) | PvE Casual·Demo |
 | Snapshot 분리 | 용이 (Tick/Snapshot Rate 독립) | 복잡 (Delta 기반 전송 기준 모호) |
 
 ## 6. 장점과 단점
@@ -201,7 +201,7 @@ def tick_loop(hz=20):
 - 멀티코어 병렬화 시 Barrier·의존성 관리 복잡도 증가
 
 ## 7. 게임 서버·백엔드 실무 예시
-30Hz Simulation에서 입력을 sequence 순으로 처리하고 Snapshot은 10~20Hz로 보낼 수 있다. Tick Overrun 시 무제한 따라잡기보다 작업 예산, 품질 저하와 경고를 둔다.
+30Hz Simulation에서 입력을 Sequence 순으로 처리하고 Snapshot은 10~20Hz로 보낼 수 있다. Tick Overrun 시 무제한 따라잡기보다 작업 예산, 품질 저하와 경고를 둔다.
 
 Game Loop와 Tick 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
@@ -210,7 +210,7 @@ Game Loop와 Tick 관점에서는 운영에서는 연결 수, Packet Rate, Queue
 - **Tick Rate를 높이면 항상 게임 품질이 좋아진다**: 네트워크 트래픽·CPU·서버 비용이 비례해 증가하므로 장르와 요구에 맞게 선택해야 한다.
 - **Fixed Delta를 쓰면 실시간성이 항상 보장된다**: Tick 처리 시간이 Delta를 초과하면 지연이 누적되어 Tick이 밀린다.
 - **Tick 중 예외가 발생하면 해당 Tick을 스킵하면 된다**: State 불일치와 누적 오류가 발생할 수 있으므로 예외를 유발한 Command를 격리·Drop하고 안전한 복구 전략이 필요하다.
-- **Timer는 시스템 시계를 그대로 사용하면 된다**: NTP 조정·DST·모노토닉 보장이 없으면 시간이 역행하거나 불연속해질 수 있다.
+- **Timer는 시스템 시계를 그대로 사용하면 된다**: NTP(Network Time Protocol) 조정·DST(Daylight Saving Time)·모노토닉 보장이 없으면 시간이 역행하거나 불연속해질 수 있다.
 - **서버와 클라이언트 Tick이 다르면 동기화가 불가능하다**: 서버 Tick과 클라이언트 렌더링 프레임은 분리 운영하며 Snapshot 전송과 Interpolation으로 동기화한다.
 - **Catch-up을 무제한 허용하면 항상 따라잡을 수 있다**: Catch-up이 늘수록 부하가 증가해 다음 Tick도 Budget을 초과하는 Spiral of Death가 발생한다.
 - **Tick Thread에서 DB 쓰기를 하면 일관성이 높아진다**: 동기 I/O가 Tick Thread를 블로킹해 p99가 수백 ms로 급등한다. Outbox Queue나 비동기 Worker로 분리해야 한다.

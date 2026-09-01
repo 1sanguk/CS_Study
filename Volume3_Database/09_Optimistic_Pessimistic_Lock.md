@@ -236,7 +236,7 @@ public boolean deductStock(Connection conn, long itemId) throws SQLException {
 **비관적 Lock의 단점**
 
 - Lock Wait, Deadlock, Connection 점유와 꼬리 지연을 만든다.
-- Lock 보유 중 외부 I/O가 있으면 다른 요청 대기가 길어진다.
+- Lock 보유 중 외부 I/O(Input/Output)가 있으면 다른 요청 대기가 길어진다.
 
 ## 7. 게임 서버·백엔드 실무 예시
 
@@ -253,9 +253,9 @@ public boolean deductStock(Connection conn, long itemId) throws SQLException {
 - **"낙관적 Lock은 충돌해도 항상 안전하게 자동 재시도된다"**: 재시도가 항상 가능하지 않다. 같은 필드를 다른 값으로 수정한 경우 자동 Retry가 상대 변경을 덮을 수 있고 외부 결제·메시지 발행을 이미 수행했다면 전체 재시도가 중복 부작용을 만든다.
 - **"비관적 Lock을 쓰면 Deadlock과 실패가 없다"**: 비관적 Lock도 Deadlock이 발생하고 DBMS가 희생자를 Rollback한다. Lock Timeout도 실패다. 모든 경로에서 일관된 자원 획득 순서, Timeout과 Deadlock Retry가 필요하다.
 - **"FOR UPDATE가 사용자 편집 시간 전체를 잠그는 데 적합하다"**: `FOR UPDATE`는 Commit 또는 Rollback까지 Lock을 유지한다. 사용자 편집 수분 동안 다른 요청을 모두 대기시키면 Connection과 처리량에 심각한 영향을 준다. 긴 편집에는 낙관적 Version이 적합하다.
-- **"MVCC와 Version 열 기반 낙관적 Lock은 같은 기능이다"**: MVCC는 DB 내부가 여러 행 버전을 관리하는 동시성 제어 방식이다. 낙관적 Lock은 애플리케이션이 `WHERE version=?`으로 읽은 이후 변경 여부를 감지하는 패턴이다. 함께 사용할 수 있다.
+- **"MVCC(Multi-Version Concurrency Control)와 Version 열 기반 낙관적 Lock은 같은 기능이다"**: MVCC는 DB 내부가 여러 행 버전을 관리하는 동시성 제어 방식이다. 낙관적 Lock은 애플리케이션이 `WHERE version=?`으로 읽은 이후 변경 여부를 감지하는 패턴이다. 함께 사용할 수 있다.
 - **"분산 Lock(Redis)이 DB Constraint와 조건부 UPDATE를 대체한다"**: Redis Lock은 여러 프로세스의 진입을 조정하지만 DB Commit과 원자적으로 묶이지 않는다. Lease 만료·네트워크 분할·Fencing Token을 고려해야 하며 DB의 최종 방어선은 유지해야 한다.
-- **"낙관적 충돌률이 높아지면 Retry 횟수를 늘리면 된다"**: Retry가 많아지면 DB CPU와 로그, 트래픽이 더 늘어나는 악순환이 생긴다. Hot Key 분산, 조건부 UPDATE로의 전환, 입구 Queue와 같은 도메인 구조 변경을 검토해야 한다.
+- **"낙관적 충돌률이 높아지면 Retry 횟수를 늘리면 된다"**: Retry가 많아지면 DB CPU(Central Processing Unit)와 로그, 트래픽이 더 늘어나는 악순환이 생긴다. Hot Key 분산, 조건부 UPDATE로의 전환, 입구 Queue와 같은 도메인 구조 변경을 검토해야 한다.
 - **"조건부 UPDATE는 낙관적 Lock도 비관적 Lock도 아니라 별개 개념이다"**: 조건부 UPDATE는 업무 상태를 WHERE에 포함해 "조건이 유지되었을 때만 쓰기"를 수행한다는 점에서 낙관적 방식과 유사하다. 단, 범용 Version 열을 쓰지 않고 업무 조건 자체를 감지 기준으로 사용한다.
 
 ## 9. 면접 질문

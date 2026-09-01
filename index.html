@@ -50,6 +50,9 @@
         </div>
       </header>
 
+      <!-- 읽기 진행 바 -->
+      <div id="reading-progress"><div id="reading-progress-fill"></div></div>
+
       <!-- 리더 영역 -->
       <div id="reader-area">
         <button id="btn-prev" class="nav-btn" aria-label="이전 챕터">&#8249;</button>
@@ -68,6 +71,9 @@
         <div class="footer-nav">
           <button onclick="reader && reader.navigateTo(reader.currentIndex - 1, 'prev')" class="footer-btn">← 이전</button>
           <button onclick="reader && reader.navigateTo(reader.currentIndex + 1, 'next')" class="footer-btn">다음 →</button>
+        </div>
+        <div class="footer-right">
+          <button id="scroll-top-btn" aria-label="맨 위로">↑</button>
         </div>
       </footer>
 

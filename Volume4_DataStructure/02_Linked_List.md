@@ -155,7 +155,7 @@ struct Session {
 
 ## 4. 쉬운 예시
 
-LRU Cache는 HashMap(O(1) 조회)과 이중 연결 리스트(O(1) 순서 갱신)를 조합한 연결 리스트의 대표 활용 사례다.
+LRU(Least Recently Used) Cache는 HashMap(O(1) 조회)과 이중 연결 리스트(O(1) 순서 갱신)를 조합한 연결 리스트의 대표 활용 사례다.
 
 ```java
 // LRU Cache: HashMap + 이중 연결 리스트 (Sentinel Node 패턴)

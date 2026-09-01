@@ -10,7 +10,7 @@ importance: 5
 
 ## 학습 목표
 
-- 소유 Raw Pointer Member가 있는 클래스에서 Compiler 기본 Copy가 Shallow Copy를 생성하는 조건을 판단하고, Deep Copy·Move·RAII 교체 중 적절한 방향을 선택할 수 있다.
+- 소유 Raw Pointer Member가 있는 클래스에서 Compiler 기본 Copy가 Shallow Copy를 생성하는 조건을 판단하고, Deep Copy·Move·RAII(Resource Acquisition Is Initialization) 교체 중 적절한 방향을 선택할 수 있다.
 - `std::vector` 재할당 시 원소 Move와 Copy 중 어느 것이 선택되는지 판단하고, `noexcept` 선언이 누락됐을 때 생기는 비용을 설명할 수 있다.
 - Packet·Buffer를 Worker Queue에 전달할 때 Copy, Move, 비소유 참조 중 어느 Signature를 선택할지 소유권 의미에 따라 결정할 수 있다.
 - Move 후 원본 재사용 버그와 `vector` 재할당으로 인한 Pointer 무효화 버그를 진단하고 수정할 수 있다.
@@ -28,7 +28,7 @@ C++에서 컨테이너 반환이나 Queue 전달처럼 값이 이동하는 시�
 Packet BuildPacket() { Packet p; /* ... */ return p; }
 
 // Move Semantics 이후: 소유권 이전 또는 Copy Elision
-Packet packet = BuildPacket(); // NRVO 또는 Move
+Packet packet = BuildPacket(); // NRVO(Named Return Value Optimization) 또는 Move
 queue.Push(std::move(packet)); // 소유권 이전
 ```
 

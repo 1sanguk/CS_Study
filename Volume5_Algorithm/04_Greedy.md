@@ -142,7 +142,7 @@ Greedy 선택을 포함하는 최적해 존재
 
 ### Cut Property·Safe Edge
 
-MST에서는 Vertex 집합을 둘로 나누는 Cut을 가로지르는 가장 가벼운 Edge가 안전하다는 Cut Property를 사용한다. Kruskal과 Prim의 선택 근거다.
+MST(Minimum Spanning Tree)에서는 Vertex 집합을 둘로 나누는 Cut을 가로지르는 가장 가벼운 Edge가 안전하다는 Cut Property를 사용한다. Kruskal과 Prim의 선택 근거다.
 
 ### 불변식
 
@@ -183,7 +183,7 @@ Capacity 50
 | 방식 | 결정 | 장점 | 위험·비용 |
 |---|---|---|---|
 | Greedy | 현재 하나를 확정 | 빠르고 Memory가 작음 | 증명 없으면 오답 |
-| DP | 상태별 최적값 저장 | 중복 부분 문제의 최적해 | 상태 공간·Memory 큼 |
+| DP(Dynamic Programming) | 상태별 최적값 저장 | 중복 부분 문제의 최적해 | 상태 공간·Memory 큼 |
 | Backtracking | 선택 후 필요하면 되돌림 | 모든 조합·제약 탐색 | 최악 지수 시간 |
 
 Greedy가 맞는지 확신하기 어렵고 입력이 작다면 완전 탐색으로 작은 Case의 최적값을 구해 Greedy 결과와 비교할 수 있다. 이는 반례 탐색과 테스트에 유용하지만 수학적 증명을 완전히 대신하지는 않는다.

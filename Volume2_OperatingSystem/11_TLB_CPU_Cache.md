@@ -17,7 +17,7 @@ importance: 5
 
 ## 1. 개요
 
-TLB는 최근 주소 변환을, CPU Cache는 최근 명령과 데이터를 저장한다.
+TLB는 최근 주소 변환을, CPU(Central Processing Unit) Cache는 최근 명령과 데이터를 저장한다.
 
 TLB(Translation Lookaside Buffer)는 가상 페이지 번호에서 물리 프레임 번호로의 변환 결과를 캐시한다. CPU 캐시는 메모리에서 읽은 명령과 실제 데이터의 복사본을 캐시 라인 단위로 보관한다. 둘 다 느린 하위 계층 접근을 줄이는 하드웨어 캐시지만 무엇을 저장하는지가 다르다.
 
@@ -132,7 +132,7 @@ ThreadLocal<Long> packetCount = ThreadLocal.withInitial(() -> 0L);
 | 구분 | TLB | CPU Cache | Page Cache(OS) |
 |---|---|---|---|
 | 저장 대상 | 주소 변환 결과 | 명령·메모리 데이터 | 파일 내용 페이지 |
-| 관리 중심 | CPU·MMU | CPU 하드웨어 | OS 커널 |
+| 관리 중심 | CPU·MMU(Memory Management Unit) | CPU 하드웨어 | OS 커널 |
 | Miss 결과 | Page Table Walk | 하위 Cache·DRAM 접근 | 저장장치 Read 가능 |
 | 관련 최적화 | Huge Page·Working Set | 지역성·데이터 배치 | I/O 패턴·메모리 압력 |
 

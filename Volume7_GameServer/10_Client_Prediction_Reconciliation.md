@@ -19,7 +19,7 @@ importance: 5
 Client Prediction은 서버 응답 전 자신의 입력 결과를 즉시 보여 주고 Reconciliation은 권위 서버 상태와 차이를 수정하는 방식이다.
 
 ## 2. 왜 필요한가
-왕복 지연 동안 입력 반응을 기다리면 조작감이 나빠지므로 즉시 반응과 서버 권위를 함께 유지한다. 사용자 경험을 개선하더라도 서버 권위와 복구 가능성을 훼손하지 않아야 한다.
+RTT(Round-Trip Time) 왕복 지연 동안 입력 반응을 기다리면 조작감이 나빠지므로 즉시 반응과 서버 권위를 함께 유지한다. 사용자 경험을 개선하더라도 서버 권위와 복구 가능성을 훼손하지 않아야 한다.
 
 ## 3. 핵심 동작 원리
 ```text
@@ -42,7 +42,7 @@ Server: #41, #42 처리 → state + lastProcessed=42
 Client: server state 적용 → <=42 제거 → 남은 입력 재실행
 ```
 
-Server의 `lastProcessedInput`으로 반영 범위를 안다. UDP에서는 중복과 역순을 제거한다. TCP에서도 오래된 Snapshot과 Application 처리 순서를 구분하는 데 Sequence가 유용하다.
+Server의 `lastProcessedInput`으로 반영 범위를 안다. UDP(User Datagram Protocol)에서는 중복과 역순을 제거한다. TCP(Transmission Control Protocol)에서도 오래된 Snapshot과 Application 처리 순서를 구분하는 데 Sequence가 유용하다.
 
 ### Reconciliation
 
@@ -148,7 +148,7 @@ void OnServerSnapshot(ServerState state) {
 | 방식 | 반응성 | 서버 권위 | 구현 복잡도 | 적합한 상황 |
 |------|--------|---------|-----------|-----------|
 | **Server-only (Wait)** | RTT만큼 지연 | 완전 | 단순 | 턴제·RTS처럼 빠른 반응이 불필요한 경우 |
-| **Client Prediction** | 즉시 반응 | 유지 (Reconciliation) | 높음 | FPS·액션 게임 자기 이동 |
+| **Client Prediction** | 즉시 반응 | 유지 (Reconciliation) | 높음 | FPS(First-Person Shooter)·액션 게임 자기 이동 |
 | **Interpolation (타 플레이어)** | 약간 지연(버퍼) | 유지 | 중간 | 다른 플레이어 위치 표시 |
 | **Dead Reckoning** | 즉시 추정 | 최종 보정 | 중간 | 위치 업데이트가 드문 경우 |
 | **Rollback Netcode** | 즉시 반응 | 롤백 후 재실행 | 매우 높음 | 격투 게임처럼 입력 동기화가 핵심 |
@@ -192,7 +192,7 @@ void OnServerSnapshot(ServerState state) {
 좌표만 검증하면 Speed Hack(한 Tick에 수십 미터 이동), Wall Hack(벽 관통 이동), Teleport(임의 위치 순간 이동) 공격이 가능합니다. 서버는 최종 좌표 대신 이동 방향·버튼·Duration을 받아 독립 시뮬레이션으로 위치를 계산합니다. 최대 이동 속도(예: 10m/Tick)와 서버 시간 Window(예: 50ms±10ms)를 초과하면 검증 실패 처리합니다. 클라이언트 Timestamp도 서버 수신 시각 기준 ±100ms 범위로 제한합니다.
 
 ### Q3. Correction Threshold를 0.1m로 설정했더니 한국-일본 간 RTT 80ms 환경에서 플레이어가 계속 순간이동하는 현상이 발생했습니다. 어떻게 조정하나요?
-RTT 80ms에서 Jitter p95가 약 ±20ms라면, 20ms × 이동 속도(5m/s) ≈ 0.1m로 정상 이동 오차가 Threshold와 같습니다. Threshold를 RTT Jitter p95 기반 0.25m로 늘리고, 그 이하 차이는 Visual Smoothing(Lerp 0.3f)으로 처리합니다. FPS처럼 높은 정확도가 필요하면 0.15m로 타협하고 Correction 빈도를 지표로 수집해 오탐 비율을 모니터링합니다. MMORPG는 조작감보다 안정성을 중시하므로 0.5m까지 허용할 수 있습니다.
+RTT 80ms에서 Jitter p95가 약 ±20ms라면, 20ms × 이동 속도(5m/s) ≈ 0.1m로 정상 이동 오차가 Threshold와 같습니다. Threshold를 RTT Jitter p95 기반 0.25m로 늘리고, 그 이하 차이는 Visual Smoothing(Lerp 0.3f)으로 처리합니다. FPS처럼 높은 정확도가 필요하면 0.15m로 타협하고 Correction 빈도를 지표로 수집해 오탐 비율을 모니터링합니다. MMORPG(Massively Multiplayer Online Role-Playing Game)는 조작감보다 안정성을 중시하므로 0.5m까지 허용할 수 있습니다.
 
 ### Q4. UDP 환경에서 입력 Packet 15%가 손실될 때 Reconciliation이 의도치 않은 순간이동을 일으킵니다. 어떻게 방어하나요?
 최근 입력 2~3개를 각 Packet에 중복 포함해 단일 손실을 복구합니다. 서버는 Sequence로 중복을 제거합니다. Pending 입력에 개수 상한(예: 30개)과 시간 상한(예: 500ms)을 두고 초과 시 서버에 전체 상태 재동기화를 요청합니다. 재동기화 빈도가 분당 3회를 초과하면 연결 품질 UI를 표시하고 Reliable 채널로 전환을 검토합니다.

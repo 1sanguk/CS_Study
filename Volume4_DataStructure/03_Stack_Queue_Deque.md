@@ -19,14 +19,14 @@ importance: 4
 
 Stack은 LIFO, Queue는 FIFO, Deque는 양쪽 끝 삽입·삭제를 제공하는 선형 자료구조다.
 
-스택(Stack)은 가장 나중에 넣은 원소를 먼저 꺼내는 LIFO(Last In, First Out) 구조다. 큐(Queue)는 가장 먼저 넣은 원소를 먼저 꺼내는 FIFO(First In, First Out) 구조다. 덱(Deque, Double-ended Queue)은 앞과 뒤 양쪽에서 삽입·삭제할 수 있다.
+스택(Stack)은 가장 나중에 넣은 원소를 먼저 꺼내는 LIFO(Last In First Out) 구조다. 큐(Queue)는 가장 먼저 넣은 원소를 먼저 꺼내는 FIFO(First In First Out) 구조다. 덱(Deque, Double-ended Queue)은 앞과 뒤 양쪽에서 삽입·삭제할 수 있다.
 
 세 이름은 데이터 저장 구현보다 허용하는 연산과 순서라는 추상 자료형(ADT)의 의미다. Stack을 동적 배열이나 연결 리스트로 만들 수 있고 Queue를 원형 배열이나 연결 리스트로 만들 수 있다. 인터페이스가 불필요한 임의 접근을 감춰 알고리즘 의도를 분명히 한다.
 
 ## 2. 왜 필요한가
 호출·되돌리기, 도착 순서 처리, 양방향 Window처럼 접근 순서를 제한해 문제를 단순화한다. 자료구조 선택은 Big-O뿐 아니라 데이터 크기, 접근 패턴, 메모리 배치와 갱신 빈도에서 시작한다.
 
-수식 괄호 검사와 DFS는 가장 최근의 미완료 작업으로 돌아가므로 Stack이 자연스럽다. 네트워크 패킷과 작업 요청은 일반적으로 도착한 순서대로 처리하므로 Queue가 의미를 표현한다. Sliding Window에서 앞의 오래된 값은 제거하고 뒤에 새 값을 넣으려면 Deque가 적합하다.
+수식 괄호 검사와 DFS(Depth-First Search)는 가장 최근의 미완료 작업으로 돌아가므로 Stack이 자연스럽다. 네트워크 패킷과 작업 요청은 일반적으로 도착한 순서대로 처리하므로 Queue가 의미를 표현한다. Sliding Window에서 앞의 오래된 값은 제거하고 뒤에 새 값을 넣으려면 Deque가 적합하다.
 
 처리 순서가 자료구조에 포함되면 호출자가 실수로 중간 원소를 꺼내는 것을 막고 시간 복잡도를 예측하기 쉽다. 하지만 FIFO가 공정성과 기한을 모두 보장하지는 않는다. 긴 작업 하나가 앞에 있으면 뒤의 짧은 작업이 기다리는 Head-of-Line Blocking이 생길 수 있다.
 
@@ -164,7 +164,7 @@ while stack not empty:
 
 ### Queue의 대표 알고리즘
 
-BFS는 시작점에서 거리별 Layer 순서로 방문하므로 Queue를 사용한다.
+BFS(Breadth-First Search)는 시작점에서 거리별 Layer 순서로 방문하므로 Queue를 사용한다.
 
 ```text
 Queue [Start]
@@ -227,7 +227,7 @@ Stack은 접시를 위에 쌓고 위에서 꺼내는 것과 비슷하다. Queue�
 
 실제 기술에서는 Stack Top과 Queue Front·Rear Index 또는 Node Link를 조작한다. Queue는 단순 공정성 비유를 넘어 처리 속도 차이, Full 상태와 동시 Producer를 설계해야 한다.
 
-아래 코드는 게임 서버에서 I/O Thread가 수신한 패킷을 Bounded Queue에 담고, Game Thread가 틱마다 꺼내 처리하는 패턴이다. Queue가 가득 차면 중요도에 따라 거부하거나 오래된 패킷을 덮어쓴다.
+아래 코드는 게임 서버에서 I/O(Input/Output) Thread가 수신한 패킷을 Bounded Queue에 담고, Game Thread가 틱마다 꺼내 처리하는 패턴이다. Queue가 가득 차면 중요도에 따라 거부하거나 오래된 패킷을 덮어쓴다.
 
 ```java
 // 게임 서버 패킷 수신 Queue (Bounded, Single-Producer Single-Consumer 가정)

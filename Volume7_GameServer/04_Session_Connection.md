@@ -31,7 +31,7 @@ TCP connect→protocol handshake→authenticate→session bind→disconnect→gr
 
 ### Connection과 Session 구분
 
-Connection은 TCP Socket 같은 Transport 연결이고 Session은 인증된 Player의 논리적 통신 상태다. Reconnect 시 새 Connection이 기존 Session을 이어받을 수 있고, 한 Account의 중복 Login 정책에 따라 Session을 교체할 수 있다.
+Connection은 TCP(Transmission Control Protocol) Socket 같은 Transport 연결이고 Session은 인증된 Player의 논리적 통신 상태다. Reconnect 시 새 Connection이 기존 Session을 이어받을 수 있고, 한 Account의 중복 Login 정책에 따라 Session을 교체할 수 있다.
 
 ```text
 Socket Connection
@@ -81,7 +81,7 @@ Position Snapshot은 최신 값으로 Coalesce할 수 있지만 결제 결과·�
 
 ### Receive Buffer와 Parsing
 
-TCP는 Stream이므로 한 Receive에 Packet 하나가 온다는 보장이 없다. Session별 Accumulation Buffer에서 Frame을 반복 추출한다. 선언 Length 상한과 인증 전 Memory Budget을 검증한다.
+TCP는 스트림 기반 프로토콜이므로 한 Receive에 Packet 하나가 온다는 보장이 없다. Session별 Accumulation Buffer에서 Frame을 반복 추출한다. 선언 Length 상한과 인증 전 Memory Budget을 검증한다.
 
 Parser가 Packet Body Span을 비동기 Handler에 저장하면 Buffer 재사용 후 데이터가 바뀔 수 있다. 필요한 데이터는 소유 Copy·Typed Message로 넘긴다.
 
@@ -214,7 +214,7 @@ Session Registry를 N개의 Shard로 분할하고 각 Shard를 단일 Owner Thre
 
 ### Q6. Ban된 계정의 Session Token을 즉시 Revoke해야 하는데 Redis Denylist 반영 지연으로 30초 동안 Play할 수 있었습니다. Token 검증 주기와 즉시 Revoke를 동시에 달성하는 설계를 설명하세요.
 
-(1) **Revoke 즉시 반영 경로**: Ban 처리 시 Redis Denylist에 Token JTI를 기록(TTL=Token 만료 시간). Game Server는 중요 Game Command 처리 전(예: 아이템 획득·결제) Redis를 조회해 JTI를 검증. (2) **정기 검증 주기 단축**: 일반 이동 Packet은 30초 주기 검증도 허용하되, 경제적 영향이 있는 Command는 매 요청마다 검증. (3) **Push 알림**: Ban 발생 시 Auth Service가 해당 Session이 연결된 Game Server에 WebSocket·gRPC Push로 즉시 Kick 명령 전송. Game Server는 해당 Account ID의 Session을 바로 종료. (4) **지연 허용 기준**: 30초 허용 가능한 Command(채팅·이동)와 즉시 반영 필요한 Command(결제·아이템)를 정책으로 구분합니다.
+(1) **Revoke 즉시 반영 경로**: Ban 처리 시 Redis Denylist에 Token JTI(JWT ID)를 기록(TTL=Token 만료 시간). Game Server는 중요 Game Command 처리 전(예: 아이템 획득·결제) Redis를 조회해 JTI를 검증. (2) **정기 검증 주기 단축**: 일반 이동 Packet은 30초 주기 검증도 허용하되, 경제적 영향이 있는 Command는 매 요청마다 검증. (3) **Push 알림**: Ban 발생 시 Auth Service가 해당 Session이 연결된 Game Server에 WebSocket·gRPC(Google Remote Procedure Call) Push로 즉시 Kick 명령 전송. Game Server는 해당 Account ID의 Session을 바로 종료. (4) **지연 허용 기준**: 30초 허용 가능한 Command(채팅·이동)와 즉시 반영 필요한 Command(결제·아이템)를 정책으로 구분합니다.
 
 ## 10. 예상 꼬리질문
 
@@ -224,7 +224,7 @@ Session Registry를 N개의 Shard로 분할하고 각 Shard를 단일 Owner Thre
 - 3만 CCU 서버에서 Session Registry를 16 Shard로 분할했는데 특정 Shard에 Hot Spot이 생겼습니다. 분산이 고르지 않은 원인을 어떻게 진단하나요?
 - 배포 Drain 중 Grace Period를 30초→5초로 단축했을 때 재접속 중이던 플레이어가 실패합니다. 단축 시작 시 이미 Grace Period 중인 Session을 어떻게 보호하나요?
 - Generation Counter가 uint32 최대값에 도달해 Wraparound됐습니다. 이전 Session 콜백이 새 Generation 0과 충돌하는 상황을 어떻게 방지하나요?
-- Redis Denylist에 JTI를 저장할 때 Token 만료 전 대규모 Ban(1만 계정)이 발생하면 Redis 메모리가 급증합니다. TTL 설계와 메모리 상한을 어떻게 설정하나요?
+- Redis Denylist에 JTI(JWT ID)를 저장할 때 Token 만료 전 대규모 Ban(1만 계정)이 발생하면 Redis 메모리가 급증합니다. TTL 설계와 메모리 상한을 어떻게 설정하나요?
 
 ## 11. 30초 모범답변
 

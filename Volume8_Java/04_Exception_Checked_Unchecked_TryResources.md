@@ -13,7 +13,7 @@ importance: 5
 - Match 결과 저장 Timeout 예외 이후 즉시 재시도할지, Idempotency Key로 멱등성을 확인한 뒤 재시도 큐로 지연 처리할지 판단하는 기준을 결정할 수 있다.
 - Service 계층에 `DataAccessException`이 직접 노출된 코드를 발견했을 때, Exception Translation과 Cause Chain 보존이 필요한 경계를 식별하고 커스텀 예외로 Wrap하는 방법을 결정할 수 있다.
 - `finally`로 자원을 닫는 레거시 코드에서 close 예외가 본문 예외를 덮어 원래 실패가 사라지는 문제를 식별하고, try-with-resources로 수정해 Suppressed Exception이 보존되도록 결정할 수 있다.
-- Checked Exception이 중간 계층에 `throws`로 기계적으로 전파되는 코드에서, Unchecked로 Wrap해야 하는 시점과 API 계약에 노출할 가치가 있는 경우를 구분할 수 있다.
+- Checked Exception이 중간 계층에 `throws`로 기계적으로 전파되는 코드에서, Unchecked로 Wrap해야 하는 시점과 API(Application Programming Interface) 계약에 노출할 가치가 있는 경우를 구분할 수 있다.
 
 ## 1. 개요
 
@@ -33,7 +33,7 @@ operation → throw → stack unwinding → matching catch → finally/resource 
 
 ### Throwable 계층과 Error·Exception 구분
 
-Throwable 아래에는 Error와 Exception이 있다. Error는 일반적으로 Application이 정상 복구하기 어려운 JVM 수준 문제를 나타내고 Exception은 업무·환경 실패를 표현한다. 모든 Throwable을 한 번에 잡아 계속 실행하면 상태 손상을 숨길 수 있다.
+Throwable 아래에는 Error와 Exception이 있다. Error는 일반적으로 Application이 정상 복구하기 어려운 JVM(Java Virtual Machine) 수준 문제를 나타내고 Exception은 업무·환경 실패를 표현한다. 모든 Throwable을 한 번에 잡아 계속 실행하면 상태 손상을 숨길 수 있다.
 
 ### Checked와 Unchecked Exception 선택
 
@@ -45,7 +45,7 @@ Checked Exception은 Compile Time에 catch 또는 throws를 요구한다. 호출
 
 ### try-with-resources와 자원 정리
 
-try-with-resources는 AutoCloseable 자원을 선언 역순으로 닫는다. 본문과 close가 모두 실패하면 본문 Exception이 주 예외가 되고 Close 실패는 Suppressed Exception으로 보존될 수 있다. DB Connection과 Stream은 GC가 아니라 명시적 Scope에서 닫는다.
+try-with-resources는 AutoCloseable 자원을 선언 역순으로 닫는다. 본문과 close가 모두 실패하면 본문 Exception이 주 예외가 되고 Close 실패는 Suppressed Exception으로 보존될 수 있다. DB Connection과 Stream은 GC(Garbage Collection)가 아니라 명시적 Scope에서 닫는다.
 
 ### 예외 처리 경계와 Log 전략
 
@@ -194,16 +194,16 @@ IOException이 API 계약의 일부로 굳어지고 하위 라이브러리 변�
 각 계층에서 `catch → log.error → rethrow`를 반복하면 Stack Trace가 여러 번 출력됩니다. 수정: 복구하거나 최종 처리하는 경계(Global ExceptionHandler, Tick Thread 상단)에서만 Correlation ID·matchId와 함께 한 번 Log합니다. 중간 계층은 `log.debug("matchId={} forwarding exception", matchId)` 정도만 남기거나 Log 없이 전달. Datadog·Splunk에서 Correlation ID로 필터링하면 원 예외 한 개만 추적됩니다.
 
 ### Q6. 게임 서버 Tick 루프에서 잘못된 패킷 타입이 들어올 때마다 Exception을 던지도록 구현되어 있습니다. p99 Latency가 예상보다 높고 GC Gen0가 증가했을 때, 예외 남용을 의심하고 개선하는 방법은 무엇입니까?
-JFR Exception Event 또는 `-XX:+TraceExceptions`로 예외 발생 빈도를 확인합니다. Tick당 예외가 10건 이상이면 정상 흐름 분기를 조건문으로 교체합니다. `fillInStackTrace()`를 Override해 Stack Trace 생성을 억제하거나, `static final` 예외 인스턴스를 재사용하면 Allocation 비용이 줄어드나 Stack Trace 정보가 사라집니다. Metric으로 exception_count vs tick_count 비율을 관찰해 임계값 초과 시 알람을 설정합니다.
+JFR(Java Flight Recorder) Exception Event 또는 `-XX:+TraceExceptions`로 예외 발생 빈도를 확인합니다. Tick당 예외가 10건 이상이면 정상 흐름 분기를 조건문으로 교체합니다. `fillInStackTrace()`를 Override해 Stack Trace 생성을 억제하거나, `static final` 예외 인스턴스를 재사용하면 Allocation 비용이 줄어드나 Stack Trace 정보가 사라집니다. Metric으로 exception_count vs tick_count 비율을 관찰해 임계값 초과 시 알람을 설정합니다.
 
 ## 10. 예상 꼬리질문
-- try-with-resources에서 Connection과 PreparedStatement 두 자원을 선언했을 때, PreparedStatement.close()에서 예외가 발생하면 getSuppressed()로 확인되는지 아니면 주 예외가 되는지 JDK 소스 수준에서 설명하세요.
+- try-with-resources에서 Connection과 PreparedStatement 두 자원을 선언했을 때, PreparedStatement.close()에서 예외가 발생하면 getSuppressed()로 확인되는지 아니면 주 예외가 되는지 JDK(Java Development Kit) 소스 수준에서 설명하세요.
 - Checked Exception을 Unchecked로 Wrap하는 패턴에서 Lombok @SneakyThrows와의 차이, 그리고 두 방법 모두 적합하지 않은 경우는 언제인가요?
 - Match 결과 저장 Timeout 후 재시도 큐에 100만 건이 쌓였을 때 처리량 부족으로 중복 보상이 발생할 수 있는 시나리오와 방지 방법은 무엇인가요?
 - JFR `-XX:+TraceExceptions`로 Tick 루프에서 초당 5,000건 예외를 탐지했습니다. Stack Trace 생성 비용을 측정하는 방법과 `static final` 예외 재사용 시 Stack Trace가 비어있는 경우 운영 영향은 무엇인가요?
 - Exception Translation 시 cause로 `DataAccessException`을 보존했는데, 외부 API Response에 cause의 getMessage()가 노출되는 코드가 있습니다. 이 정보 누출을 탐지하는 방법과 안전한 External Response 설계는 무엇인가요?
 - `finally` 블록에서 `return`을 사용하면 메서드에서 던진 예외가 어떻게 처리되는지 바이트코드 수준에서 설명하고, SpotBugs에서 이 패턴을 탐지하는 룰 ID는 무엇인가요?
-- `OutOfMemoryError`가 발생했을 때 `catch(Error e)`로 잡아 자원을 정리하려는 코드가 있습니다. OOM 상황에서 catch 블록이 실행된다는 보장이 있는지, 그리고 OOM 이후 JVM 상태를 안전하게 처리하는 운영 패턴은 무엇인가요?
+- `OutOfMemoryError`가 발생했을 때 `catch(Error e)`로 잡아 자원을 정리하려는 코드가 있습니다. OOM(OutOfMemoryError) 상황에서 catch 블록이 실행된다는 보장이 있는지, 그리고 OOM 이후 JVM 상태를 안전하게 처리하는 운영 패턴은 무엇인가요?
 
 ## 11. 30초 모범답변
 

@@ -15,7 +15,7 @@ importance: 5
 - Tick p99가 특정 이벤트 이후 급등했을 때 Connection 수·Queue Depth·Packet Drop·DB Latency·GC Pause 지표 중 어느 것이 원인인지 순서대로 좁히고, Network I/O와 Logic Thread 분리가 실제로 도움이 되는 조건을 판단할 수 있다.
 
 ## 1. 개요
-게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다.
+게임 서버 아키텍처는 Gateway, Login, Matchmaking, Game, Chat, Persistence 같은 책임과 통신·상태 경계를 배치하는 구조다. MMO(Massively Multiplayer Online) 게임처럼 대규모 동시 접속자를 처리하려면 서버 역할을 명확히 분리해야 한다.
 
 ## 2. 왜 필요한가
 서로 다른 부하·상태·장애 특성을 분리해 확장과 배포, 장애 격리를 가능하게 한다. 게임 서버는 정확성뿐 아니라 제한 시간 안의 처리와 장애 후 복구를 함께 제공해야 한다.
@@ -73,13 +73,13 @@ Idempotency Key, Version 조건부 갱신, Outbox와 Reconciliation이 필요하
 
 ### 데이터 소유권과 일관성
 
-실시간 전투 중 HP·Position은 Game Instance가 Authority이고 DB는 매 Tick 진실의 원천으로 사용하지 않는다. Match 종료 결과는 한 번만 확정해 Persistence Service로 전달한다.
+실시간 전투 중 HP·Position은 Game Instance가 Authority이고 DB(Database)는 매 Tick 진실의 원천으로 사용하지 않는다. Match 종료 결과는 한 번만 확정해 Persistence Service로 전달한다.
 
 강한 일관성이 필요한 결제·재화와 지연 허용 가능한 Ranking·통계는 다른 전략을 쓴다. Cache는 조회를 빠르게 하지만 무효화와 Stale 허용 범위를 명시한다.
 
 ### 확장 단위
 
-- Connection 수: Gateway·I/O 확장
+- Connection 수: Gateway·I/O(Input/Output) 확장
 - Room·Match 수: Instance 수평 확장
 - 한 World의 Player 수: Zone·Cell Partition과 Interest Management
 - DB Write: Batch·Partition·Shard
@@ -95,7 +95,7 @@ Game Match 중 Binary를 즉시 교체하기 어렵다면 새 Match만 새 Versi
 
 ### 관찰 가능성
 
-Correlation ID로 Login→Matchmaking→Game→Persistence 흐름을 추적한다. Metrics는 Connection, CCU, Room 수, Tick p99, Queue Depth, Packet Drop, DB Latency와 Error Rate를 포함한다. Log만으로 고빈도 Server를 운영하면 비용과 검색 지연이 커져 Metrics·Trace를 조합한다.
+Correlation ID로 Login→Matchmaking→Game→Persistence 흐름을 추적한다. Metrics는 Connection, CCU(Concurrent Connected Users), Room 수, Tick p99, Queue Depth, Packet Drop, DB Latency와 Error Rate를 포함한다. Log만으로 고빈도 Server를 운영하면 비용과 검색 지연이 커져 Metrics·Trace를 조합한다.
 
 ### 실무 선택 원칙
 
@@ -193,7 +193,7 @@ I/O Thread가 World State를 직접 수정하지 않고 Message Queue로만 전�
 - 운영 복잡도: Trace·Service Discovery·Circuit Breaker·다중 배포 파이프라인 필요
 - Stateful 이전 불가: Room 메모리 상태는 다른 Instance로 Live 이전이 어려움
 ## 7. 게임 서버·백엔드 실무 예시
-로그인 API는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다. 서버 Directory와 Drain 절차로 배포 중 새 매치를 막는다.
+로그인 API(Application Programming Interface)는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다. 서버 Directory와 Drain 절차로 배포 중 새 매치를 막는다.
 
 Game Server Architecture 관점에서는 운영에서는 연결 수, Packet Rate, Queue 길이, Tick p99, Drop·Retry, Memory와 Thread 고갈을 같은 시간축에서 본다.
 
@@ -214,7 +214,7 @@ Drain 트리거를 CPU 80% 또는 Tick p99 20ms 초과로 설정하고, 해당 �
 
 ### Q2. Login→Game 서버 흐름에서 아이템 지급 요청 응답이 손실돼 Login 서버가 재시도하니 아이템이 중복 지급됐습니다. Idempotency Key를 어느 계층에 적용해야 하고, Game 서버 측에서 중복을 막는 설계는 무엇인가요?
 
-Idempotency Key(requestId)를 호출자(Login 서버)가 UUID로 생성해 요청에 포함합니다. Game 서버는 처리 전에 Redis 또는 DB에 `requestId`를 기록하고, 동일 Key가 이미 존재하면 이전 결과를 그대로 반환합니다. 처리와 Key 저장은 동일 DB Transaction에 묶거나, Outbox 패턴으로 이벤트와 Key 기록을 함께 커밋합니다. Key TTL은 재시도 최대 Window(예: 5분)보다 길게 설정합니다. 주의: Key 저장 성공·처리 실패 시 부분 상태가 남을 수 있어 Version 조건부 갱신(Compare-and-Swap)을 함께 사용하면 안전합니다.
+Idempotency Key(requestId)를 호출자(Login 서버)가 UUID(Universally Unique Identifier)로 생성해 요청에 포함합니다. Game 서버는 처리 전에 Redis 또는 DB에 `requestId`를 기록하고, 동일 Key가 이미 존재하면 이전 결과를 그대로 반환합니다. 처리와 Key 저장은 동일 DB Transaction에 묶거나, Outbox 패턴으로 이벤트와 Key 기록을 함께 커밋합니다. Key TTL은 재시도 최대 Window(예: 5분)보다 길게 설정합니다. 주의: Key 저장 성공·처리 실패 시 부분 상태가 남을 수 있어 Version 조건부 갱신(Compare-and-Swap)을 함께 사용하면 안전합니다.
 
 ### Q3. 실시간 Battle Room 서버가 예고 없이 재시작됐습니다. 진행 중인 Match 상태를 복구하는 방법을 설계하세요. Snapshot과 Event Log 방식의 RPO·RTO 차이와, 어떤 조건에서 어느 쪽을 선택하나요?
 
@@ -226,7 +226,7 @@ Room이 실제로 생성됐는지 알 수 없는 상태에서 '생성됨'으로 
 
 ### Q5. 단일 Game Server Process에서 Network I/O Thread와 Logic Tick Thread를 분리했을 때, I/O Thread가 World State를 직접 수정하면 어떤 문제가 생기나요? Message Queue 설계의 핵심 결정 사항을 설명하세요.
 
-I/O Thread가 World State를 직접 수정하면, Tick Thread가 같은 State를 읽는 순간 Data Race가 발생합니다. 결과적으로 플레이어 위치·HP 등이 Tick 중간에 변경돼 물리·전투 계산이 일관성 없는 상태로 실행됩니다. Lock으로 보호하면 Tick마다 경합이 생겨 p99가 올라갑니다. Message Queue 설계 핵심: (1) **Queue 크기**: Tick 1회 처리량 × 최대 허용 Tick 지연 수로 상한 설정(예: 16ms Tick × 10 = 160ms 분량), (2) **Drop 정책**: 가득 찬 경우 해당 Client를 Disconnect 또는 최신 패킷만 유지(Position 갱신은 누적 불필요), (3) **Backpressure**: I/O Thread가 Queue Full 시 수신 패킷을 Drop해 Tick Thread 과부하 방지. Queue는 단방향(I/O→Tick, Tick→I/O)으로 두 방향 모두 설계해야 합니다.
+I/O(Input/Output) Thread가 World State를 직접 수정하면, Tick Thread가 같은 State를 읽는 순간 Data Race가 발생합니다. 결과적으로 플레이어 위치·HP 등이 Tick 중간에 변경돼 물리·전투 계산이 일관성 없는 상태로 실행됩니다. Lock으로 보호하면 Tick마다 경합이 생겨 p99가 올라갑니다. Message Queue 설계 핵심: (1) **Queue 크기**: Tick 1회 처리량 × 최대 허용 Tick 지연 수로 상한 설정(예: 16ms Tick × 10 = 160ms 분량), (2) **Drop 정책**: 가득 찬 경우 해당 Client를 Disconnect 또는 최신 패킷만 유지(Position 갱신은 누적 불필요), (3) **Backpressure**: I/O Thread가 Queue Full 시 수신 패킷을 Drop해 Tick Thread 과부하 방지. Queue는 단방향(I/O→Tick, Tick→I/O)으로 두 방향 모두 설계해야 합니다.
 
 ### Q6. 배포 시 진행 중인 Game Room이 있는 서버에 새 Binary를 올려야 합니다. Blue-Green과 Rolling 배포 각각에서 Room Session 처리 방법과, Protocol·Schema 버전 호환성 보장 방법을 설명하세요.
 

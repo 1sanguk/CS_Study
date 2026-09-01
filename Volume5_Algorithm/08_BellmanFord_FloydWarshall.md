@@ -305,10 +305,10 @@ k에서 j에 도달 가능
 
 | 요구·조건 | 적합한 후보 | 시간 | 공간 |
 |---|---|---:|---:|
-| 무가중 단일 시작 | BFS | O(V+E) | O(V) |
+| 무가중 단일 시작 | BFS(Breadth-First Search) | O(V+E) | O(V) |
 | 음수 없음 단일 시작 | Dijkstra | O((V+E)logV) | O(V+E) |
 | 음수 Edge 단일 시작 | Bellman-Ford | O(VE) | O(V+E) |
-| DAG 단일 시작 | 위상 순서 Relax | O(V+E) | O(V) |
+| DAG(Directed Acyclic Graph) 단일 시작 | 위상 순서 Relax | O(V+E) | O(V) |
 | 모든 쌍, 작은 Graph | Floyd-Warshall | O(V³) | O(V²) |
 | 모든 쌍, Sparse·큰 Graph | 시작점별 Dijkstra 등 | 조건에 따라 | 조건에 따라 |
 

@@ -25,7 +25,7 @@ importance: 5
 ```text
 I/O threads→bounded queue→room/worker threads→result queue→I/O send
 ```
-Thread-per-connection은 단순하지만 대규모 연결에서 Stack과 Context Switch 비용이 크다. Thread Pool은 재사용하지만 Blocking 작업이 쌓이면 고갈된다. Room Actor는 상태를 한 Thread 흐름에 직렬화한다.
+Thread-per-connection은 단순하지만 대규모 연결에서 Stack과 Context Switch 비용이 크다. Thread Pool은 재사용하지만 Blocking 작업이 쌓이면 고갈된다. FIFO(First In First Out) 순서 보장이 필요한 작업은 Queue Partition으로 같은 Worker에 고정한다. Room Actor는 상태를 한 Thread 흐름에 직렬화한다.
 
 상태의 최종 소유자, Message 순서, Timeout과 실패 후 재처리 기준을 명시한다.
 ### 역할 분리
@@ -62,7 +62,7 @@ Priority Queue에서는 높은 우선순위만 계속 처리해 일반 작업이
 
 ### Pool 크기와 종료
 
-CPU-bound Logic Worker는 Core 수 근처에서 시작해 측정한다. 너무 많은 Thread는 Context Switch와 Cache 경쟁을 늘린다. Blocking DB 작업은 별도 Pool로 격리하되 DB Connection 수보다 지나치게 많은 Worker를 두면 대기만 늘 수 있다.
+CPU(Central Processing Unit)-bound Logic Worker는 Core 수 근처에서 시작해 측정한다. 너무 많은 Thread는 Context Switch와 Cache 경쟁을 늘린다. Blocking DB(Database) 작업은 별도 Pool로 격리하되 DB Connection 수보다 지나치게 많은 Worker를 두면 대기만 늘 수 있다.
 
 Graceful Shutdown은 새 작업 수락을 막고 필수 Queue를 Drain한 뒤 Worker를 종료한다. 저장 작업과 버려도 되는 Telemetry를 구분한다. Worker 예외를 최상위에서 기록하고 재처리의 중복 안전성을 정한다. 운영에서는 Queue 대기 시간, 처리 p99, Worker 이용률, Reject와 Drop 수를 함께 본다.
 

@@ -10,9 +10,9 @@ importance: 4
 
 ## 학습 목표
 
-- 입력 데이터가 정렬된 순서로 들어올 때 단순 BST를 피해야 하는 이유를 최악 시간 복잡도로 설명하고, 균형 트리 도입 기준을 판단할 수 있다.
+- 입력 데이터가 정렬된 순서로 들어올 때 단순 BST(Binary Search Tree)를 피해야 하는 이유를 최악 시간 복잡도로 설명하고, 균형 트리 도입 기준을 판단할 수 있다.
 - LL·RR·LR·RL 불균형 패턴을 식별하고 각각에 필요한 회전 조합이 BST Key 순서를 보존하는지 확인할 수 있다.
-- AVL Tree와 Red-Black Tree의 균형 조건과 Trade-off를 비교할 수 있다.
+- AVL(Adelson-Velsky and Landis) Tree와 Red-Black Tree의 균형 조건과 Trade-off를 비교할 수 있다.
 - 정렬 Map·Set, 범위 검색, 게임 서버 작업에 적절한 구조를 선택할 수 있다.
 
 ## 1. 개요
@@ -200,7 +200,7 @@ AVL의 엄격한 균형은 읽기 성능을 돕지만 CPU Cache 관점에서 연
 | 최우선 원소 반복 제거 | Heap | Top O(1), 삽입·제거 O(log n) |
 | Disk 기반 대규모 Index | B+Tree | 높은 Fan-out으로 I/O 횟수 감소 |
 
-B+Tree도 균형 탐색 트리지만 한 노드에 여러 Key와 자식을 둔다. Disk나 DB Page처럼 한 번의 I/O로 많은 Key를 읽는 환경에 맞춘 구조다. AVL·Red-Black Tree 같은 이진 트리를 그대로 Disk Index에 쓰면 높이와 Random I/O가 커질 수 있다.
+B+Tree도 균형 탐색 트리지만 한 노드에 여러 Key와 자식을 둔다. Disk나 DB Page처럼 한 번의 I/O(Input/Output)로 많은 Key를 읽는 환경에 맞춘 구조다. AVL·Red-Black Tree 같은 이진 트리를 그대로 Disk Index에 쓰면 높이와 Random I/O가 커질 수 있다.
 
 ## 8. 장점과 단점
 

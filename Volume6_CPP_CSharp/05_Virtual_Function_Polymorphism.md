@@ -10,10 +10,10 @@ importance: 5
 
 ## 학습 목표
 
-- Base Pointer·Reference 호출이 vptr·vtable을 통해 실제 타입의 Override로 Dispatch되는 경로를 추적하고, `final` 지정과 실제 타입 노출이 Devirtualization을 허용하는 조건을 판단할 수 있다.
+- Base Pointer·Reference 호출이 vptr(virtual function pointer)·vtable(virtual function table)을 통해 실제 타입의 Override로 Dispatch되는 경로를 추적하고, `final` 지정과 실제 타입 노출이 Devirtualization을 허용하는 조건을 판단할 수 있다.
 - 다형 삭제가 발생하는 Base Class에서 Virtual Destructor가 필요한 경우와 Protected Non-virtual Destructor로 외부 삭제를 제한해야 하는 경우를 구분하여 설계 결정을 내릴 수 있다.
 - 타입 집합이 열려 있는지 고정되어 있는지, 새 타입 추가와 새 연산 추가 중 어느 축으로 확장되는지에 따라 Virtual Interface·`variant`+Visitor 중 적합한 설계를 선택할 수 있다.
-- Packet Handler Registry에서 Hot Reload 중 실행 중인 Handler의 수명을 Epoch로 보호해야 하는 조건과, Skill Effect Tick에서 Virtual 호출과 분산 Allocation이 Cache Miss를 누적시키는 상황을 진단하고 ECS·Type별 배열 전환 시점을 판단할 수 있다.
+- Packet Handler Registry에서 Hot Reload 중 실행 중인 Handler의 수명을 Epoch로 보호해야 하는 조건과, Skill Effect Tick에서 Virtual 호출과 분산 Allocation이 Cache Miss를 누적시키는 상황을 진단하고 ECS(Entity Component System)·Type별 배열 전환 시점을 판단할 수 있다.
 
 ## 1. 개요
 
@@ -158,7 +158,7 @@ Compiler가 실제 Type을 알거나 `final`을 이용하면 Devirtualization할
 
 수십만 Entity의 단순 Tick은 Type별 Contiguous Array, ECS, `variant`와 Data-oriented Design을 비교한다. 확장 가능한 Handler·Strategy처럼 호출 횟수가 제한된 경로에는 Virtual Interface가 생산성에 유리하다.
 
-## 9. RTTI와 Downcast
+## 9. RTTI(Run-Time Type Information)와 Downcast
 
 `dynamic_cast`는 다형 Base에서 Runtime Type을 검사한다. Pointer Downcast 실패는 nullptr, Reference는 `std::bad_cast`다. `static_cast` Downcast는 검사가 없어 실제 Type이 다르면 위험하다.
 

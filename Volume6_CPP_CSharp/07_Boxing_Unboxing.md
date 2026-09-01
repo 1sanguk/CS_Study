@@ -10,7 +10,7 @@ importance: 5
 
 ## 학습 목표
 
-- 매 Tick·매 Packet처럼 고빈도 코드에서 Boxing이 발생하는 정확한 조건(Interface 대입·비Generic API·Enum Reflection)을 코드 수준에서 진단하고, Allocation Profiler로 확인해야 하는 시점을 판단할 수 있다.
+- 매 Tick·매 Packet처럼 고빈도 코드에서 Boxing이 발생하는 정확한 조건(Interface 대입·비Generic API(Application Programming Interface)·Enum Reflection)을 코드 수준에서 진단하고, Allocation Profiler로 확인해야 하는 시점을 판단할 수 있다.
 - `List<T>`·`Dictionary<K,V>` 같은 Generic Collection이 Value Type을 직접 저장해 Boxing을 피하는 원리와, 내부에서 다시 `object`로 Cast할 때 Boxing이 재발생하는 조건을 구분하고 안전한 API 선택을 결정할 수 있다.
 - Logging Hot Path·Combat Event Dispatcher·Enum Comparison처럼 숨은 Boxing이 발생하는 패턴을 진단하고, Source Generator·Generic Constraint·Typed Message 중 적절한 구조적 해결을 선택할 수 있다.
 - 고빈도 Boxing이 Gen 0 Collection 빈도·p99 지연에 미치는 영향이 임계값을 넘는 조건을 Profiler로 확인하고, Unsafe 최적화 대신 구조적 해결이 우선되는 판단 기준을 결정할 수 있다.
@@ -25,7 +25,7 @@ C#의 통합 타입 시스템은 모든 타입이 `object`로 취급될 수 있�
 
 C#의 단일 루트 타입 시스템에서 `object` 기반 API(예: 비Generic Collection, Logging, Reflection)에 Value Type을 전달할 수 있어야 한다. Boxing이 없으면 `ArrayList.Add(42)`처럼 `int`를 `object`에 넣을 방법이 없다.
 
-문제는 Boxing이 자동으로 일어나 Heap Allocation이 발생하는지 코드만 봐서는 모를 때가 많다는 것이다. 고빈도 경로에서 누적되면 Allocation Rate와 GC Pause에 실제 영향을 준다.
+문제는 Boxing이 자동으로 일어나 Heap Allocation이 발생하는지 코드만 봐서는 모를 때가 많다는 것이다. 고빈도 경로에서 누적되면 Allocation Rate와 GC(Garbage Collection) Pause에 실제 영향을 준다.
 
 ## 3. 핵심 동작 원리
 ```text
@@ -51,7 +51,7 @@ value = 100;
 Console.WriteLine(boxed); // 42
 ```
 
-Box 객체에는 객체 Header·Type 정보와 Value Payload가 필요하며 Managed Heap Allocation이 발생한다. JIT 최적화로 일부 상황이 달라질 수 있지만 API 설계에서는 Boxing 가능성을 전제로 한다.
+Box 객체에는 객체 Header·Type 정보와 Value Payload가 필요하며 Managed Heap Allocation이 발생한다. JIT(Just-In-Time compilation) 최적화로 일부 상황이 달라질 수 있지만 API 설계에서는 Boxing 가능성을 전제로 한다.
 
 ## 4. Unboxing
 
@@ -94,7 +94,7 @@ static string Format<T>(T value) where T : IFormattable
     => value.ToString(null, null);
 ```
 
-단, Generic 내부에서 다시 `object`로 Cast하거나 비Generic API를 호출하면 Boxing이 생길 수 있다. Source Code 모양만으로 단정하지 않고 Allocation Profiler와 IL·JIT를 확인한다.
+단, Generic 내부에서 다시 `object`로 Cast하거나 비Generic API를 호출하면 Boxing이 생길 수 있다. Source Code 모양만으로 단정하지 않고 Allocation Profiler와 IL(Intermediate Language)·JIT를 확인한다.
 
 ## 6. Generic Collection과 비Generic Collection
 

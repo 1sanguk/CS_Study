@@ -16,7 +16,7 @@ importance: 5
 - Authoritative Server의 입력 검증 로직이 DoS 공격면이 되는 조건을 진단하고, Packet Rate Limit·검증 예산(Budget) 상한·우선순위별 Drop 정책 중 서버 Tick 안정성과 정상 플레이어 경험을 동시에 보호하는 조합을 결정할 수 있다.
 
 ## 1. 개요
-권위 서버는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
+권위 서버(Authoritative Server)는 게임의 최종 상태와 규칙 판정 권한을 서버가 가지고 Client 입력을 검증해 결과를 결정하는 모델이다.
 
 ## 2. 왜 필요한가
 변조된 Client가 위치, 피해량과 재화를 임의 결정하지 못하게 하고 모든 참가자에게 일관된 결과를 제공한다. 게임 서버는 정확성뿐 아니라 제한 시간 안의 처리와 장애 후 복구를 함께 제공해야 한다.
@@ -83,11 +83,11 @@ Tolerance가 너무 작으면 정상 Player를 수정하고, 너무 크면 Cheat
 
 Server는 발사 가능 State, Ammo, Fire Rate를 확인하고 Hit 판정 시 현재 또는 Lag-compensated 과거 Snapshot을 사용할 수 있다. Client가 보낸 Target ID와 Damage를 그대로 적용하지 않는다. Damage는 Server Data와 Buff·Armor 규칙에서 계산한다.
 
-Random 결과는 Server RNG에서 생성하고 필요한 경우 Seed·Input을 Replay Log에 기록한다. 보안용 RNG와 게임 Simulation RNG 요구를 구분한다.
+Random 결과는 Server RNG(Random Number Generator)에서 생성하고 필요한 경우 Seed·Input을 Replay Log에 기록한다. 보안용 RNG와 게임 Simulation RNG 요구를 구분한다.
 
 ### 중복·순서 처리
 
-Network Retry와 재전송으로 같은 Command가 여러 번 올 수 있다. Sequence Number로 오래된·중복 입력을 식별한다. UDP 입력은 일부 누락을 허용할 수 있고, 재화 지급 같은 Command는 Idempotency Key와 영속 중복 방지가 필요하다.
+Network Retry와 재전송으로 같은 Command가 여러 번 올 수 있다. Sequence Number로 오래된·중복 입력을 식별한다. UDP(User Datagram Protocol) 입력은 일부 누락을 허용할 수 있고, 재화 지급 같은 Command는 Idempotency Key와 영속 중복 방지가 필요하다.
 
 ```text
 lastProcessedSeq=100
@@ -104,7 +104,7 @@ Cross-service 작업에는 부분 실패가 있다. Match 보상은 결과 ID로
 
 ### 보안과 Anti-cheat
 
-Authoritative 구조는 Cheat를 어렵게 하지만 Server도 Client가 볼 수 없는 정보까지 전송하면 Wall Hack에 악용될 수 있다. Interest Management로 필요한 Entity만 전송하고 민감 데이터는 최소화한다.
+Authoritative 구조는 Cheat를 어렵게 하지만 Server도 Client가 볼 수 없는 정보까지 전송하면 Wall Hack에 악용될 수 있다. AOI(Area of Interest) 기반 Interest Management로 필요한 Entity만 전송하고 민감 데이터는 최소화한다.
 
 입력 빈도, 불가능한 이동, Aim Pattern을 탐지하되 Detection과 Punishment를 분리한다. Server 검증 비용 자체가 DoS 공격점이 되므로 Packet Rate와 계산 Budget을 제한한다.
 
@@ -183,11 +183,11 @@ Client가 보낸 `damage` 필드는 사용하지 않는다. 서버가 `skill.id`
 |------|---------------------|-----------------------|
 | 최종 상태 결정 | 서버 | 클라이언트 |
 | Cheat 방어 | 강함 (서버가 검증) | 취약 (클라이언트 신뢰) |
-| 지연 (RTT) | 판정이 RTT만큼 지연 | 즉각 반응 |
+| 지연 (RTT) | 판정이 RTT(Round-Trip Time)만큼 지연 | 즉각 반응 |
 | 반응성 보완 | Client Prediction + 보정 | 불필요 |
 | 서버 CPU | 검증·Simulation 부하 | 낮음 |
 | 공정성·일관성 | 높음 | 낮음 (클라이언트마다 다름) |
-| 적합한 장르 | Competitive·MMORPG | PvE Casual·Turn-based |
+| 적합한 장르 | Competitive·MMORPG(Massively Multiplayer Online Role-Playing Game) | PvE Casual·Turn-based |
 ## 6. 장점과 단점
 
 ### Authoritative Server의 장점
@@ -233,7 +233,7 @@ Sequence Number는 같은 세션 내에서 오래된·중복 입력을 Drop하�
 
 ### Q4. 적 위치를 알 수 없어야 하는데 클라이언트가 패킷을 파싱해 숨어 있는 Enemy 좌표를 추출해 Wall Hack을 구현했습니다. 서버 설계에서 어떻게 방지하나요?
 
-Interest Management를 적용합니다. 서버는 각 플레이어의 시야 범위·Zone 경계 기준으로 해당 클라이언트가 '알아야 할' Entity 목록을 계산하고, 시야 밖 Enemy 상태는 전송하지 않습니다. 구현: (1) 매 Tick 또는 Entity 이동 시 시야 범위(예: 반경 50m) 안의 Entity 집합을 계산, (2) 이전 Tick 집합과 비교해 Enter/Leave 이벤트를 전송, (3) 시야 밖 Entity는 좌표·HP 등 어떤 필드도 Packet에 포함하지 않음. 추가로 서버가 보내는 Entity 수를 Tick당 상한으로 제어해 Fan-out 부하도 방지합니다.
+AOI 기반 Interest Management를 적용합니다. 서버는 각 플레이어의 시야 범위·Zone 경계 기준으로 해당 클라이언트가 '알아야 할' Entity 목록을 계산하고, 시야 밖 Enemy 상태는 전송하지 않습니다. 구현: (1) 매 Tick 또는 Entity 이동 시 시야 범위(예: 반경 50m) 안의 Entity 집합을 계산, (2) 이전 Tick 집합과 비교해 Enter/Leave 이벤트를 전송, (3) 시야 밖 Entity는 좌표·HP 등 어떤 필드도 Packet에 포함하지 않음. 추가로 서버가 보내는 Entity 수를 Tick당 상한으로 제어해 Fan-out 부하도 방지합니다.
 
 ### Q5. 입력 검증 서버가 초당 100만 건의 조작된 Packet을 받아 CPU 100%에 도달했습니다. 검증 로직 자체가 DoS 공격면이 된 상황에서 어떻게 방어하나요?
 

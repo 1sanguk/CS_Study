@@ -53,7 +53,7 @@ Composition은 객체를 상속하는 대신 필요한 기능 객체를 Field로
 
 ### 다형성 성능과 JIT 최적화
 
-다형 호출 비용만 보고 설계를 결정하지 않는다. 실제 Hot Path에서는 JIT가 Type Profile을 바탕으로 Devirtualization과 Inlining을 할 수 있다. 먼저 Architecture의 변경 축을 정하고 Profile에서 병목이 확인되면 구체적으로 최적화한다.
+다형 호출 비용만 보고 설계를 결정하지 않는다. 실제 Hot Path에서는 JIT(Just-In-Time compilation)가 Type Profile을 바탕으로 Devirtualization과 Inlining을 할 수 있다. 먼저 Architecture의 변경 축을 정하고 Profile에서 병목이 확인되면 구체적으로 최적화한다.
 
 ### 확장 경계를 정하는 방법
 
@@ -61,7 +61,7 @@ Composition은 객체를 상속하는 대신 필요한 기능 객체를 Field로
 - **상태 공유**: Abstract Class의 Protected Mutable State는 Subclass 결합을 키운다. 공통 불변식을 Base가 완전히 지킬 수 있는지 확인하고 아니면 별도 Component로 위임한다.
 - **Default Method**: 기존 구현을 깨지 않고 Method를 추가하는 데 유용하지만 두 Interface가 같은 Default를 제공하면 구현체가 충돌을 해결해야 한다.
 - **Override 안전성**: equals, hashCode와 toString 외에도 Constructor에서 Override 가능한 Method를 호출하지 않는다. Subclass 상태가 초기화되기 전에 Dispatch될 수 있다.
-- **Dependency Injection**: Interface를 모든 Class에 기계적으로 붙이지 않는다. 외부 I/O, 정책 교체와 Test Double이 필요한 경계에 적용한다.
+- **Dependency Injection**: Interface를 모든 Class에 기계적으로 붙이지 않는다. 외부 I/O(Input/Output), 정책 교체와 Test Double이 필요한 경계에 적용한다.
 - **성능 판단**: Virtual Dispatch 한 번보다 Allocation, Cache Miss와 Algorithm 비용이 큰 경우가 많다. JIT Inlining 여부와 실제 호출 빈도를 Profile한다.
 
 ### 게임 서버 설계 예시
@@ -186,13 +186,13 @@ instanceof 분기를 Override 다형 메서드로 대체합니다. 각 구현체
 Protected Mutable State는 Subclass가 Base의 불변식 없이 직접 수정 가능해 hp 유효성을 Base가 보장할 수 없습니다. 예를 들어 PvpCharacter가 hp를 음수로 설정해도 Base가 막을 수 없습니다. 리팩토링: hp를 private으로 바꾸고 `protected applyDamage(int amount)` 게이트 메서드에서 유효성 검증 후 hp를 조작. Subclass는 게이트를 통해서만 접근. 더 강한 분리가 필요하면 hp 관리를 `HealthComponent`로 분리하고 CharacterBase는 위임.
 
 ### Q4. `CharacterBase` Constructor에서 `init()`을 호출하는데 PvpCharacter가 `init()`을 Override해 자신의 필드 `pvpRating`을 사용합니다. 운영에서 간헐적으로 `pvpRating`이 0으로 기록됩니다. 근본 원인과 수정 방법은 무엇입니까?
-근본 원인: `super()` 먼저 실행 → CharacterBase.init() 호출 → JVM이 PvpCharacter.init()으로 Dispatch → 이 시점 pvpRating 필드는 아직 기본값 0. 로컬 테스트에서 값이 정상인 이유는 직접 PvpCharacter를 생성해 호출 순서가 다른 경우입니다. 수정: Constructor에서 Override 가능한 메서드 호출 금지. 초기화 로직을 `static factory method` 또는 `final setup()` 메서드로 분리. 또는 Template Method 패턴에서 `initFields()`를 final로 선언해 Subclass Override 자체를 차단.
+근본 원인: `super()` 먼저 실행 → CharacterBase.init() 호출 → JVM(Java Virtual Machine)이 PvpCharacter.init()으로 Dispatch → 이 시점 pvpRating 필드는 아직 기본값 0. 로컬 테스트에서 값이 정상인 이유는 직접 PvpCharacter를 생성해 호출 순서가 다른 경우입니다. 수정: Constructor에서 Override 가능한 메서드 호출 금지. 초기화 로직을 `static factory method` 또는 `final setup()` 메서드로 분리. 또는 Template Method 패턴에서 `initFields()`를 final로 선언해 Subclass Override 자체를 차단.
 
 ### Q5. `DamageRule` Interface에 Default Method `logDamage()`를 추가했는데, 별도 `Loggable` Interface에도 `logDamage()`가 있어 `PvpRule`에서 컴파일 에러가 발생합니다. Java의 충돌 해결 규칙과 안전한 수정 방법은 무엇입니까?
 Java 우선순위 규칙: ① Abstract Class 또는 Concrete 상위 클래스 구현 > ② 더 구체적인(하위) Interface Default > ③ 동일 수준 두 Interface Default 충돌 시 구현 클래스가 반드시 Override해 `DamageRule.super.logDamage()` 또는 `Loggable.super.logDamage()`로 명시 선택. 안전한 수정: Default Method는 Interface 진화(기존 구현 깨지 않고 신규 추가)용으로만 사용하고, 공통 동작은 `LoggingUtil` 클래스로 분리해 두 Interface가 같은 계약을 제공하지 않도록 설계.
 
 ### Q6. 매 Tick 100만 번 `rule.calculate()` 호출 Game Loop에서 async-profiler flame graph 상위에 다형 호출 오버헤드가 보입니다. 실제 문제인지 판단하는 절차와 최적화 방법을 설명하세요.
-판단 절차: `-XX:+PrintInlining` 또는 JFR Compiler Event로 JIT Inlining 여부 확인. 구현체가 1~2개면 JIT C2가 Devirtualization·Inlining 적용 가능 → flame graph의 Virtual Dispatch 비용은 실제 문제가 아닐 수 있음. 구현체 3개 이상이면 Megamorphic → Inlining 불가. 최적화: Hot Path 구현체를 final 클래스로 선언해 JIT Devirtualization 유도. `-XX:MaxInlineLevel` 조정으로 Inlining 깊이 확장 검토. 단, Allocation·Cache Miss·DB I/O 비용이 Virtual Dispatch 비용보다 크면 설계 변경 불필요 → 먼저 async-profiler로 실제 비율 확인.
+판단 절차: `-XX:+PrintInlining` 또는 JFR(Java Flight Recorder) Compiler Event로 JIT Inlining 여부 확인. 구현체가 1~2개면 JIT C2가 Devirtualization·Inlining 적용 가능 → flame graph의 Virtual Dispatch 비용은 실제 문제가 아닐 수 있음. 구현체 3개 이상이면 Megamorphic → Inlining 불가. 최적화: Hot Path 구현체를 final 클래스로 선언해 JIT Devirtualization 유도. `-XX:MaxInlineLevel` 조정으로 Inlining 깊이 확장 검토. 단, Allocation·Cache Miss·DB I/O 비용이 Virtual Dispatch 비용보다 크면 설계 변경 불필요 → 먼저 async-profiler로 실제 비율 확인.
 
 ## 10. 예상 꼬리질문
 - `Animal a = new Dog(); a.staticMethod()`를 실행하면 Dog.staticMethod()가 아닌 Animal.staticMethod()가 호출됩니다. async-profiler에서 이 코드의 호출 경로가 예상과 다를 때 Static Hiding과 Override 차이를 어떻게 빠르게 진단하고, 이 버그를 CI에서 방지하는 방법은 무엇인가요?

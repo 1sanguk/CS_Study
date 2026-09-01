@@ -17,7 +17,7 @@ importance: 4
 
 ## 1. 개요
 
-TIME_WAIT는 TCP 연결을 능동적으로 종료하고 마지막 ACK를 보낸 쪽이 일정 시간 유지하는 상태다. CLOSE_WAIT는 상대의 FIN을 받아 수신 종료를 확인했지만 로컬 애플리케이션이 아직 소켓을 닫지 않은 상태다.
+TIME_WAIT는 TCP(Transmission Control Protocol) 연결을 능동적으로 종료하고 마지막 ACK(Acknowledgment)를 보낸 쪽이 일정 시간 유지하는 상태다. CLOSE_WAIT는 상대의 FIN(Finish)을 받아 수신 종료를 확인했지만 로컬 애플리케이션이 아직 소켓을 닫지 않은 상태다.
 
 둘 다 TCP 종료 과정의 정상 상태일 수 있다. 다만 지속적으로 많이 쌓이면 서로 다른 원인을 조사해야 한다.
 

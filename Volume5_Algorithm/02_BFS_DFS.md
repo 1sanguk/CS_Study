@@ -232,7 +232,7 @@ A(GRAY) → B(GRAY) → C(GRAY)
   └──────────────────┘  Back Edge → Cycle
 ```
 
-방향 비순환 Graph인 DAG의 위상 정렬은 DFS 종료 순서를 뒤집거나 진입 차수와 Queue를 사용하는 Kahn Algorithm으로 구할 수 있다.
+방향 비순환 Graph인 DAG(Directed Acyclic Graph)의 위상 정렬은 DFS 종료 순서를 뒤집거나 진입 차수와 Queue를 사용하는 Kahn Algorithm으로 구할 수 있다.
 
 ## 11. BFS와 DFS 비교
 

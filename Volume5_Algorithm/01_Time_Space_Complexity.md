@@ -17,9 +17,9 @@ importance: 5
 
 ## 1. 개요
 
-시간 복잡도는 입력 크기 `n`이 증가할 때 알고리즘이 수행하는 기본 연산 수의 증가율이다. 공간 복잡도는 실행 중 필요한 메모리가 입력에 따라 얼마나 증가하는지를 나타낸다.
+시간 복잡도는 입력 크기 `n`이 증가할 때 알고리즘이 수행하는 기본 연산 수의 증가율이다. 공간 복잡도는 실행 중 필요한 메모리(RAM, Random Access Memory)가 입력에 따라 얼마나 증가하는지를 나타낸다.
 
-복잡도는 특정 CPU에서 몇 ms가 걸리는지를 직접 말하지 않는다. 하드웨어와 언어, 작은 상수의 영향을 줄이고 입력이 커졌을 때 어떤 알고리즘이 더 잘 확장되는지 비교하는 도구다.
+복잡도는 특정 CPU(Central Processing Unit)에서 몇 ms가 걸리는지를 직접 말하지 않는다. 하드웨어와 언어, 작은 상수의 영향을 줄이고 입력이 커졌을 때 어떤 알고리즘이 더 잘 확장되는지 비교하는 도구다.
 
 ```text
 n이 2배가 될 때 대략적인 증가
@@ -44,7 +44,7 @@ O(2ⁿ)     입력 1 증가마다 약 2배
 - 데이터가 10배 증가하면 비용이 어느 정도 늘어나는가?
 - 시간을 줄이기 위해 어느 정도의 추가 메모리를 사용할 것인가?
 - 평균은 빠르지만 최악 입력에서 Tick을 막는가?
-- 최적화할 부분이 Algorithm인지 I/O·Lock·Allocation인지?
+- 최적화할 부분이 Algorithm인지 I/O(Input/Output)·Lock·Allocation인지?
 
 복잡도는 정당성을 대신하지 않는다. 빠른 오답 Algorithm은 의미가 없다. 먼저 결과가 맞는 이유와 전제 조건을 확인하고, 그 다음 비용을 분석한다.
 
@@ -217,8 +217,8 @@ Binary Search는 절반 중 한쪽만 재귀 호출하므로 `T(n)=T(n/2)+O(1)=O
 
 - In-place 배열 역전: 보조 공간 O(1)
 - Merge Sort: 병합 Buffer O(n), 재귀 Stack O(log n)
-- BFS: 방문 배열과 Queue O(V)
-- DFS: 방문 배열 O(V), 재귀 Stack 최악 O(V)
+- BFS(Breadth-First Search): 방문 배열과 Queue O(V)
+- DFS(Depth-First Search): 방문 배열 O(V), 재귀 Stack 최악 O(V)
 - Memoization: 상태 Cache O(n)
 
 재귀 호출 Stack도 Memory다. 매우 깊은 Graph를 재귀 DFS하면 시간은 O(V+E)여도 Stack Overflow가 날 수 있다. 명시적 Stack도 O(V) 공간을 쓰지만 Heap에 두고 Capacity를 통제하기 쉽다.

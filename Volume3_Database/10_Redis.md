@@ -25,7 +25,7 @@ Redis는 Key에 단순 Byte String뿐 아니라 Hash, List, Set, Sorted Set, Str
 
 ## 2. 왜 필요한가
 
-RDBMS에서 매 요청마다 같은 프로필과 설정을 읽으면 DB Buffer와 Connection이 소모된다. 변경이 드물고 잠시 오래된 값이 허용되면 Redis에 캐시해 읽기 부하를 줄일 수 있다. Sorted Set은 점수 순위를, Set은 중복 없는 Membership을, 원자 증가 명령은 Rate Limit Counter를 간단히 표현한다.
+RDBMS(Relational Database Management System)에서 매 요청마다 같은 프로필과 설정을 읽으면 DB Buffer와 Connection이 소모된다. 변경이 드물고 잠시 오래된 값이 허용되면 Redis에 캐시해 읽기 부하를 줄일 수 있다. Sorted Set은 점수 순위를, Set은 중복 없는 Membership을, 원자 증가 명령은 Rate Limit Counter를 간단히 표현한다.
 
 반면 재화 원장과 결제처럼 손실·중복을 허용하기 어려운 데이터는 Redis를 원본으로 삼기 전에 Persistence와 Failover에서 실제 보장을 검토해야 한다. 흔한 구조는 RDBMS를 원본으로 두고 Redis를 재구축 가능한 읽기 최적화로 사용하는 것이다.
 
@@ -75,7 +75,7 @@ return 1
 
 ### TTL과 만료
 
-Key에 TTL을 설정하면 일정 시간 뒤 만료된다. Redis는 접근 시 만료를 확인하는 수동적 방식과 주기적으로 일부 Key를 검사하는 능동적 방식을 함께 사용한다. TTL 시각이 지났다고 그 순간 별도 Thread가 모든 Key를 정확히 삭제하지는 않는다.
+Key에 TTL(Time To Live)을 설정하면 일정 시간 뒤 만료된다. Redis는 접근 시 만료를 확인하는 수동적 방식과 주기적으로 일부 Key를 검사하는 능동적 방식을 함께 사용한다. TTL 시각이 지났다고 그 순간 별도 Thread가 모든 Key를 정확히 삭제하지는 않는다.
 
 많은 Key에 같은 만료 시각을 주면 Cache Miss가 동시에 몰릴 수 있다. TTL에 무작위 Jitter를 더해 분산하고 중요한 Hot Key는 미리 갱신한다.
 
@@ -168,10 +168,10 @@ public PlayerProfile getProfile(Jedis jedis, long playerId) {
 
 | 구분 | Redis | RDBMS | In-process Cache |
 |---|---|---|---|
-| 접근 방식 | Network + Memory | SQL·Storage Engine | Process Memory 직접 |
+| 접근 방식 | Network + Memory | SQL(Structured Query Language)·Storage Engine | Process Memory 직접 |
 | 자료 모델 | Key 기반 Data Structure | Relation·Constraint·Join | Library 객체 |
 | 공유 범위 | 여러 Process·서버 | 여러 서비스 | 단일 Process |
-| 지속성 | 설정에 따라 선택·손실 범위 | WAL·Transaction 중심 | Process 종료 시 소멸 |
+| 지속성 | 설정에 따라 선택·손실 범위 | WAL(Write-Ahead Logging)·Transaction 중심 | Process 종료 시 소멸 |
 | 강점 | 낮은 지연·Atomic Command | 복합 정합성·조회 | 가장 낮은 Network 비용 |
 | 주요 약점 | 비동기 복제 손실·Hot Key | Connection 비용·지연 | 서버 간 불일치 |
 
@@ -194,7 +194,7 @@ public PlayerProfile getProfile(Jedis jedis, long playerId) {
 
 **Redis의 단점**
 
-- RAM 비용이 높고 메모리 한도 초과 시 Eviction 또는 쓰기 실패가 생긴다.
+- RAM(Random Access Memory) 비용이 높고 메모리 한도 초과 시 Eviction 또는 쓰기 실패가 생긴다.
 - 비동기 복제로 Failover 시 최근 쓰기가 유실될 수 있다.
 - Hot Key가 Event Loop와 같은 Shard에 부하를 집중시킨다.
 - 명령 하나의 원자성이 비즈니스 로직 전체 원자성을 보장하지 않는다.
@@ -204,7 +204,7 @@ public PlayerProfile getProfile(Jedis jedis, long playerId) {
 
 Sorted Set으로 시즌 랭킹을 구성하고 DB를 최종 원본으로 둔다. 시즌 종료 시 Redis 랭킹을 DB에 Snapshot으로 저장해 Redis 장애·삭제 후에도 결과를 재구축할 수 있도록 한다.
 
-세션 Token→Player ID와 만료를 Redis에 저장하면 여러 API 서버가 공유할 수 있다. Redis 장애 시 모든 로그인 사용자를 차단할지 서명 Token으로 Fallback할지를 정한다.
+세션 Token→Player ID와 만료를 Redis에 저장하면 여러 API(Application Programming Interface) 서버가 공유할 수 있다. Redis 장애 시 모든 로그인 사용자를 차단할지 서명 Token으로 Fallback할지를 정한다.
 
 Rate Limit에는 고정 Window Counter를 `INCR`와 첫 생성 시 TTL을 Lua로 묶어 원자화한다. 경계 시각 Burst와 제한 실패 시 허용할지 차단할지를 서비스 위험에 따라 결정한다.
 

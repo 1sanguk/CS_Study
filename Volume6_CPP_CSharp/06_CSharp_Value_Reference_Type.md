@@ -23,7 +23,7 @@ C#에서 `struct`·숫자형·`bool`·`enum`은 Value Type, `class`·배열·`st
 
 ## 2. 왜 필요한가
 
-복사, 공유, Null 가능성, 할당·GC 비용을 예측해 API를 설계하기 위해 두 Type 범주를 구분한다.
+복사, 공유, Null 가능성, 할당·GC(Garbage Collection) 비용을 예측해 API(Application Programming Interface)를 설계하기 위해 두 Type 범주를 구분한다.
 
 ```csharp
 // Value Type: 두 위치가 독립 복사본을 가짐
@@ -169,7 +169,7 @@ b += "server"; // 새 문자열, a는 그대로
 
 Struct는 작고 불변이며 하나의 논리적 값을 표현하고 Boxing이 드문 경우에 적합하다. Position, ID, Timestamp Wrapper가 예다. 큰 Mutable Struct는 Copy 비용과 수정 대상 혼동이 크다.
 
-Class는 Identity, 공유 Reference, 상속과 긴 수명 객체에 적합하지만 Heap Allocation·GC와 간접 접근 비용이 있다. 절대 Byte 기준 하나로 정하지 않고 Collection 배치, Copy 빈도와 JIT 결과를 측정한다.
+Class는 Identity, 공유 Reference, 상속과 긴 수명 객체에 적합하지만 Heap Allocation·GC와 간접 접근 비용이 있다. 절대 Byte 기준 하나로 정하지 않고 Collection 배치, Copy 빈도와 JIT(Just-In-Time compilation) 결과를 측정한다.
 
 ## 11. 게임 서버 실무
 
@@ -262,7 +262,7 @@ public class Player
 
 ### Position·Velocity Struct 배열
 
-ECS 패턴에서 Position·Velocity를 `struct` 배열로 저장하면 연속 Memory 순회로 Tick 처리 Cache 효율이 높아진다.
+ECS(Entity Component System) 패턴에서 Position·Velocity를 `struct` 배열로 저장하면 연속 Memory 순회로 Tick 처리 Cache 효율이 높아진다.
 
 ```csharp
 Position[] positions = new Position[10_000];
@@ -275,7 +275,7 @@ for (int i = 0; i < positions.Length; i++)
 
 ### Session은 class
 
-Session은 비동기 I/O, 상태 Machine, 패킷 Buffer를 포함하며 여러 System이 같은 Session을 참조한다. `class`가 자연스럽다. Session을 `struct`로 만들면 복사본이 생겨 상태가 분기된다.
+Session은 비동기 I/O(Input/Output), 상태 Machine, 패킷 Buffer를 포함하며 여러 System이 같은 Session을 참조한다. `class`가 자연스럽다. Session을 `struct`로 만들면 복사본이 생겨 상태가 분기된다.
 
 ### Message Queue와 불변성
 

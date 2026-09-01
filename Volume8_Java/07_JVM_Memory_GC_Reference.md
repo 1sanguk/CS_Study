@@ -9,13 +9,13 @@ importance: 5
 
 
 ## 학습 목표
-- 게임 서버 Heap이 24시간 동안 100MB/시간씩 증가하는 현상을 JFR Allocation Profile과 Heap Dump Dominator Tree로 진단하고, Global Map·Listener·ThreadLocal 미해제 중 어느 원인인지 수정 순서를 결정할 수 있다.
-- Container(4GB 제한)가 OOM으로 종료됐는데 Heap이 2GB만 사용 중일 때, Thread Stack·Metaspace·Direct Buffer·Code Cache 관점에서 RSS 초과 원인을 진단하고 JVM 설정을 결정할 수 있다.
+- 게임 서버 Heap이 24시간 동안 100MB/시간씩 증가하는 현상을 JFR(Java Flight Recorder) Allocation Profile과 Heap Dump Dominator Tree로 진단하고, Global Map·Listener·ThreadLocal 미해제 중 어느 원인인지 수정 순서를 결정할 수 있다.
+- Container(4GB 제한)가 OOM(OutOfMemoryError)으로 종료됐는데 Heap이 2GB만 사용 중일 때, Thread Stack·Metaspace·Direct Buffer·Code Cache 관점에서 RSS 초과 원인을 진단하고 JVM 설정을 결정할 수 있다.
 - WeakHashMap으로 세션 캐시를 구현했는데 Cache Miss Rate가 40%를 넘을 때, Weak Reference 회수 시점의 비결정성이 원인임을 파악하고 Caffeine 같은 명시적 크기·TTL 캐시로 교체하는 판단 기준을 결정할 수 있다.
-- 게임 서버 p99 Latency 스파이크가 G1GC Full GC Pause(500ms)와 일치할 때, GC Log에서 Humongous Allocation·Promotion Failure를 분석하고 Heap 조정 대 ZGC 전환이 적합한 시점을 결정할 수 있다.
+- 게임 서버 p99 Latency 스파이크가 G1GC(Garbage First Garbage Collector) Full GC Pause(500ms)와 일치할 때, GC(Garbage Collection) Log에서 Humongous Allocation·Promotion Failure를 분석하고 Heap 조정 대 ZGC(Z Garbage Collector) 전환이 적합한 시점을 결정할 수 있다.
 
 ## 1. 개요
-JVM은 Heap, Thread Stack, Method Area 성격의 Metadata 영역과 Native Memory를 사용하며 GC는 도달할 수 없는 Heap 객체를 회수한다.
+JVM(Java Virtual Machine)은 Heap, Thread Stack, Method Area 성격의 Metadata 영역과 Native Memory를 사용하며 GC는 도달할 수 없는 Heap 객체를 회수한다.
 
 ## 2. 왜 필요한가
 객체 Lifetime과 Allocation Rate가 Server 지연, Memory 상한과 장애 복구에 직접 영향을 주므로 Root, 세대와 외부 Resource를 구분해야 한다.
@@ -27,7 +27,7 @@ allocation → Eden/Heap → reachable from GC Roots? → retain or reclaim → 
 이 흐름은 JVM Memory·GC와 Reference의 상태와 실행 경계를 보여 준다. 정상 처리뿐 아니라 실패와 Resource 정리 위치를 함께 본다.
 
 ### 1) Thread Stack·Heap·Off-Heap 메모리 구조
-Local Variable과 Operand Stack은 Thread별 Frame에 있고 객체는 일반적으로 Heap에 생성된다. Class Metadata, JIT Code Cache, Direct Buffer 같은 Memory는 Java Heap 밖에도 있어 Heap 사용량만으로 RSS를 설명할 수 없다.
+Local Variable과 Operand Stack은 Thread별 Frame에 있고 객체는 일반적으로 Heap에 생성된다. Class Metadata, JIT(Just-In-Time compilation) Code Cache, Direct Buffer 같은 Memory는 Java Heap 밖에도 있어 Heap 사용량만으로 RSS를 설명할 수 없다.
 
 ### 2) GC Root와 Reachability 기반 회수
 GC Root에는 실행 Thread의 Reference, Static Field와 JNI Reference 등이 포함될 수 있다. Root에서 강한 참조 Chain으로 도달 가능한 객체는 사용하지 않아도 회수되지 않으므로 Collection과 Listener 정리를 확인한다.

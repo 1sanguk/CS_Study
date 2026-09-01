@@ -13,7 +13,7 @@ importance: 5
 - 네트워크 핵심 개념을 계층과 데이터 흐름으로 연결해 설명할 수 있다.
 - 게임 서버 접속·지연·연결 누수 문제를 구조적으로 진단할 수 있다.
 - 대표 면접 질문에 1~3분 동안 논리적으로 답할 수 있다.
-- TCP·UDP 선택, HTTP·WebSocket 선택, 상태 있는 게임 서버 확장을 설계 질문으로 설명할 수 있다.
+- TCP(Transmission Control Protocol)·UDP(User Datagram Protocol) 선택, HTTP(HyperText Transfer Protocol)·WebSocket 선택, 상태 있는 게임 서버 확장을 설계 질문으로 설명할 수 있다.
 
 ## 1. 개요
 
@@ -35,11 +35,11 @@ HTTP/WebSocket/게임 프로토콜
 
 클라이언트가 `https://api.game.example/login`에 접속한다고 하자.
 
-1. DNS로 도메인의 IP를 얻는다.
+1. DNS(Domain Name System)로 도메인의 IP(Internet Protocol)를 얻는다.
 2. 라우팅 테이블로 목적지가 로컬인지 외부인지 판단한다.
-3. 외부라면 ARP로 기본 게이트웨이 MAC을 알아낸다.
-4. HTTPS 서버의 TCP 443 포트로 3-Way Handshake를 수행한다.
-5. TLS가 인증서를 검증하고 암호화 키를 합의한다.
+3. 외부라면 ARP(Address Resolution Protocol)로 기본 게이트웨이 MAC(Media Access Control) 주소를 알아낸다.
+4. HTTPS(HTTP over TLS) 서버의 TCP 443 포트로 3-Way Handshake를 수행한다.
+5. TLS(Transport Layer Security)가 인증서를 검증하고 암호화 키를 합의한다.
 6. HTTP 로그인 요청을 보낸다.
 7. 로드 밸런서가 정상 백엔드를 선택한다.
 8. 서버는 인증 후 게임 세션과 접속 주소를 반환한다.
@@ -83,11 +83,11 @@ HTTP·게임 프로토콜과 인증 확인
 
 ### 간헐적으로 지연된다
 
-평균만 보지 않고 p95·p99 지연, 패킷 손실, 재전송, RTT, 서버 큐, GC와 DB 지연을 시간축으로 맞춘다. TCP 손실로 인한 재전송인지, 수신 윈도 정체인지, 네트워크 혼잡인지, 애플리케이션 작업 지연인지 분리한다.
+평균만 보지 않고 p95·p99 지연, 패킷 손실, 재전송, RTT(Round-Trip Time), 서버 큐, GC와 DB 지연을 시간축으로 맞춘다. TCP 손실로 인한 재전송인지, 수신 윈도 정체인지, 네트워크 혼잡인지, 애플리케이션 작업 지연인지 분리한다.
 
 ### 작은 메시지는 되지만 큰 메시지는 실패한다
 
-MTU와 단편화, PMTUD ICMP 차단, 프록시 본문 제한, 응용 버퍼 상한을 확인한다. VPN과 터널이 추가 헤더로 실제 경로 MTU를 줄였는지도 본다.
+MTU(Maximum Transmission Unit)와 단편화, PMTUD ICMP(Internet Control Message Protocol) 차단, 프록시 본문 제한, 응용 버퍼 상한을 확인한다. VPN과 터널이 추가 헤더로 실제 경로 MTU를 줄였는지도 본다.
 
 ### CLOSE_WAIT가 쌓인다
 
@@ -95,7 +95,7 @@ MTU와 단편화, PMTUD ICMP 차단, 프록시 본문 제한, 응용 버퍼 상�
 
 ### WebSocket이 일정 시간 후 끊긴다
 
-로드 밸런서와 NAT의 유휴 타임아웃, Ping/Pong 주기, 이벤트 루프 정체, 인증 만료를 확인한다. 재접속에는 백오프와 무작위 지연을 적용해 동시 재접속 폭주를 막는다.
+로드 밸런서와 NAT(Network Address Translation)의 유휴 타임아웃, Ping/Pong 주기, 이벤트 루프 정체, 인증 만료를 확인한다. 재접속에는 백오프와 무작위 지연을 적용해 동시 재접속 폭주를 막는다.
 
 ## 5. 설계 선택 질문
 
@@ -113,7 +113,7 @@ MTU와 단편화, PMTUD ICMP 차단, 프록시 본문 제한, 응용 버퍼 상�
 
 ### HTTP와 WebSocket 중 무엇을 선택하는가
 
-조회와 짧은 명령, 캐시 가능한 API는 HTTP가 단순하다. 서버가 빈번하게 이벤트를 밀고 양방향 메시지가 필요하면 WebSocket을 고려한다. 단방향 알림이면 SSE도 후보가 된다.
+조회와 짧은 명령, 캐시 가능한 API(Application Programming Interface)는 HTTP가 단순하다. 서버가 빈번하게 이벤트를 밀고 양방향 메시지가 필요하면 WebSocket을 고려한다. 단방향 알림이면 SSE도 후보가 된다.
 
 ### 상태 있는 게임 서버를 어떻게 확장하는가
 

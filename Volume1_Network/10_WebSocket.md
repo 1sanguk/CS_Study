@@ -17,7 +17,7 @@ importance: 4
 
 ## 1. 개요
 
-WebSocket은 하나의 연결에서 클라이언트와 서버가 필요할 때마다 메시지를 주고받는 전이중(Full-duplex) 응용 계층 프로토콜이다. 최초 연결은 HTTP 핸드셰이크로 시작하지만 전환 후에는 HTTP 요청·응답이 아니라 WebSocket 프레임을 교환한다.
+WebSocket은 하나의 연결에서 클라이언트와 서버가 필요할 때마다 메시지를 주고받는 전이중(Full-duplex) 응용 계층 프로토콜이다. 최초 연결은 HTTP(HyperText Transfer Protocol) 핸드셰이크로 시작하지만 전환 후에는 HTTP 요청·응답이 아니라 WebSocket 프레임을 교환한다.
 
 ## 2. 왜 필요한가
 

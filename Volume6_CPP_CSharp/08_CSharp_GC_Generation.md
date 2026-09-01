@@ -10,7 +10,7 @@ importance: 5
 
 ## 학습 목표
 
-- 게임 서버 Tick p99가 특정 Tick에서만 급등하는 Spike에서 GC Gen 0·Gen 2 Collection·LOH Allocation 중 어느 것이 원인인지 Profiler 지표(Allocation Rate·Promoted Bytes·Pause Duration)로 구분하고, 조치 우선순위를 판단할 수 있다.
+- 게임 서버 Tick p99가 특정 Tick에서만 급등하는 Spike에서 GC(Garbage Collection) Gen 0·Gen 2 Collection·LOH(Large Object Heap) Allocation 중 어느 것이 원인인지 Profiler 지표(Allocation Rate·Promoted Bytes·Pause Duration)로 구분하고, 조치 우선순위를 판단할 수 있다.
 - Static Dictionary·Event Handler·Timer Closure에서 Root 도달 가능성이 유지되어 논리적 Leak이 발생하는 패턴을 코드 수준에서 진단하고, 명시적 Remove·Unsubscribe·TTL·WeakReference 중 적합한 해결을 선택할 수 있다.
 - Socket·File·Handle처럼 비관리 자원을 보유하는 객체에서 Finalizer·`IDisposable`·`SafeHandle` 중 목적에 맞는 조합을 판단하고, `GC.SuppressFinalize` 누락이나 반환 누락이 발생하는 조건을 진단할 수 있다.
 - 매 Tick 임시 Allocation이 Gen 0 빈도를 높이고 장수 객체 참조가 단수명 객체를 함께 승격시키는 패턴을 진단하고, `ArrayPool<byte>`·`Span<T>`·ThreadStatic Cache 중 Tick Budget과 Peak Memory 기준에 맞는 방식을 결정할 수 있다.
@@ -73,9 +73,9 @@ GC의 일부 단계는 Application Thread를 멈추는 Stop-the-world Pause를 �
 
 ## 6. LOH와 POH
 
-큰 객체는 Large Object Heap에 할당된다. 일반적으로 약 85,000 Byte 이상이 대표 기준이지만 객체 종류·Runtime에 따른 세부사항을 문서로 확인한다. 큰 배열을 반복 할당하면 Allocation Throughput, Gen 2 수집과 Fragmentation에 부담을 줄 수 있다.
+큰 객체는 LOH(Large Object Heap)에 할당된다. 일반적으로 약 85,000 Byte 이상이 대표 기준이지만 객체 종류·Runtime에 따른 세부사항을 문서로 확인한다. 큰 배열을 반복 할당하면 Allocation Throughput, Gen 2 수집과 Fragmentation에 부담을 줄 수 있다.
 
-Pinned Object Heap은 장기 Pinning 객체를 별도 영역에 배치하도록 돕는다. 별도 Heap이 있다는 사실이 Pinning 비용을 없애는 것은 아니다.
+POH(Pinned Object Heap)는 장기 Pinning 객체를 별도 영역에 배치하도록 돕는다. 별도 Heap이 있다는 사실이 Pinning 비용을 없애는 것은 아니다.
 
 대형 Packet Buffer는 `ArrayPool<byte>`로 재사용할 수 있지만 반환 누락, 실제 데이터 길이와 배열 길이 혼동, 민감 데이터 잔존을 관리한다. Pool은 GC Pressure를 줄일 수 있지만 Peak Memory를 유지한다.
 
@@ -273,7 +273,7 @@ finally { ArrayPool<byte>.Shared.Return(buffer); }
 
 ### Q1. 서버 Tick p99가 평소 5ms에서 특정 Tick에서만 55ms로 급등하는 Spike가 주기적으로 발생합니다. GC Gen 2 Full Collection이 원인임을 확인하는 절차와 네트워크 지연·락 경합 같은 다른 원인과 구분하는 지표를 설명하십시오.
 
-**30초 답변:** Profiler 타임라인에서 GC 이벤트와 Tick 처리 시간을 같은 축에 놓고 겹치는 지점을 찾습니다. Gen 2 Collection Pause Duration이 Spike 구간에서 수십ms인지 확인합니다. 락 경합이라면 Thread Contention 지표가, 네트워크라면 Queue Depth가 함께 오릅니다. GC Pause는 ETW/PerfView로 GC 이벤트 타임스탬프를 Tick 로그와 대조하면 분리됩니다.
+**30초 답변:** Profiler 타임라인에서 GC 이벤트와 Tick 처리 시간을 같은 축에 놓고 겹치는 지점을 찾습니다. Gen 2 Collection Pause Duration이 Spike 구간에서 수십ms인지 확인합니다. 락 경합이라면 Thread Contention 지표가, 네트워크라면 Queue Depth가 함께 오릅니다. GC Pause는 ETW(Event Tracing for Windows)/PerfView로 GC 이벤트 타임스탬프를 Tick 로그와 대조하면 분리됩니다.
 
 **1~2분 답변:** 먼저 dotnet-counters로 실시간으로 Gen 0·1·2 Collection Count, Allocation Rate, Pause Duration을 확인합니다. Spike가 GC와 겹치면 PerfView GC 탐색 뷰에서 Gen 2 Pause Duration이 해당 구간에 몇ms인지 확인합니다. Gen 2 Pause가 40~50ms라면 Allocation Rate가 지나치게 높아 Gen 0 객체가 Gen 1→Gen 2까지 승격된 누적이 원인일 가능성이 큽니다. 락 경합은 Thread Wait 시간, 네트워크는 Send/Recv Queue Depth와 Spike 타이밍이 겹치는지 비교합니다. 세 가지가 동시에 Spike와 겹치면 GC Pause가 Worker Thread를 멈춰 Packet 처리가 밀린 복합 증상일 수 있습니다. 근본 원인은 Hot Path Allocation을 Profiler의 Allocation Call Stack으로 찾아 Pool·Span으로 교체합니다.
 

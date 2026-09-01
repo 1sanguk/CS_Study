@@ -144,7 +144,11 @@ class TextbookReader {
     content.innerHTML = this._metaBadge(meta) + marked.parse(body);
     document.querySelectorAll('#content pre code').forEach(el => hljs.highlightElement(el));
     this._addCopyButtons();
-    document.getElementById('reader-area').scrollTop = 0;
+    this._wrapTables();
+    const area = document.getElementById('reader-area');
+    area.scrollTop = 0;
+    document.getElementById('reading-progress-fill').style.width = '0%';
+    document.getElementById('scroll-top-btn').classList.remove('visible');
 
     if (direction !== 'none') {
       const enterCls = direction === 'next' ? 'enter-right' : 'enter-left';
@@ -270,9 +274,23 @@ class TextbookReader {
         this.navigateTo(this.currentIndex - 1, 'prev');
     });
 
-    // Swipe
+    // Swipe + scroll progress + scroll-to-top
     let startX = 0;
-    const area = document.getElementById('reader-area');
+    const area        = document.getElementById('reader-area');
+    const progressFill = document.getElementById('reading-progress-fill');
+    const scrollTopBtn = document.getElementById('scroll-top-btn');
+
+    area.addEventListener('scroll', () => {
+      const max      = area.scrollHeight - area.clientHeight;
+      const progress = max > 0 ? (area.scrollTop / max) * 100 : 0;
+      progressFill.style.width = progress + '%';
+      scrollTopBtn.classList.toggle('visible', area.scrollTop > 200);
+    }, { passive: true });
+
+    scrollTopBtn.addEventListener('click', () => {
+      area.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
     area.addEventListener('touchstart', e => { startX = e.touches[0].clientX; }, { passive: true });
     area.addEventListener('touchend',   e => {
       const dx = e.changedTouches[0].clientX - startX;
@@ -281,6 +299,17 @@ class TextbookReader {
         else        this.navigateTo(this.currentIndex - 1, 'prev');
       }
     }, { passive: true });
+  }
+
+  /* ── Table wrapper (모바일 가로 스크롤) ─────────────────── */
+  _wrapTables() {
+    document.querySelectorAll('#content table').forEach(table => {
+      if (table.parentElement.classList.contains('table-wrap')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    });
   }
 
   /* ── Copy buttons ───────────────────────────────────────── */

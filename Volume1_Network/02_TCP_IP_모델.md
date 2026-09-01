@@ -21,16 +21,16 @@ importance: 5
 
 ## 1. 개요
 
-TCP/IP 모델은 인터넷 통신에 필요한 기능을 **응용, 전송, 인터넷, 네트워크 접근 계층**으로 나눈 프로토콜 중심의 계층 모델이다.
+TCP/IP(Transmission Control Protocol/Internet Protocol) 모델은 인터넷 통신에 필요한 기능을 **응용, 전송, 인터넷, 네트워크 접근 계층**으로 나눈 프로토콜 중심의 계층 모델이다.
 
-이름에는 TCP와 IP가 들어가지만 두 프로토콜만 의미하지 않는다. TCP/IP 프로토콜 모음(Protocol Suite)에는 HTTP, DNS, TCP, UDP, IP, ICMP, Ethernet처럼 인터넷 통신에 함께 쓰이는 여러 프로토콜이 포함된다.
+이름에는 TCP와 IP가 들어가지만 두 프로토콜만 의미하지 않는다. TCP/IP 프로토콜 모음(Protocol Suite)에는 HTTP(HyperText Transfer Protocol), DNS(Domain Name System), TCP, UDP(User Datagram Protocol), IP, ICMP(Internet Control Message Protocol), Ethernet처럼 인터넷 통신에 함께 쓰이는 여러 프로토콜이 포함된다.
 
 | 계층 | 핵심 역할 | 대표 프로토콜·기술 |
 |---|---|---|
-| 응용 계층(Application) | 애플리케이션이 사용할 통신 규칙과 데이터 형식 정의 | HTTP, DNS, TLS, 게임 메시지 프로토콜 |
+| 응용 계층(Application) | 애플리케이션이 사용할 통신 규칙과 데이터 형식 정의 | HTTP, DNS, TLS(Transport Layer Security), 게임 메시지 프로토콜 |
 | 전송 계층(Transport) | 종단 프로세스 간 데이터 전달 | TCP, UDP, 포트 번호 |
 | 인터넷 계층(Internet) | 여러 네트워크를 지나 목적지 호스트까지 전달 | IPv4, IPv6, ICMP, 라우터 |
-| 네트워크 접근 계층(Network Access) | 현재 링크에서 프레임을 실제 신호로 전달 | Ethernet, Wi-Fi, MAC 주소 |
+| 네트워크 접근 계층(Network Access) | 현재 링크에서 프레임을 실제 신호로 전달 | Ethernet, Wi-Fi, MAC(Media Access Control) 주소 |
 
 문헌에 따라 네트워크 접근 계층을 데이터 링크와 물리 계층으로 나눈 5계층 인터넷 모델을 사용하기도 한다. 계층 수보다 중요한 것은 각 계층의 책임이다. 이 문서에서는 실무에서 자주 쓰는 4계층 구분을 기준으로 설명한다.
 
@@ -76,7 +76,7 @@ UDP는 연결 설정 없이 데이터그램을 보낸다. 순서, 도착, 중복
 
 ### 3.3 인터넷 계층: 어느 호스트로 전달하는가
 
-인터넷 계층의 핵심 프로토콜은 IP(Internet Protocol)다. IP는 출발지와 목적지 IP 주소를 패킷(Packet)에 담고, 여러 네트워크를 거쳐 목적지 호스트까지 전달할 기반을 제공한다.
+인터넷 계층의 핵심 프로토콜은 IP다. IP는 출발지와 목적지 IP 주소를 패킷(Packet)에 담고, 여러 네트워크를 거쳐 목적지 호스트까지 전달할 기반을 제공한다.
 
 라우터는 패킷의 목적지 IP 주소와 라우팅 테이블을 확인해 다음 홉(Next Hop), 즉 다음 전달 지점을 선택한다. 각 라우터는 전체 여정을 한 번에 처리하는 것이 아니라 자신이 아는 다음 경로로 패킷을 넘긴다.
 
@@ -211,7 +211,7 @@ TCP는 전송 계층의 개별 프로토콜이다. TCP/IP는 TCP, UDP, IP와 여
 - IP 자체는 패킷 도착과 순서를 보장하지 않으므로 상위 계층의 보완이 필요하다.
 - 계층 경계가 실제 구현에서 완전히 분리되지는 않는다. 성능 최적화에는 MTU나 혼잡 같은 하위 계층 특성을 알아야 할 수 있다.
 - TCP의 신뢰성은 편리하지만 재전송과 순서 보장 때문에 실시간 요구에서 지연이 커질 수 있다.
-- IPv4 주소 부족을 완화하는 NAT는 주소와 포트를 변환하므로 외부에서 내부 호스트로 직접 연결하기 어렵게 만들 수 있다.
+- IPv4 주소 부족을 완화하는 NAT(Network Address Translation)는 주소와 포트를 변환하므로 외부에서 내부 호스트로 직접 연결하기 어렵게 만들 수 있다.
 
 ## 7. 게임 서버·백엔드 실무 예시
 

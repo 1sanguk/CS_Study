@@ -10,9 +10,9 @@ importance: 5
 
 ## 학습 목표
 
-- TCP 연결 설정에 세 단계가 필요한 이유(양방향 확인·초기 시퀀스 번호 교환)를 설명할 수 있다.
+- TCP(Transmission Control Protocol) 연결 설정에 세 단계가 필요한 이유(양방향 확인·초기 시퀀스 번호 교환)를 설명할 수 있다.
 - TCP 종료가 일반적으로 네 단계인 이유(전이중 방향별 독립 종료)를 설명할 수 있다.
-- SYN, ACK, FIN, RST와 시퀀스 번호의 의미를 설명할 수 있다.
+- SYN(Synchronize), ACK(Acknowledgment), FIN(Finish), RST와 시퀀스 번호의 의미를 설명할 수 있다.
 - CLOSE_WAIT, TIME_WAIT 상태가 발생하는 원인과 해결 방법을 설명할 수 있다.
 
 ## 1. 개요
