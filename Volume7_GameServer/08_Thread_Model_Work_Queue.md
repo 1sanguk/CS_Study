@@ -210,12 +210,19 @@ Graceful Shutdown 시작 시 신규 작업 수락을 먼저 차단합니다. 메
 ## 10. 예상 꼬리질문
 
 - Hot Room을 전용 Worker로 격리했는데 해당 Room의 인원이 빠져나가 부하가 줄었습니다. 격리 해제 시 기존 Worker로 재통합하는 절차와 이 과정에서 발생할 수 있는 순서 역전을 어떻게 방지하나요?
+  > 전용 Worker의 처리가 완료된 이후 신규 메시지부터 기존 Worker로 라우팅하도록 전환합니다. 전환 순간의 순서 역전을 막으려면 전환 신호를 시퀀스 번호와 함께 전달해, 전환 전 전용 Worker가 처리 중인 메시지가 모두 완료된 뒤에 기존 Worker가 신규 메시지를 받도록 합니다.
 - Priority Queue 기반 Work Queue에서 결제 완료 메시지만 처리하다 위치 갱신 메시지가 30초 이상 대기하는 Starvation이 발생했습니다. Aging으로 우선순위를 올릴 때 몇 초 기준으로 적용하나요?
+  > 일반적으로 대기 시간 5~10초마다 우선순위를 1단계씩 올려, 최대 High 우선순위까지 도달하도록 설계합니다. 게임 서버에서 위치 갱신처럼 시효성이 짧은 메시지는 Aging 대신 일정 시간 초과 시 Drop하고 최신 상태로 교체하는 방법이 더 현실적인 경우도 있습니다.
 - Room A 공격자와 Room B 방어자 간 PvP 판정이 필요합니다. roomId Partition으로는 양쪽 상태를 동시에 접근할 수 없어 설계를 변경해야 합니다. Coordinator 방식과 두 Room Lock 순서 고정 방식 중 어느 쪽을 선택하나요?
+  > 두 Room Lock 순서 고정 방식이 일반적으로 더 단순합니다. roomId 크기 순서로 항상 낮은 ID Room을 먼저 잠그면 Deadlock 없이 양쪽 상태에 접근할 수 있습니다. Coordinator 방식은 단일 장애점이 생기고 구현이 복잡하므로, Room 간 교차 접근이 드물다면 Lock 순서 고정이 우선 선택입니다.
 - Work Queue Dequeue 후 WorkItem 처리 도중 Worker Thread가 패닉으로 종료됐습니다. 해당 항목은 이미 Queue에서 빠진 상태입니다. 재처리 보장을 위해 어떤 설계를 추가해야 하나요?
+  > Dequeue 시 WorkItem을 In-progress 목록에 등록하고, 처리 완료 후에만 목록에서 제거합니다. Worker 패닉 시 Watchdog 또는 Supervisor가 In-progress 목록의 미완료 항목을 Queue에 재삽입합니다. 재처리가 안전하려면 WorkItem 처리가 Idempotent해야 하므로, 각 항목에 고유 ID를 부여해 중복 실행 시 무해하게 설계합니다.
 - 4 Worker Partition에서 특정 Room ID 범위가 항상 Worker 0으로 몰려 Partition 편차가 3배 이상 발생합니다. Consistent Hashing 도입 시 기존 Room의 Worker 이동과 In-flight 작업을 어떻게 처리하나요?
+  > Consistent Hashing을 도입하면 Worker 추가·제거 시 재분배 범위가 최소화됩니다. 기존 Room의 Worker 이동 시에는 이전 Worker가 해당 Room의 In-flight 작업을 모두 처리한 뒤 라우팅 테이블을 전환합니다. 전환 순간의 신규 메시지는 새 Worker로 라우팅하되, 이전 Worker의 잔여 처리가 완전히 끝났는지 확인하는 드레인 단계를 거칩니다.
 - Bounded Queue Full 상태에서 Drop 메트릭 없이 운영하다 로그인 실패율이 급등한 후에야 발견했습니다. Drop 조기 탐지를 위해 어떤 알람 기준(임계값·시간 창)을 권장하나요?
+  > Queue 수위가 80% 초과 상태가 10초 이상 지속되면 경고, 95% 초과가 30초 지속되면 긴급 알람을 설정합니다. Drop 카운터는 1분 슬라이딩 윈도우로 집계해 분당 Drop 수가 임계값(예: 100건)을 넘으면 즉시 알람을 발송합니다. Queue 수위·Drop 수·대기 시간 p99를 동시에 대시보드에 노출해 복합 지표로 조기 탐지합니다.
 - Logic Worker가 DB Write를 동기로 호출하다 Deadlock이 발생해 Worker 전체가 고착됐습니다. Worker가 고착 상태인지 감지하는 Watchdog 설계와 자동 복구 절차를 설명하세요.
+  > 각 Worker가 작업 시작 시 Heartbeat 타임스탬프를 갱신하고, Watchdog Thread가 주기적으로(예: 5초마다) 모든 Worker의 타임스탬프를 확인해 일정 시간(예: 30초) 갱신이 없으면 고착으로 판단합니다. 자동 복구는 해당 Worker Thread를 강제 종료 후 새 Thread로 교체하고, In-progress 항목을 Queue에 재삽입합니다. 재발을 막으려면 DB Write를 비동기 Worker Pool로 분리해 Logic Worker 블로킹 자체를 제거합니다.
 
 ## 11. 30초 모범답변
 

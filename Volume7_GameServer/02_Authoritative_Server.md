@@ -246,12 +246,19 @@ AOI 기반 Interest Management를 적용합니다. 서버는 각 플레이어의
 ## 10. 예상 꼬리질문
 
 - 이동 검증 tolerance를 p99 RTT 기반으로 튜닝했는데도 특정 지역 플레이어(RTT 300ms 이상)의 오탐이 계속 발생합니다. 지역별 tolerance를 분리하는 방법과, 단일 서버에서 이를 관리하는 구조를 설명해 주세요.
+  > Session 생성 시 플레이어의 RTT를 측정해 Session에 저장하고 이동 검증 시 해당 Session의 RTT 기반 tolerance를 적용합니다. 지역별 분리 방법: 로그인 시 지역 코드(KR·NA·EU)를 기록하고 지역별 tolerance 설정 테이블을 서버가 로드합니다. 단일 서버에서 관리하는 구조: `SessionContext`에 `float moveTolerance`를 저장하고, 검증 함수가 고정 상수 대신 `session.moveTolerance`를 참조합니다. tolerance 변경은 설정 파일 Hot Reload로 적용해 서버 재시작 없이 조정할 수 있게 합니다.
 - 공격 Command에 Sequence Number와 Idempotency Key를 모두 적용했을 때 두 가지의 역할이 어떻게 다르고, 서버 재시작 후 Key가 초기화되면 어떤 중복이 발생할 수 있나요?
+  > Sequence Number는 세션 내 입력 순서를 관리합니다. 오래된 입력과 중복 입력을 Drop해 순서를 보장하지만, 세션이 끊기면 초기화됩니다. Idempotency Key는 영속적인 부작용(재화 지급·아이템 획득)을 가진 작업의 중복 처리를 막습니다. 세션을 넘어 DB에 저장되므로 서버 재시작에도 유효합니다. Key 초기화 위험: 서버 재시작 후 메모리 기반 Key 저장소가 비워지면, 재시작 전 응답을 못 받은 클라이언트가 재전송할 때 중복 처리됩니다. 방지: Idempotency Key는 반드시 DB 또는 Redis에 TTL과 함께 영속 저장합니다.
 - Server RNG로 생성한 크리티컬 히트 결과가 클라이언트 예측과 달라 보정이 발생했습니다. RNG Seed를 Replay Log에 기록하는 방법과, 보안용 RNG와 Simulation RNG를 분리해야 하는 이유를 설명해 주세요.
+  > Replay Log에는 매 Tick의 RNG Seed 또는 RNG 상태 Snapshot을 기록합니다. Replay 시 동일 Seed로 RNG를 초기화하면 동일한 크리티컬 결과를 재현할 수 있습니다. 분리 이유: 보안용 RNG(CSPRNG)는 예측 불가능한 난수를 생성해야 하므로 CPU 비용이 크고 Seed를 외부에 노출하면 안 됩니다. Simulation RNG는 Replay 재현을 위해 Seed가 Log에 남아야 하고, 빠른 결정론적 난수가 필요합니다. 보안용 RNG를 Simulation에 쓰면 Seed 기록이 보안 취약점이 되고, Simulation RNG를 보안 목적에 쓰면 예측 공격에 취약합니다.
 - Authoritative Server에서 Match 결과를 Persistence Service로 한 번만 전달해야 하는데 결과 전송 도중 서버가 재시작됐습니다. 중복 전송 없이 정확히 한 번 전달을 보장하는 설계를 설명해 주세요.
+  > Outbox 패턴을 사용합니다. Match 종료 시 Match 결과와 Outbox 레코드를 단일 DB Transaction으로 함께 기록합니다. 별도 Worker가 Outbox를 폴링해 Persistence Service에 전달하고, 전달 성공 시 Outbox 레코드를 삭제하거나 처리 완료로 표시합니다. 서버 재시작 후에도 Outbox에 미처리 레코드가 남아 있어 Worker가 재전송합니다. Persistence Service는 Idempotency Key(Match ID)로 중복 수신을 감지해 동일 결과를 두 번 적용하지 않습니다. 이 방식으로 정확히 한 번 처리를 보장합니다.
 - 입력 검증 실패를 단계별(Drop→경고→탐지 점수→제재)로 처리하는데, 탐지 점수 임계값을 넘어 자동 제재가 적용됐을 때 오탐 복구 절차와 운영 지표(False Positive Rate)를 어떻게 관리하나요?
+  > 오탐 복구 절차: 자동 제재 적용 시 제재 사유와 탐지 로그를 계정에 기록합니다. CS 팀이 로그를 검토해 네트워크 환경·Client Bug가 원인이면 제재를 해제하고 오탐 사례로 분류합니다. 운영 지표: FPR(False Positive Rate) = 해제된 자동 제재 수 / 전체 자동 제재 수. FPR이 임계값(예: 5%)을 초과하면 해당 탐지 규칙의 임계값을 상향 조정하거나, 해당 패턴만 즉시 제재 대신 경고 단계로 강등합니다. A/B 테스트: 임계값 변경 전후 FPR과 실제 치터 탐지율을 비교해 균형을 유지합니다.
 - Authority를 Game Instance와 Inventory Service로 분할했을 때, 전투 중 아이템 사용 Command가 두 서비스에 걸친 상태를 변경해야 합니다. 부분 실패 시 일관성을 보장하는 방법을 설명해 주세요.
+  > Saga 패턴을 사용합니다. Orchestrator가 (1) Inventory Service에 아이템 차감 요청, (2) 성공 시 Game Instance에 스킬 효과 적용 요청을 순서대로 실행합니다. Game Instance 적용 실패 시 Compensating Transaction으로 Inventory Service에 아이템 복구 요청을 보냅니다. 각 단계에 Idempotency Key를 사용해 재시도 시 중복 처리를 막습니다. 보상 트랜잭션도 실패할 수 있으므로 Outbox에 기록해 최종 일관성을 보장합니다. 두 서비스가 같은 DB Transaction을 공유하지 않으므로 분산 트랜잭션 없이 운영됩니다.
 - 클라이언트 예측이 서버 보정과 충돌해 플레이어 위치가 순간 이동처럼 점프하는 현상이 발생했습니다. 보정을 매끄럽게 처리하는 방법(보간·속도 제한·Rubber-banding)과, 보정 빈도가 높을 때 서버 측 설계에서 무엇을 먼저 점검해야 하나요?
+  > 매끄러운 보정 방법: 보간(Interpolation)은 현재 예측 위치와 서버 확정 위치 사이를 일정 속도로 이동해 점프를 숨깁니다. 속도 제한(Rate-limited correction)은 프레임당 최대 이동 거리를 제한해 자연스러운 이동처럼 보이게 합니다. Rubber-banding은 차이가 임계값을 초과할 때만 즉각 보정해 소규모 오차를 숨깁니다. 서버 측 점검 순서: (1) tolerance가 너무 작아 정상 이동도 보정하는지 확인합니다. (2) Tick Rate와 RTT가 균형 맞는지 확인합니다. (3) 서버 시간 기준으로 입력 Timestamp를 검증하는지 확인합니다. 보정 빈도가 높으면 tolerance 재조정이 먼저입니다.
 
 ## 11. 30초 모범답변
 

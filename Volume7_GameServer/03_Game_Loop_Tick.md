@@ -244,12 +244,19 @@ Outbox Queue 패턴을 적용합니다. (1) **Tick Thread**: 상태 변경을 �
 ## 10. 예상 꼬리질문
 
 - Tick p99가 특정 Room에서만 높고 다른 Room은 정상일 때, 단일 서버에서 해당 Room을 격리하는 방법과 한계는 무엇인가요?
+  > 해당 Room을 전용 Worker Thread 또는 별도 프로세스로 이동시켜 다른 Room의 Tick 예산을 보호합니다. 단일 서버 내 격리는 같은 CPU·메모리 자원을 공유하므로 극단적 부하는 결국 전체 서버에 영향을 줍니다. 근본 해결은 Room을 별도 서버로 이전하거나 Tick 내 Object 수 상한을 강제하는 것입니다.
 - 20Hz Tick 서버에서 Session당 Tick당 10 Packet 상한을 설정했는데 정상 플레이어가 빠른 입력으로 Drop되는 민원이 발생했습니다. 상한 기준을 어떻게 재조정하나요?
+  > Tick Rate(20Hz)당 최대 합법적 입력 수를 실제 클라이언트 로그(p99)로 측정한 뒤 여유 계수(1.5~2배)를 곱해 상한을 재설정합니다. 고정 상한 대신 슬라이딩 윈도우(초당 누적) 방식으로 전환하면 짧은 Burst는 허용하면서 지속적 과다 입력만 차단할 수 있습니다.
 - Timer 10만 개를 Min Heap으로 관리하다 만료 Burst가 발생했습니다. Timing Wheel로 전환하는 기준(Timer 수·만료 패턴)과 구현 시 주의사항은 무엇인가요?
+  > Timer 수가 수만 건을 초과하거나 만료가 특정 시각에 집중되는 패턴이면 Timing Wheel이 유리합니다. O(1) 삽입·삭제가 가능하지만, Wheel 해상도보다 정밀한 만료는 별도 처리가 필요하고 Wheel 크기(슬롯 수)와 해상도(tick 단위)를 예상 Timer 분포에 맞게 설계해야 합니다.
 - Outbox Worker가 DB 쓰기를 처리 못 해 Queue가 100만 건 누적됐습니다. Tick Thread 영향 없이 백압력을 거는 방법은 무엇인가요?
+  > Outbox Queue에 용량 상한(예: 10만 건)을 두고, 초과 시 Tick Thread가 비핵심 이벤트 생성을 줄이거나 Drop하도록 신호를 보냅니다. Tick Thread 자체를 블로킹하지 않으며, Queue 수위를 모니터링 지표로 노출해 DB 처리 지연을 조기에 감지합니다.
 - Snapshot 20Hz 분리 서버에서 네트워크 지연이 100ms일 때 Client Interpolation Buffer를 몇 개로 설정해야 끊김 없이 동작하나요? 계산 근거를 설명해 주세요.
+  > Snapshot 간격 50ms(20Hz), 네트워크 지연 100ms이면 최소 2~3 Snapshot이 항상 Buffer에 있어야 합니다. 일반적으로 지연의 2배÷Snapshot 간격 + 1 여유분, 즉 약 5프레임을 권장합니다. Jitter가 크면 Jitter 표준편차도 더해 Buffer 크기를 결정합니다.
 - Catch-up 상한 3회로 설정했는데 서버 부하 급증 시 3회 초과 후 건너뛴 Tick의 Combat 결과(사망 판정 등)를 어떻게 처리해야 플레이어 불만을 최소화하나요?
+  > 건너뛴 Tick의 사망·피격 판정은 서버 권위 기준으로 확정하되, 클라이언트에 지연 알림이나 회색 화면으로 시각 피드백을 줍니다. Critical 판정(사망)은 건너뛰지 않고 다음 Tick에 누적 처리하는 별도 우선 큐를 두거나, 해당 판정을 Catch-up 예외 대상으로 분류해 반드시 실행합니다.
 - Tick Thread와 Persistence Worker 분리 후 서버 재시작 시 Outbox에 남은 이벤트가 DB에 이미 반영된 경우 중복 쓰기를 방지하는 Idempotency Key 설계를 설명해 주세요.
+  > 각 이벤트에 전역 고유 `event_id`(UUID 또는 Tick 번호+시퀀스)를 부여하고, DB Upsert 시 이를 Primary Key로 사용합니다. 이미 반영된 `event_id`는 UNIQUE 제약으로 중복 삽입이 거부됩니다. Outbox 레코드는 DB 반영 확인 후 삭제하거나 `processed` 상태로 표시해 재처리를 방지합니다.
 
 ## 11. 30초 모범답변
 

@@ -276,9 +276,9 @@ a:hover { text-decoration: underline; }
   padding: 40px 52px;
   background: var(--surface);
   max-width: 840px;
-  margin: 20px auto;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  min-width: 0;
   transition: opacity .2s ease, transform .2s ease;
 }
 
@@ -438,6 +438,72 @@ a:hover { text-decoration: underline; }
   transition: opacity .28s;
 }
 #sidebar-overlay.visible { display: block; opacity: 1; }
+
+/* ============================================================
+   Reader inner wrapper (content + page TOC)
+   ============================================================ */
+.reader-inner {
+  flex: 1;
+  display: flex;
+  gap: 20px;
+  padding: 20px 0;
+  max-width: 1100px;
+  margin: 0 auto;
+  align-items: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+/* ============================================================
+   Page TOC (오른쪽 목차)
+   ============================================================ */
+#page-toc {
+  width: 210px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - var(--toolbar-h) - var(--footer-h) - 40px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 12px;
+  font-size: .78rem;
+}
+#page-toc:empty { display: none; }
+#page-toc::-webkit-scrollbar { width: 3px; }
+#page-toc::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.ptoc-title {
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ptoc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ptoc-item a {
+  display: block;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  text-decoration: none;
+  line-height: 1.45;
+  transition: background .12s, color .12s;
+  word-break: keep-all;
+}
+.ptoc-item a:hover { background: var(--bg); color: var(--text); text-decoration: none; }
+.ptoc-item a.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
 
 /* ============================================================
    Reading progress bar
@@ -802,7 +868,9 @@ body.quiz-page {
    ============================================================ */
 @media (max-width: 960px) {
   :root { --sidebar-w: 260px; }
-  #content { padding: 32px 36px; margin: 14px; }
+  #content { padding: 32px 36px; }
+  .reader-inner { padding: 14px 0; }
+  #page-toc { width: 170px; }
   .nav-btn { width: 36px; font-size: 1.5rem; height: 40px; }
 }
 
@@ -832,10 +900,14 @@ body.quiz-page {
   /* 화살표 버튼 숨기기 (스와이프로 이동) */
   .nav-btn { display: none; }
 
+  /* reader-inner / page-toc */
+  .reader-inner { padding: 8px 0; gap: 0; }
+  #page-toc { display: none !important; }
+
   /* 콘텐츠 영역 */
   #content {
     padding: 20px 16px;
-    margin: 8px;
+    margin: 0 8px;
     border-radius: 6px;
     max-width: calc(100vw - 16px);
     min-width: 0;

@@ -48,7 +48,7 @@ Thread 생성·종료는 Stack과 OS Scheduling 자원이 필요하다. ThreadPo
 Work Items → ThreadPool Queue → Worker Threads → Execute
 ```
 
-ThreadPool Worker가 동기 I/O, Lock, `Thread.Sleep`, `.Result`로 오래 Blocking되면 Queue를 처리할 Thread가 부족해지는 Starvation이 발생한다. Runtime이 새 Thread를 추가하는 동안 Tail Latency가 커질 수 있다.
+ThreadPool Worker가 동기 I/O, Lock, `Thread.Sleep`, `.Result`로 오래 Blocking되면 Queue를 처리할 Thread가 부족해지는 Starvation이 발생한다. Runtime은 Hill Climbing 알고리즘으로 Thread 수를 조절하며 새 Thread를 초당 약 1~2개 속도로 추가한다. 따라서 Starvation 발생 직후 수 초 동안 Tail Latency가 급격히 커질 수 있다.
 
 CPU-bound 작업을 ThreadPool에 너무 많이 넣어도 Core 수보다 많은 작업이 경쟁해 Context Switch와 Cache 효율이 나빠진다. Queue 상한과 병렬도 제한이 필요하다.
 
@@ -325,12 +325,19 @@ dotnet-dump에서 gcroot <Session 주소>로 Retention Path를 추적하면 asyn
 ## 20. 예상 꼬리질문
 
 - ThreadPool Starvation 발생 시 `ThreadPool.SetMinThreads`로 최솟값을 높이면 Spike가 줄어들지만 Blocking 원인이 남아 있는 경우 어떤 부작용이 생기고, 근본 원인 특정을 위해 우선 확인하는 지표와 도구는 무엇입니까?
+  > MinThreads를 높이면 Thread가 즉시 증가해 단기 Spike는 완화되지만 Blocking 원인이 남아 있으면 더 많은 Thread가 Blocking되어 메모리(Thread Stack 기본 1MB)와 Context Switch 비용이 더 빠르게 증가합니다. 결국 더 높은 Thread 수에서 동일한 Starvation이 재발합니다. 근본 원인 특정을 위해 dotnet-trace로 Thread Wait Stack을 수집해 어떤 메서드가 가장 오래 Thread를 점유하는지 Call Stack을 확인하고, PerfView의 Thread Time 뷰에서 `.Result`·`Thread.Sleep`·동기 DB 호출을 탐지합니다.
 - `Task.WhenAny(workTask, Task.Delay(5000))`로 Timeout을 구현했을 때 Delay가 먼저 완료되면 workTask가 Background에서 계속 실행됩니다. Resource 누수를 방지하는 실제 취소 연결 패턴과 workTask가 취소를 무시하는 경우의 처리 방법을 설명하십시오.
+  > `CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));`로 Timeout 연결 Token을 만들고 `workTask = DoWorkAsync(cts.Token)`으로 전달합니다. `Task.WhenAny` 후 Delay가 먼저 완료됐으면 `cts.Cancel()`로 취소 신호를 보냅니다. workTask가 Token을 무시하는 경우에는 `Task.WhenAny` 이후 일정 시간 대기(`Task.Delay(gracePeriod)`) 후에도 workTask가 완료되지 않으면 로그를 남기고 계속 진행합니다. 취소 불가능한 코드 경로는 별도 Process나 Thread로 격리해 강제 종료 가능하게 설계하는 것이 근본 해결입니다.
 - `ValueTask<T>`를 Cache·`Task.WhenAll`·여러 번 await에 사용하면 어떤 버그가 생기고, Hot Path에서 `Task<T>` 대신 `ValueTask<T>`를 채택하는 실측 기준(동기 완료 비율·Allocation 감소폭)은 무엇입니까?
+  > `ValueTask<T>`는 한 번만 await할 수 있다는 계약이 있습니다. 두 번 await하거나 `Task.WhenAll`에 넣으면 결과가 이미 소비된 상태에서 재접근해 정의되지 않은 동작이 발생합니다. Cache에 보관해 여러 번 재사용하는 것도 같은 이유로 금지됩니다. 채택 기준은 BenchmarkDotNet으로 동기 완료 비율이 80% 이상이고 `Task<T>` 대비 Allocation이 50% 이상 줄어들 때입니다. 그 미만이면 복잡도 증가 대비 효과가 미미하므로 `Task<T>`를 유지합니다.
 - Bounded `Channel<T>`에서 Producer 속도가 Consumer를 초과할 때 `BoundedChannelFullMode.Wait`·`DropOldest`·`DropNewest` 중 게임 서버 실시간 위치 갱신 메시지에 어느 것을 선택하고, 선택 기준과 Drop 시 모니터링 지표는 무엇입니까?
+  > `DropOldest`를 선택합니다. 위치 갱신은 최신 상태가 중요하고 오래된 위치 정보는 이미 무의미합니다. `Wait`는 Producer를 block해 I/O Thread를 점유하고 연쇄 지연을 만들며, `DropNewest`는 방금 들어온 최신 위치를 버려 정보의 최신성이 떨어집니다. 모니터링 지표는 Drop Count/sec, Channel Length의 p99, Consumer 처리 지연입니다. Drop Rate가 지속적으로 높으면 Consumer 수를 늘리거나 처리 로직을 최적화해야 합니다.
 - CPU-bound 압축 Task를 `Task.Run`으로 ThreadPool에 넣었는데 Core 수 대비 Task가 과도해 Context Switch가 급증했습니다. `Parallel.ForEachAsync(DegreeOfParallelism)`·Dedicated Thread Pool·`SemaphoreSlim` 중 어느 방식으로 병렬도를 제한하고, 각 방식이 적합한 조건은 무엇입니까?
+  > 입력 데이터 컬렉션이 있고 각 항목을 독립적으로 처리하는 경우 `Parallel.ForEachAsync(source, new ParallelOptions { MaxDegreeOfParallelism = coreCount }, ...)`가 가장 단순합니다. 압축 요청이 외부에서 지속적으로 유입되는 경우 `SemaphoreSlim(coreCount)`로 동시 Task 수를 제한하면 기존 async 코드 구조를 유지하면서 병렬도를 제어합니다. Dedicated Thread Pool은 Game Logic ThreadPool과 압축 작업의 영향을 완전히 분리해야 할 때 적합하지만 관리 복잡도가 증가합니다.
 - Graceful Shutdown 중 `CancellationToken`을 전파했는데 일부 Task가 취소를 무시하고 계속 실행됩니다. `token.ThrowIfCancellationRequested()` 누락 외에 취소 신호를 무시하는 패턴은 무엇이고, Shutdown Timeout 초과 시 강제 종료 설계는 어떻게 합니까?
+  > Token을 받아 전달받았지만 하위 I/O API에 넘기지 않는 경우, 외부 Library가 Token을 지원하지 않는 경우, 무한 루프 안에 `ThrowIfCancellationRequested()`가 없는 경우가 대표적입니다. Shutdown Timeout 초과 시 설계는 `CancellationTokenSource`에 `CancelAfter(TimeSpan.FromSeconds(30))`를 설정하고, `await Task.WhenAll(outstandingTasks).WaitAsync(TimeSpan.FromSeconds(30))`으로 대기합니다. 타임아웃 후에도 완료되지 않은 Task는 경고 로그를 남기고 `Environment.Exit(1)`로 프로세스를 강제 종료합니다.
 - `Task.WhenAll`로 여러 DB 쿼리를 병렬 실행 중 하나가 Exception을 던졌을 때 `AggregateException.InnerExceptions`가 아닌 첫 번째 예외만 보는 코드에서 나머지 Task 실패가 숨겨지는 이유와, 모든 Task 예외를 관찰하는 패턴을 설명하십시오.
+  > `await Task.WhenAll(tasks)`에서 예외가 발생할 때 `await`는 `AggregateException`을 언래핑해 첫 번째 Inner Exception만 다시 던집니다. 나머지 Task의 예외는 Task 객체에 Faulted 상태로 남아 있지만 관찰되지 않습니다. 모든 예외를 관찰하는 패턴은 `Task whenAll = Task.WhenAll(tasks);` 선언 후 `try { await whenAll; } catch { foreach (var t in tasks.Where(t => t.IsFaulted)) LogError(t.Exception); throw; }` 형태로 모든 Task를 순회해 예외를 로깅합니다. 또는 각 Task를 `Task.ContinueWith(t => { if (t.IsFaulted) Log(t.Exception); }, TaskContinuationOptions.OnlyOnFaulted)`로 감싸는 방법도 있습니다.
 
 ## 21. 30초 모범답변
 

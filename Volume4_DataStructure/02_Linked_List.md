@@ -322,12 +322,19 @@ ABA 문제는 CAS 기반 Lock-free 구조에서 주로 발생하며, 객체가 �
 
 ## 10. 예상 꼬리질문
 - LRU Cache의 Map과 List 불변식이 깨지면 어떤 증상이 나타나고, 어떻게 디버깅하나요?
+  > Map에 Key는 있지만 List에 노드가 없거나 이중으로 연결된 노드가 생기면 Eviction 시 Null 역참조 또는 삭제 후 유효하지 않은 노드에 접근하는 버그가 발생한다. Map 크기와 List 노드 수가 일치하는지 단언문(assertion)으로 주기적으로 검증하고 Map·List 변경을 하나의 단위로 묶어 부분 갱신이 생기지 않도록 Lock으로 보호한다.
 - Object Pool의 Free 목록을 Intrusive List로 관리할 때 Pool 크기를 초과하는 요청이 폭발적으로 들어오면 어떻게 처리하나요?
+  > Pool에서 객체를 가져올 수 없을 때 블로킹 대기, 즉시 실패 반환, 임시 할당 허용 중 서비스 특성에 맞는 정책을 명시한다. 실시간 게임 서버에서는 블로킹은 틱 지연을 유발하므로 즉시 실패 후 호출자가 패킷을 Drop하거나 다음 틱으로 미루는 방식을 선택하고 Pool 소진 횟수를 메트릭으로 추적해 Pool 크기를 조정한다.
 - Active Session 배열에서 Swap-and-pop으로 삭제하면 순서가 바뀌는데, 순서 의존성이 있는 Broadcast에서는 어떻게 처리하나요?
+  > Broadcast가 세션 배열 전체를 순회하는 경우 처리 순서가 중요하지 않으므로 순서 변경은 문제가 없다. 특정 순서(예: 입장 순서)가 필요한 경우라면 별도 순서 인덱스나 Timestamp를 유지하거나, Snapshot을 생성한 뒤 정렬해 Broadcast하는 방식을 사용한다.
 - Sentinel Node를 사용하는 LRU Cache 구현에서 Head·Tail 경계 조건 버그가 발생했을 때 어떻게 재현하고 수정하나요?
+  > 단일 원소 삽입·삭제, 빈 상태에서 Eviction, Capacity가 1인 경우처럼 경계 케이스를 단위 테스트로 재현한다. 버그는 대부분 Sentinel Node의 prev·next 링크를 갱신하지 않거나 순서를 바꾼 경우이므로 삽입·삭제 후 HEAD.next.prev == HEAD, TAIL.prev.next == TAIL 불변식을 단언문으로 검증한다.
 - 게임 서버에서 연결 리스트 기반 자료구조의 p99 지연이 갑자기 올라갔을 때 가장 먼저 확인하는 지표는 무엇인가요?
+  > 리스트 원소 수와 순회 횟수, Cache Miss Rate를 먼저 확인한다. 원소 수가 증가했다면 O(N) 탐색이 빈번해진 것이고, Cache Miss 급증이라면 노드가 메모리에 너무 흩어진 것이다. 삽입 경로에서 탐색이 발생하는지, Pool Allocator가 있다면 Pool 단편화가 심해졌는지도 함께 확인한다.
 - Intrusive List에서 같은 객체를 두 리스트에 동시에 넣어야 할 때 링크 세트를 어떻게 설계하나요?
+  > 객체 내부에 용도별로 독립된 링크 필드 세트를 추가한다. 예를 들어 Session이 Active 목록과 Timeout 목록에 동시에 속할 경우 `activeNext/activePrev`와 `timeoutNext/timeoutPrev`를 별도로 정의한다. 링크 세트가 늘어날수록 수명 관리와 삭제 절차가 복잡해지므로 멤버십 수를 제한한다.
 - LRU Cache Eviction 대상을 Tail에서 꺼냈는데 해당 Key가 Map에 없는 불일치가 발생했습니다. 원인은 무엇인가요?
+  > Map에서 Key를 삭제하면서 List에서 노드를 제거하지 않은 경우, 또는 동시 접근 상황에서 Map 삭제와 List 제거가 원자적으로 처리되지 않은 경우에 발생한다. LRU Cache는 Map과 List를 항상 쌍으로 갱신해야 하며, 멀티스레드 환경에서는 두 연산을 하나의 Lock 범위 안에서 실행해 불일치를 방지한다.
 
 ## 11. 30초 모범답변
 > Linked List는 유효한 Node를 이미 알고 있을 때 삽입·삭제가 O(1)이지만 탐색은 O(N)이고 노드가 흩어져 Cache Miss가 빈번합니다. 게임 서버에서는 LRU Cache처럼 순서 갱신이 핵심인 구조에는 이중 연결 리스트와 HashMap을 조합하고, Active Session Broadcast처럼 순회가 압도적으로 많은 경우는 배열 Swap-and-pop을 선택합니다. 삭제 빈도만 보고 결정하지 않고 순회 대 삽입·삭제 비율과 p99를 먼저 측정합니다.

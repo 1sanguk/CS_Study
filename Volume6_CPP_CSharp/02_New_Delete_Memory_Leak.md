@@ -399,12 +399,19 @@ RSS 단독으로는 원인을 확정할 수 없습니다. 판단 절차는 다�
 ## 19. 예상 꼬리질문
 
 - 게임 서버 Session 생성 중 DB 연결 예외가 발생했습니다. new Session으로 할당한 Storage는 누가 정리하고, Session이 일부 초기화된 멤버는 어떻게 되나요?
+  > new Session(args) 표현식에서 생성자가 예외를 던지면 C++ 런타임이 operator new로 확보한 Storage를 자동으로 operator delete로 반환한다. Session 객체 자체는 완전히 생성되지 않았으므로 Session 소멸자는 호출되지 않는다. 단, 생성자 본문 실행 전에 완료된 Member(기본 클래스, 선언 순서로 앞선 Member)는 역순으로 소멸자가 호출된다. DB 연결 같은 외부 자원을 생성자에서 획득한다면 해당 Member를 RAII 객체로 감싸 예외 시 자동 정리되게 해야 한다.
 - 게임 서버에서 Base* 컨테이너로 다형 Derived 객체를 관리하다 종료 시 메모리 프로파일러에서 Derived 멤버 해제 누락이 발견됐습니다. 어떤 코드를 먼저 확인하나요?
+  > Base 클래스의 소멸자가 virtual로 선언되어 있는지 먼저 확인한다. `virtual ~Base() = default;`가 없으면 `delete basePtr`이 Derived 소멸자를 호출하지 않아 Derived만의 Member가 누수된다. 다음으로 컨테이너가 unique_ptr<Base> 대신 Raw Pointer를 저장하는지 확인한다. unique_ptr<Base>는 삭제 시 virtual 소멸자를 통해 올바른 타입을 파괴하며, RAII로 컨테이너 소멸 시 자동 정리된다.
 - Packet Pool에서 고정 크기 Buffer를 미리 할당하고 그 위에 Packet 객체를 직접 생성하려 합니다. Placement New를 쓸 때 소멸과 Storage 반환 책임을 어떻게 설계하나요?
+  > Placement New는 기존 Storage에 객체를 생성하므로 operator new를 호출하지 않는다. 따라서 소멸 시 일반 delete를 호출하면 안 된다. 명시적으로 소멸자를 직접 호출(`packet->~Packet()`)해 객체를 파괴한 뒤, Storage는 Pool의 반환 인터페이스로 돌려보낸다. Pool 자체가 RAII Wrapper로 Packet을 감싸 소멸자 호출과 Storage 반환을 자동화하면 Pool 사용자가 이 책임을 직접 관리하는 오류를 줄일 수 있다.
 - 게임 서버 아이템 드롭 로직에서 조건에 따라 Pointer가 nullptr일 수 있는 코드에 delete를 호출합니다. 이것이 안전한 이유와 nullptr 가능성을 Type으로 명시하는 방법은 무엇인가요?
+  > C++ 표준은 `delete nullptr`를 아무 동작도 하지 않는 안전한 No-op으로 정의한다. 따라서 Null 체크 없이 delete를 호출해도 Undefined Behavior가 발생하지 않는다. nullptr 가능성을 Type으로 명시하려면 반환 타입을 T* 대신 std::optional<T*> 또는 std::unique_ptr<T>로 바꾸거나, 함수 이름과 주석에 "nullptr 반환 가능"을 표시한다. `gsl::owner<T*>`처럼 소유권까지 명시하면 코드 리뷰와 정적 분석 도구가 해제 책임을 추적할 수 있다.
 - 게임 서버 Packet Pool 운영 중 In-use 카운터는 0인데 RSS가 계속 오릅니다. 어떤 지표를 추가로 봐야 하고 어디를 먼저 의심하나요?
+  > In-use가 0이면 Pool 내 모든 Slot이 반환됐지만 RSS가 유지되는 것은 Allocator가 해제된 Page를 OS에 즉시 반환하지 않고 보관하는 Allocator Cache 때문일 가능성이 높다. 추가로 볼 지표는 Allocator의 내부 보유 Byte(tcmalloc의 `tcmalloc.pageheap_free_bytes`, jemalloc의 `stats.retained`), Pool High-water Mark, Fallback Heap Allocation 수다. /proc/PID/smaps에서 Anonymous 페이지 크기가 File-backed보다 크게 증가했다면 Allocator 보유 공간을 먼저 의심한다. `malloc_trim(0)` 호출로 Allocator에 OS 반환을 요청해 RSS가 줄어드는지 확인하면 단서가 된다.
 - 비동기 Completion Handler가 실행되기 전 Session이 Timeout으로 종료됐습니다. shared_ptr Capture와 weak_ptr Lock 두 방식 중 이 서버에서 어느 쪽을 선택하겠으며, 그 이유는 무엇인가요?
+  > 이 서버에서는 weak_ptr를 선택한다. shared_ptr Capture는 Completion Handler가 실행될 때까지 Session을 강제로 살려두므로 Timeout으로 종료 요청을 한 Session도 I/O 작업이 완료될 때까지 메모리에 남는다. 요청이 많으면 이미 종료된 Session이 다수 누적될 수 있다. weak_ptr + lock()은 실행 시점에 Session이 살아있으면 처리하고, 이미 종료됐으면 Callback을 조용히 건너뛰어 "종료 요청 이후 새 처리 없음"이라는 의도를 정확히 표현한다. 다만 종료 전 반드시 완료되어야 하는 작업(예: 데이터 영속화)이 있다면 outstanding I/O Count와 State Machine으로 명시적으로 관리한다.
 - AddressSanitizer와 LeakSanitizer가 모두 통과한 코드를 프로덕션에 배포했더니 Memory 관련 크래시가 발생했습니다. 테스트에서 왜 검출되지 않았을지 원인을 두 가지 이상 드세요.
+  > 첫째, 실행된 코드 경로가 테스트에서 커버되지 않은 경우다. Sanitizer는 실행된 코드만 검사하므로 특정 플레이어 수나 네트워크 조건에서만 발생하는 경로는 테스트에서 탐지할 수 없다. 둘째, Sanitizer 빌드와 프로덕션 빌드의 컴파일러 최적화 수준이 달라 최적화된 빌드에서만 발생하는 Undefined Behavior가 있을 수 있다. 셋째, 멀티스레드 환경에서 Data Race는 ASan이 탐지하지 못하며 TSan이 필요한데, TSan 없이 테스트하면 Race Condition이 통과될 수 있다. 넷째, OS의 Overcommit으로 할당 성공 후 실제 Page 접근 시 OOM Killer가 프로세스를 종료하는 환경에서는 Sanitizer 없이 발생할 수 있다.
 
 ## 20. 30초 모범답변
 

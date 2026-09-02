@@ -37,6 +37,33 @@ enqueue → candidate search → quality score
  → server reservation → player confirmation → commit
 ```
 
+### ELO 레이팅 공식
+
+ELO는 두 플레이어의 Rating 차이로 기대 승률을 계산하고, 실제 결과와 기대값의 차이에 K-factor를 곱해 Rating을 갱신하는 시스템이다.
+
+**기대 승률 (Expected Score):**
+```
+E_A = 1 / (1 + 10^((R_B - R_A) / 400))
+```
+
+예: R_A = 1500, R_B = 1700이면 E_A ≈ 0.24 (24% 승률)
+
+**Rating 업데이트:**
+```
+R_A' = R_A + K × (S_A - E_A)
+```
+- S_A: 실제 결과 (승=1, 무=0.5, 패=0)
+- K: 변동 폭 계수
+
+**K-factor 기준 (FIDE 체스 기준):**
+- K = 40: 신규 플레이어 (30게임 미만, 18세 미만 + Rating 2300 미만)
+- K = 20: 일반 플레이어
+- K = 10: Rating 2400 이상 달성 이력 보유 플레이어
+
+Rating 차이 400점은 10:1 승률 비율에 해당한다(높은 쪽이 10판 중 약 9판 승). 게임마다 K-factor와 분모 400을 달리 조정해 Rating 변동 폭을 제어한다.
+
+MMR과 ELO의 차이: ELO는 1:1 순위 시스템이고 MMR(Matchmaking Rating)은 팀 게임·역할·시즌 보정 등 추가 요소를 결합한 확장 시스템이다. 실무에서는 Glicko-2나 TrueSkill처럼 불확실성(Rating Deviation)을 함께 추정하는 방식도 쓴다.
+
 ### 공정성과 대기 시간
 
 완전히 같은 MMR만 찾으면 인구가 적은 시간대에 Match가 만들어지지 않는다. 초기에는 좁은 Rating과 낮은 Ping 범위를 사용하고 대기 시간에 따라 범위를 점진적으로 넓힌다. 확장 속도는 Mode와 Region마다 다를 수 있다. 대기 시간을 줄이기 위해 공정성을 얼마나 양보할지 Product 지표로 결정한다.
@@ -194,12 +221,19 @@ Region별 Instance 가용 수, Warm Pool 크기, Auto Scaling 반응 시간(평�
 ## 10. 예상 꼬리질문
 
 - Ticket Claim Lease를 30초로 설정했는데 특정 Worker가 죽었을 때 최악의 경우 매칭 지연이 몇 초 발생하고, Lease를 10초로 줄이면 어떤 부작용이 생기나요?
+  > Worker가 죽은 시점에 따라 최악 지연은 Lease 잔여 시간(최대 30초) + 재매칭 처리 시간이 된다. Lease를 10초로 줄이면 살아있는 Worker가 느릴 때 Lease가 만료돼 다른 Worker가 같은 Ticket을 중복 Claim할 위험이 생기고, Claim 경합으로 Redis Write QPS가 증가한다.
 - Matchmaking이 100개 Shard로 분산된 상황에서 인접 Bucket 탐색 시 동일 Ticket을 여러 Shard가 동시에 Claim 시도하면 DB CAS Write QPS가 얼마나 증가하고, Redis Lua Script 대신 DB를 쓸 때 어떻게 완화하나요?
+  > 100개 Shard가 동시에 같은 Ticket을 Claim 시도하면 성공 1건 외 나머지는 CAS 실패로 재시도가 발생해 Write QPS가 최대 100배까지 증가할 수 있다. DB를 사용할 경우 `SELECT FOR UPDATE SKIP LOCKED`로 충돌 Row를 건너뛰거나, Ticket을 Shard에 해시 파티셔닝해 동일 Ticket 소유 Shard를 하나로 고정하면 경합을 줄일 수 있다.
 - 비피크 시간에 MMR ±500까지 확장됐는데 특정 Mode의 취소율이 10%를 초과했습니다. Prometheus 알람 기준은 어떻게 잡고 확장 속도를 동적으로 조절하는 방법은 무엇인가요?
+  > 취소율 알람 기준은 Mode별 정상 구간(예: 경쟁 5% 이하, 캐주얼 8% 이하)을 과거 데이터로 수립하고 5분 이동 평균이 임계값을 초과하면 발동한다. 확장 속도 동적 조절은 취소율 피드백 루프로 구현하며, 취소율이 높으면 확장 스텝 크기를 줄이거나 확장 간격을 늘리는 방식으로 실시간 적응한다.
 - Region 장애로 5만 명 Ticket을 인접 Region으로 이전할 때 발생하는 재접속 폭풍을 Rate Limit(초당 1,000건)과 ±50% Jitter Backoff로 어떻게 분산하나요?
+  > 이전 대상 Ticket을 즉시 전량 재입력하지 않고 Rate Limit(초당 1,000건) 큐에 배치한다. 각 클라이언트 재접속에는 기본 Backoff에 ±50% Jitter를 추가해 동기화된 재시도 폭풍을 방지한다. 5만 명 기준 초당 1,000건이면 최소 50초 이상 분산되며, 인접 Region Matchmaking Worker 부하가 단계적으로 증가해 수용 가능한 범위를 유지한다.
 - 신규 Build Version(v2) 배포 중 구 버전(v1)·신 버전(v2) Player가 혼재할 때 Ticket에 Build Version 필드가 없으면 어떤 입장 실패가 발생하고, Rolling Deploy 기간의 Ticket Schema 하위 호환성을 어떻게 보장하나요?
+  > v1 Player가 v2 전용 Packet을 처리하지 못해 입장 직후 Protocol 불일치로 연결이 끊어진다. 하위 호환성 보장을 위해 Ticket에 `buildVersion` 필드를 추가하고 Matchmaking이 동일 Build Version끼리만 매칭하도록 제약을 두며, 구 필드가 없는 v1 Ticket은 기본값으로 처리하는 Optional Field로 설계한다.
 - Queue Event Replay로 알고리즘 변경을 사전 검증할 때 Replay 속도를 실시간의 10배로 하면 Event 순서 재현이 보장되는지 확인해야 할 항목과 결과를 어떤 지표로 비교하나요?
+  > Replay 속도를 높이면 동일 Timestamp Event의 처리 순서가 실제 큐 동작과 달라질 수 있으므로 타임스탬프 해상도(ms 단위 동점 처리 정책)와 이벤트 전처리 정렬 방식을 검증해야 한다. 알고리즘 변경 전후를 비교할 지표는 대기 시간 p50·p95, 예상 승률 분포 표준편차, 취소율, MMR 차이 평균이며 통계적 유의성을 확인한다.
 - Dodge 패널티 도입 후 특정 Region에서 취소율 15%·평균 대기 시간 45초가 동시에 증가했습니다. Dodge 오탐과 인구 감소 중 어느 쪽이 원인인지 어떤 지표로 구분하나요?
+  > 인구 감소가 원인이면 Ticket 생성률도 함께 감소하고 Queue 깊이가 낮을 것이다. Dodge 오탐이 원인이면 Ticket 생성률은 유지되지만 페널티 부과 건수와 취소 직전 매칭 완료율이 동시에 떨어진다. Dodge 페널티 부과 비율, 페널티 대상 계정의 이후 재입장 비율, 정상 계정의 취소율 변화를 분리해 비교하면 구분 가능하다.
 
 ## 11. 30초 모범답변
 

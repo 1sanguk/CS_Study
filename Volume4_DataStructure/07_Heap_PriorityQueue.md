@@ -273,13 +273,21 @@ Aging은 대기 시간 t마다 우선순위를 δ만큼 높여 낮은 우선순�
 ## 15. 예상 꼬리질문
 
 - Position Map 방식에서 Heap Swap 도중 프로세스가 죽으면 어떤 정합성 문제가 생기고 어떻게 복구하는가?
+  > Heap 배열과 Position Map이 중간 상태로 남아 서로 다른 Index를 가리킨다. 재시작 시 Heap 배열을 진실 원천으로 삼고 Position Map을 전체 재스캔으로 재구성하거나, Timer를 외부 Durable 저장소에서 다시 로드해 Heap을 처음부터 빌드한다.
 - Lazy Deletion을 쓸 때 무효 Entry가 전체의 몇 퍼센트를 넘으면 주기적 Rebuild를 고려해야 하는가? 그 기준은 어디서 오는가?
+  > 일반적으로 무효 Entry 비율이 30~50%를 넘으면 Heap 크기 대비 유효 원소 수가 절반 이하가 되어 Sift-Down 단계가 불필요하게 늘어난다. 기준은 이론적이 아니라 실측에서 나온다. 무효 Entry 비율과 pop 평균 지연을 함께 수집해 지연이 목표치를 초과하는 시점이 Rebuild 트리거다.
 - 게임 서버에서 동일 만료 시각의 Timer가 수천 개 동시에 등록되는 이벤트 상황에서 Tie-break를 Sequence로 처리할 때 어떤 overflow 문제가 생길 수 있는가?
+  > 단조 증가 Sequence를 `int`로 선언하면 약 21억 회 등록 후 음수로 Wrap돼 Heap 정렬이 역전된다. `long`을 사용하면 실질적으로 Overflow가 없지만, 이벤트 기간에 짧은 시간 동안 수천만 건이 몰린다면 Sequence 소비 속도를 모니터링해야 한다.
 - Priority Queue에 Capacity 상한을 두고 Backpressure를 적용할 때, 상한 초과 시 새 요청을 거부하는 것과 기존 최저 우선순위 항목을 밀어내는 방식 중 어느 쪽을 언제 선택하는가?
+  > 새 요청 거부는 생산자에게 명확한 실패 신호를 주어 재시도·대기를 유도한다. 긴급도가 높은 신규 요청이 기존 낮은 우선순위보다 중요할 때는 밀어내기(evict-min)가 적합하다. 밀어내기는 버려진 작업의 후속 처리 책임이 명확해야 하므로, 멱등성 없는 작업에는 위험하다.
 - Aging으로 우선순위를 올린 작업이 처리된 뒤 원래 우선순위로 복원해야 하는 경우가 있는가? 있다면 어떻게 구현하는가?
+  > 재시도 정책처럼 동일 작업이 다시 Queue에 들어갈 때 원래 우선순위로 복원해야 한다면, 작업 객체에 원본 우선순위 필드를 별도 보존하고 재삽입 시 사용한다. Aging으로 변경된 우선순위를 Heap 내부에서 직접 복원하려면 Position Map과 Sift가 필요하다.
 - Heap 기반 Timer와 Time Wheel 구조를 비교할 때 어떤 조건에서 Time Wheel이 유리한가?
+  > 만료 시각이 고정 해상도(예: 1ms 단위)로 제한되고 Timer 수가 많으며 만료 범위가 좁을 때 Time Wheel이 유리하다. 특정 슬롯을 직접 O(1)에 찾아 등록·취소할 수 있어 대규모 Timer를 낮은 지연으로 처리한다. 반면 만료 시각이 매우 넓게 분산되면 Wheel 크기가 커지거나 계층이 필요해진다.
 - 단일 Thread Tick 루프에서 Timer 콜백이 또 다른 Timer를 등록할 경우 재진입(re-entrancy) 문제를 어떻게 처리하는가?
+  > Tick 루프가 Heap에서 꺼내 콜백을 실행하는 도중 콜백이 같은 Heap에 push하면 순회 중 구조가 변경된다. 콜백 실행 중 새 등록 요청을 별도 임시 Queue에 모아두고, 현재 Tick의 처리가 끝난 뒤 일괄 Heap에 삽입하는 방식으로 재진입을 격리한다.
 - Position Map 없이 Heap에서 특정 Timer를 취소할 때 `O(n)` 탐색 대신 쓸 수 있는 다른 트릭이 있는가?
+  > Timer ID와 Generation(버전) 번호를 함께 저장하고, 취소 시 해당 ID의 Generation을 무효화한다. pop할 때 꺼낸 Entry의 Generation이 현재 Generation과 다르면 이미 취소된 것으로 간주하고 버린다. 이는 Lazy Deletion의 변형으로 Position Map 없이 O(1) 취소를 흉내 낸다.
 
 ## 16. 30초 모범답변
 

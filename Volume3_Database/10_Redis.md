@@ -141,6 +141,7 @@ public void updateScore(Jedis jedis, String season, long playerId, double score)
 public List<String> getTopN(Jedis jedis, String season, int n) {
     String key = "ranking:" + season;
     // Score 높은 순 상위 N명 (0-indexed)
+    // zrevrange는 Redis 6.2.0부터 deprecated. 신규 코드는 zrange(key, 0, n-1, ZRangeParams.zRangeParams().rev()) 사용 권장
     return jedis.zrevrange(key, 0, n - 1);
 }
 // 동점 처리, 시즌 종료 Snapshot, DB 원본 재구축 경로는 별도 설계 필요
@@ -247,17 +248,30 @@ RDB는 특정 시점 전체 Snapshot이라 복구 파일이 Compact하지만 Sna
 
 ### Q6. 게임 시즌 랭킹을 Sorted Set으로 구현할 때 주의할 점은 무엇인가요?
 
-동점 시 순위 정의, Score의 부동소수점 표현 한계를 확인한다. 시즌 종료 시 Redis 랭킹을 DB에 Snapshot으로 저장해 Redis 장애·삭제 후 재구축 근거를 둔다. 상위 N명 조회는 `ZREVRANGE`로 하되 Key Cardinality와 범위를 제한한다. 점수 갱신이 매우 빈번하면 Hot Key가 될 수 있어 Cluster 설계를 검토한다.
+동점 시 순위 정의, Score의 부동소수점 표현 한계를 확인한다. 시즌 종료 시 Redis 랭킹을 DB에 Snapshot으로 저장해 Redis 장애·삭제 후 재구축 근거를 둔다. 상위 N명 조회는 `ZREVRANGE`로 할 수 있으나 Redis 6.2.0부터 deprecated이므로 `ZRANGE ... REV`를 사용하고 Key Cardinality와 범위를 제한한다. ZADD는 O(log N), ZREVRANGE·ZRANGE는 O(log N + M)(M은 반환 행 수)이다. 점수 갱신이 매우 빈번하면 Hot Key가 될 수 있어 Cluster 설계를 검토한다.
 
 ## 10. 예상 꼬리질문
 
 - WATCH는 어떻게 낙관적 충돌을 감지하나요?
+  > WATCH로 지정한 Key가 MULTI 이전에 다른 Client에 의해 변경되면 EXEC 시점에 트랜잭션이 실패하고 nil을 반환한다. 애플리케이션은 UNWATCH 후 최신 상태를 다시 읽어 재시도한다. DB의 Version 열 기반 낙관적 Lock과 원리는 같지만 Redis 안에서의 변경 감지에 한정된다.
+
 - Pipeline 배치 크기가 너무 크면 어떤 문제가 생기나요?
+  > 한 번에 보내는 명령 수가 너무 많으면 응답을 기다리는 동안 Client 메모리와 네트워크 버퍼가 커지고, Server가 응답을 모두 직렬화해 보낼 때까지 해당 Connection이 기다린다. 극단적으로 크면 다른 Client 명령의 응답 지연을 늘릴 수 있다. 배치 크기는 수백 건 단위로 실험해 응답 지연과 처리량을 균형 있게 조정한다.
+
 - Redis 분산 Lock에서 Fencing Token이 왜 필요한가요?
+  > Lock TTL이 만료된 후 오래 일시정지했던 Client가 깨어나 외부 자원을 변경하려 할 때 새로운 Lock 소유자와 충돌이 생길 수 있다. Fencing Token은 Lock 획득 시마다 단조 증가하는 번호를 발급해 외부 저장소가 이전 Token의 쓰기를 거부하게 한다. Token 없이는 오래된 소유자의 쓰기를 막을 방법이 없다.
+
 - Big Key를 운영 중에 어떻게 안전하게 찾나요?
+  > 운영 Primary에서 `KEYS *`나 `DEBUG OBJECT`를 실행하면 Event Loop가 차단된다. 대신 `SCAN`으로 점진적으로 Key를 순회하거나 Replica에서 `redis-cli --bigkeys`를 실행한다. Redis 4.0 이상에서는 `MEMORY USAGE` 명령으로 개별 Key 크기를 확인할 수 있고, RDB 파일을 Offline에서 분석하는 도구(redis-rdb-tools 등)도 활용할 수 있다.
+
 - Eviction 정책을 설정할 때 무엇을 고려하나요?
+  > 데이터가 재구축 가능한 캐시인지 원본인지를 먼저 구분한다. 재구축 가능한 캐시는 `allkeys-lru`나 `allkeys-lfu`로 메모리가 가득 차면 자동 제거할 수 있다. 원본 데이터가 있으면 `noeviction`으로 설정해 메모리 초과 시 쓰기를 오류로 받아 운영자가 즉시 인지하게 한다. 어떤 Key가 축출되는지 모니터링해 중요 데이터가 제거되는지 확인한다.
+
 - Redis Cluster에서 Multi-key 명령 제약은 어떻게 다루나요?
+  > Redis Cluster에서 MGET, MSET, 교집합 연산 같은 Multi-key 명령은 관련 Key가 모두 같은 Slot에 있어야 실행된다. 관련 Key를 같은 Slot에 모으려면 `{tag}` Hash Tag를 사용해 Slot 결정 해시를 동일하게 맞춘다. 단, 한 Slot에 너무 많은 Key가 몰리면 해당 노드가 Hot Spot이 될 수 있다.
+
 - Pub/Sub 대신 Stream Consumer Group을 언제 선택하나요?
+  > 구독자가 오프라인일 때 메시지가 유실되어도 되면 Pub/Sub으로 충분하다. 메시지 재생이 필요하거나 여러 Consumer가 분산 처리하면서 처리 완료 확인(ACK)이 필요하면 Stream Consumer Group을 사용한다. Consumer Group은 Pending 메시지 재전달, 처리 시간 추적, Consumer 장애 시 다른 Consumer로 재할당을 지원한다.
 
 ## 11. 30초 모범답변
 

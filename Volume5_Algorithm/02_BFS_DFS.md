@@ -385,12 +385,19 @@ Portal별 이동 시간이 다르면 최소 Hop과 최소 시간이 다르므로
 ## 16. 예상 꼬리질문
 
 - 게임 Zone 맵을 인접 행렬로 표현한 서버에서 Zone 수가 10,000개로 늘어났을 때 BFS 탐색이 실시간 Tick 안에 처리 불가능해지는 시점과 인접 리스트로 전환하는 판단 기준은?
+  > 인접 행렬 BFS는 한 Vertex의 이웃을 찾기 위해 행 전체 V칸을 순회해 O(V²) 시간이 걸린다. Zone이 10,000개면 단일 BFS에 최대 10⁸ 연산이 필요하며, 16ms Tick에 처리 불가능하다. 인접 리스트로 전환하면 O(V+E)로 줄어드는데, 평균 이웃 수(E/V)가 V보다 현저히 작은 Sparse Graph일 때 전환 효과가 크다. 메모리 접근 패턴과 프로파일링 결과를 기준으로 결정한다.
 - 게임 서버에서 여러 Spawn Point를 동시에 활성화할 때 단일 BFS로 처리하지 않고 Spawn Point별로 BFS를 따로 실행하면 어떤 문제가 생기는가?
+  > Spawn Point별 독립 BFS는 N개 시작점에 대해 각각 O(V+E) 비용이 발생해 전체 O(N(V+E))가 된다. Multi-Source BFS는 모든 시작점을 거리 0으로 Queue에 동시에 넣고 한 번의 O(V+E)로 각 Vertex까지 가장 가까운 Spawn Point 거리를 구한다. 따라서 Spawn Point 수가 늘수록 독립 BFS는 Tick Budget을 초과할 위험이 있다.
 - Zone 내 이동 비용이 0, Portal 이동 비용이 1인 게임 맵에서 Dijkstra를 그대로 쓰면 어떤 성능 문제가 생기고, 0-1 BFS는 어떤 조건에서 그 비용을 제거하는가?
+  > Dijkstra는 Priority Queue 연산으로 O((V+E) log V) 비용이 들지만, 0-1 BFS는 Deque를 사용해 비용 0 Edge는 front에, 비용 1 Edge는 back에 삽입하므로 O(V+E)로 동일한 최단 거리를 구한다. 가중치가 정확히 0과 1 두 종류만 있을 때 Deque의 단조성이 보장되어 0-1 BFS가 성립한다. 세 번째 비용이 등장하면 Dijkstra 또는 Bellman-Ford가 필요하다.
 - 퀘스트 의존성 검증 서버에서 재귀 DFS로 Cycle을 탐지하다 Stack Overflow가 발생했다. 반복 DFS로 교체할 때 기존 GRAY/BLACK 상태 관리를 어떻게 유지해야 하는가?
+  > 반복 DFS에서는 명시적 Stack에 (vertex, 처리 단계) 쌍을 저장한다. 처음 꺼낼 때 GRAY로 표시하고 이웃을 Stack에 넣으며, 이웃이 모두 처리된 뒤 해당 Vertex를 BLACK으로 바꾸는 시점을 Stack에서 처리 완료 신호를 분리해 구현한다. 구체적으로는 Stack에서 꺼낼 때 GRAY이면 BLACK 전환 마커를 다시 넣고, GRAY 이웃을 만나면 Back Edge(Cycle)로 판정한다.
 - 길드 네트워크에서 연결 요소를 BFS로 관리하다 멤버 탈퇴로 Edge가 빈번히 삭제될 때 연결 요소를 매번 전체 재계산하는 방식의 한계와 대안은?
+  > 매 삭제마다 O(V+E) 전체 재계산을 반복하면 삭제 빈도가 높을수록 누적 비용이 커진다. Edge 삽입에는 Union-Find가 O(α(V))로 효율적이지만, 삭제를 지원하지 않는 것이 한계다. 대안으로 삭제를 배치로 모아 주기적으로 전체 재계산하거나, Link-Cut Tree 같은 동적 연결성 자료구조를 사용하면 삭제를 포함한 연결성 Query를 O(log V)에 처리할 수 있다.
 - 게임 월드에서 두 플레이어 간 최단 Zone 경로를 구할 때 단방향 BFS 대신 양방향 BFS를 적용하면 실제로 탐색 비용이 줄어드는 조건은? Portal 구조가 단방향(방향 Graph)일 때는 어떤 문제가 생기는가?
+  > 양방향 BFS는 출발지와 목적지에서 동시에 탐색해 Frontier가 만나는 중간 지점에서 종료한다. Branching Factor가 b이고 최단 경로 길이가 d일 때 단방향은 O(b^d), 양방향은 O(b^(d/2))로 탐색 범위를 크게 줄인다. 방향 Graph에서는 역방향 Edge가 필요하므로 역방향 인접 리스트를 별도로 유지해야 한다. 역방향 Edge를 구성하지 않으면 목적지 쪽에서 탐색이 불가능해 일반 BFS로 대체해야 한다.
 - 초당 수백 건의 Zone 탐색 요청을 처리하는 게임 서버에서 요청마다 O(V) 방문 배열을 초기화하면 어떤 병목이 생기는가? Generation 카운터 방식을 적용할 때 Overflow 시 안전하게 처리하는 방법은?
+  > O(V) 초기화를 초당 수백 번 반복하면 Zone 수가 커질수록 CPU 시간이 선형으로 증가하며 Cache를 오염시킨다. Generation 카운터 방식은 전역 정수 배열 visitGen에 현재 요청 ID를 저장해, visitGen[v] == currentId일 때 방문으로 판정해 초기화 비용을 없앤다. int Overflow 시 카운터가 0으로 순환해 이전 요청과 충돌할 수 있으므로, Overflow 직전 전체 배열을 0으로 초기화하고 currentId를 1로 재설정하는 안전 경로를 마련한다.
 
 ## 17. 30초 모범답변
 

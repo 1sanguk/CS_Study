@@ -244,12 +244,19 @@ Resume Token 검증 성공 후 Delta를 전송할 때 마지막 처리 Sequence�
 ## 10. 예상 꼬리질문
 
 - Logic Queue 상한을 1,000개로 설정했는데 피크 시간에 Tick 1회에 500개 이벤트가 몰려 Drop 알람이 반복됩니다. 상한을 단순히 2,000개로 늘릴 때의 위험과 Priority Queue·별도 Worker로 분리하는 대안 중 어떤 기준으로 선택하나요?
+  > 상한을 단순히 2,000개로 늘리면 처리 지연이 같이 늘어나 Tick p99가 악화될 수 있고, 서버 과부하 시 복구 시간도 길어집니다. 이벤트 성격이 다르다면 Priority Queue·별도 Worker 분리가 적합합니다. 결제·인벤토리처럼 유실 불가 이벤트는 별도 Priority Queue와 전담 Worker로 분리해 Drop 대상에서 제외하고, 위치 Snapshot처럼 최신 값만 의미 있는 이벤트는 Drop-oldest 정책으로 제한합니다. 이벤트 종류가 동질적이라면 상한 확장과 함께 Processing Rate를 높이는(Worker 추가) 방향을 먼저 검토합니다.
 - CCU 10,000명 FPS Match 서버에서 60Hz Tick Snapshot 브로드캐스트가 초당 60만 건 발생합니다. AOI(Area of Interest) 필터링으로 실제 대역폭을 어느 정도 줄일 수 있고 구현 복잡도와의 Trade-off는 무엇인가요?
+  > AOI 필터링은 플레이어당 가시 범위(예: 반경 100m) 내 객체만 Snapshot을 전송해 대역폭을 대폭 줄입니다. 100명 Match에서 평균 가시 반경 내 플레이어가 10명이라면 브로드캐스트를 최대 90% 감소시킬 수 있습니다. 복잡도 측면에서 Spatial Grid나 Quad-tree로 가시 대상을 효율적으로 조회해야 하고, 가시 영역 경계에서 객체가 갑자기 나타나는 Pop-in 현상을 완화하는 Hysteresis 처리도 필요합니다. AOI는 대역폭이 명확한 병목일 때 도입하고, 먼저 Snapshot 크기 압축과 전송 빈도 조정을 검토합니다.
 - Match 결과 Outbox에 쌓인 이벤트 중 일부가 Ranking에 두 번 반영됩니다. matchId Idempotency Key가 존재하는데도 중복이 생기는 구체적인 원인과 DB UNIQUE 제약 설계 방법은 무엇인가요?
+  > Idempotency Key를 애플리케이션 레벨에서만 체크하고 DB UNIQUE 제약이 없으면 두 프로세스가 동시에 같은 matchId를 처리할 때 중복이 삽입될 수 있습니다. 해결 방법으로 ranking_events 테이블에 matchId + eventType 복합 UNIQUE 제약을 추가하고, INSERT는 INSERT IGNORE 또는 ON CONFLICT DO NOTHING으로 처리합니다. Reconciliation Job이 중복 실행되는 경우도 이 DB 제약으로 방어됩니다. Outbox 테이블에도 동일하게 UNIQUE 제약을 두어 발행 단계에서 중복을 차단합니다.
 - Packet Schema에 Reserved Field를 미리 두는 관행이 Rolling Update 기간 중 어떤 Field 해석 오류를 방지하고, 오히려 역직렬화 버그를 유발하는 시나리오는 무엇인가요?
+  > Reserved Field는 미래 사용을 위해 번호를 예약해 기존 Field와 번호가 충돌하는 것을 방지합니다. Rolling Update 중 v2 Server가 신규 Field 번호를 Reserved 범위에서 할당하면 v1 Client가 알 수 없는 Field로 무시(unknown field skip)하므로 역직렬화가 깨지지 않습니다. 반면 Reserved Field에 기본값이 설정되지 않으면 v1 Client에서 Reserved Field가 0이나 빈 문자열로 역직렬화되어 의도하지 않은 기본값이 로직에 영향을 줄 수 있습니다. Reserved Field를 사용할 때는 항상 optional로 선언하고 부재 시 기본값을 명시합니다.
 - 서버 Tick Rate를 20Hz에서 60Hz로 올렸을 때 CPU와 트래픽이 3배 증가했는데 Tick p99는 오히려 낮아졌습니다. 이 현상의 원인과 최적 Tick Rate를 결정하는 기준은 무엇인가요?
+  > 20Hz에서 Tick 1회당 처리해야 하는 이벤트가 50ms치 입력 전부였다면, Batch 크기가 커서 일부 Tick이 예산을 초과해 p99가 높았습니다. 60Hz에서는 Tick당 처리량이 1/3로 줄어 각 Tick의 연산 부하가 균일하게 낮아져 p99가 개선됩니다. 최적 Tick Rate 결정 기준은 Tick 예산 대비 최대 연산 비용, Snapshot 전송 대역폭, 클라이언트 반응성 요구입니다. CPU와 대역폭 증가를 감당할 수 있고 p99 개선 효과가 명확하다면 높은 Tick Rate가 유리합니다.
 - Resume Token에 HMAC-SHA256 서명을 사용하는데 배포 중 서명 Key가 교체되면 재접속 중인 클라이언트의 Token 검증이 실패합니다. Key Rotation과 Grace Period를 어떻게 조율하나요?
+  > Key Rotation 시 구 Key와 신규 Key를 동시에 보관하는 Grace Period(예: 5분)를 설정합니다. 서버는 신규 Key로 서명 검증을 먼저 시도하고 실패하면 구 Key로 재시도합니다. Grace Period 내에 재접속을 시도한 클라이언트는 구 Key 서명이 유효하면 인증을 허용하고 새 Token을 발급합니다. Grace Period 종료 후에는 구 Key를 폐기하고 구 Key로 서명된 Token은 재발급을 요구합니다.
 - Logic Worker 수를 CPU Core 수(32개)보다 많은 64개로 늘렸는데 Tick p99가 오히려 올라갔습니다. perf stat에서 어떤 지표를 먼저 확인하고 최적 Worker 수를 어떻게 결정하나요?
+  > perf stat에서 context-switches와 cache-misses를 먼저 확인합니다. Worker 수가 Core 수를 초과하면 Context Switch 비용이 증가하고 Cache Miss가 늘어 Tick 연산이 느려집니다. 또한 공유 Queue나 Lock Contention(lock_contention 지표)이 증가했는지 확인합니다. 최적 Worker 수는 CPU-bound 작업이면 Core 수와 동일하게 설정하고, I/O 대기가 포함된 혼합 작업이면 Core 수의 1.5배까지 늘리며 p99를 측정해 결정합니다.
 
 ## 11. 30초 모범답변
 > 게임 서버 설계의 핵심은 서버 권위 원칙으로 모든 입력을 검증하고 Tick에서 상태를 갱신하는 것입니다. Client는 Prediction과 Interpolation으로 지연을 숨기고, I/O와 Logic은 Bounded Queue로 분리해 연쇄 장애를 방지합니다. 요구사항 수치(CCU·Tick 예산·허용 지연)를 먼저 확인하고, Tick p99·Drop Rate·Reconnect 성공률로 운영 상태를 관찰합니다.

@@ -235,12 +235,19 @@ Blue-Green: 새 Version의 Green 서버를 준비하고 새 Match만 Green으로
 ## 10. 예상 꼬리질문
 
 - Sticky Routing으로 Room을 특정 Game Server에 고정했는데 해당 서버에 Heavy Room이 집중돼 CPU 90%가 됐습니다. 다른 서버로 Room을 이전할 수 없다면 단기적으로 부하를 줄이는 방법과, 이 상황을 사전에 방지하는 Admission Control 설계는 무엇인가요?
+  > 단기 조치: Drain 신호를 보내 신규 Room 배치를 즉시 차단하고, 해당 서버의 모든 Room 업데이트 주기(Tick Rate)를 일시적으로 낮춥니다. CPU가 허용 범위로 내려오면 일부 Room을 자발적으로 중단(Match 결과 조기 정산)합니다. 사전 방지 Admission Control: Matchmaker가 Room 배치 요청 시 대상 서버의 CPU·Tick p99·현재 Room 수를 확인하고 임계값(CPU 70%, p99 16ms)을 초과하면 다른 서버에 배치합니다. Room 예상 부하를 Player 수와 콘텐츠 타입(PvP/PvE)으로 사전 추정해 서버별 예약 용량을 관리합니다.
 - Game Instance가 Tick 중에 DB 쓰기를 동기 호출했더니 p99가 100ms → 300ms로 급등했습니다. Tick 경로에서 DB 호출을 제거하는 방법과, Match 종료 결과를 안전하게 Persistence 서비스로 전달하는 설계를 설명해 주세요.
+  > Tick 경로에서 DB 호출 제거: Tick은 Memory 상태만 읽고 쓰며 DB 호출은 별도 Write Thread나 비동기 Queue로 분리합니다. 중간 상태는 메모리에서 누적하다 Match 종료 시점에만 영속화합니다. Match 종료 결과 전달 설계: Match 결과를 Outbox 테이블에 기록하고 별도 Worker가 Persistence 서비스에 전달합니다. Idempotency Key로 중복 전송을 막고, 전송 실패 시 재시도합니다. 결과가 Persistence에 확정되면 Outbox 레코드를 제거합니다. 이 방식은 Game Server 재시작 후에도 미전송 결과를 복구할 수 있습니다.
 - Zone Partition에서 플레이어가 Zone 경계를 넘을 때 두 Game Server가 동시에 해당 플레이어를 Authority로 갖는 순간을 없애려면 Transfer 과정을 어떻게 설계해야 하나요?
+  > Transfer 과정을 단계적으로 설계합니다. (1) 플레이어가 경계에 접근하면 Source 서버가 Target 서버에 Transfer 준비 요청을 보냅니다. (2) Target 서버가 준비 완료를 응답하면 Source 서버는 해당 플레이어의 Authority를 중단하고 상태 Snapshot을 Target으로 전송합니다. (3) Target 서버가 Snapshot을 받아 상태를 복원한 뒤 Authority 수락을 알립니다. (4) Source 서버는 플레이어 세션을 Target으로 리다이렉트합니다. 두 서버가 동시에 Authority를 갖는 순간이 생기지 않도록 Source는 Authority를 포기한 뒤 Target이 수락을 확인한 이후에만 클라이언트를 전환합니다.
 - Matchmaking 서버가 Scale-out으로 Pod가 2대→10대로 늘었을 때, 기존 대기열이 Pod별로 분산되면 어떤 중복 매칭이 발생하나요? 공유 Redis Queue로 해결할 때의 한계와 대안을 설명해 주세요.
+  > Pod별 독립 대기열에서는 같은 플레이어가 여러 Pod의 큐에 중복 등록되거나, 조건이 맞는 플레이어들이 각기 다른 Pod에 분산되어 매칭이 성사되지 않는 문제가 발생합니다. 공유 Redis Queue 한계: 모든 Pod가 Redis를 경합하면 처리량이 Redis 단일 인스턴스 한계에 묶이고, Redis 장애 시 Matchmaking 전체가 중단됩니다. 대안: Redis Cluster로 파티션하되 스킬 레이팅 구간별로 키를 분리합니다. 또는 중앙 Matchmaking 조정자(Coordinator)를 두고 Pod는 후보를 제안하는 역할만 하고 최종 매칭 결정은 조정자가 합니다.
 - 로그인 서버에서 JWT Stateless 검증만 사용하는데 강제 로그아웃(ban·kick) 기능이 필요합니다. Stateless 검증으로 즉각 ban이 불가능한 이유와, Token Revocation 구현 시 Redis Denylist 방식의 부하와 TTL 설정 기준을 설명해 주세요.
+  > Stateless JWT는 서버가 발급한 토큰의 유효 여부를 만료 시간(exp)으로만 판단합니다. ban 시점에 기존 토큰을 무효화할 중앙 상태가 없으므로, 만료 전까지는 해당 토큰이 유효하게 인식됩니다. Redis Denylist 방식: ban된 JTI(토큰 고유 ID)를 Redis에 기록하고 매 요청마다 Denylist를 조회합니다. 부하: 초당 수만 건의 요청이 있으면 Redis 조회가 병목이 될 수 있습니다. Cluster나 로컬 캐시(짧은 TTL)로 완화합니다. TTL 설정 기준: 토큰의 남은 만료 시간과 동일하게 설정합니다. 토큰이 만료되면 Denylist Entry도 자동 제거되어 저장 공간이 늘어나지 않습니다.
 - Correlation ID를 Login→Matchmaking→Game→Persistence 전 흐름에 전파했을 때, 특정 플레이어의 아이템 중복 지급 장애를 재현하기 위해 최소한 어떤 로그 항목과 메트릭을 남겨야 하나요?
+  > 최소 필수 로그 항목: 각 서비스 진입·완료 시점의 Correlation ID, PlayerId, RequestId(Idempotency Key), 처리 결과(성공·실패·타임아웃), 아이템 지급 이벤트(아이템 ID, 수량, 트랜잭션 ID). 메트릭: 각 서비스 간 응답 시간, 재시도 횟수, Idempotency Key 충돌 횟수. 재현을 위한 구조: Correlation ID로 흐름 전체를 하나의 Trace로 연결하고, 아이템 지급 직전·직후 타임스탬프와 RequestId를 남겨 중복 처리 여부를 조회할 수 있게 합니다. 민감 정보(재화 잔액, 개인정보)는 제외합니다.
 - Game Server 배포 중 Rolling Drain을 진행하는데 특정 Room이 2시간 이상 지속되고 있습니다. 이 Room을 더 기다릴지 강제 종료할지 결정하는 기준과, 강제 종료 시 플레이어에게 보상을 지급하는 흐름을 설계해 주세요.
+  > 결정 기준: (1) 배포 긴급도(보안 패치·크리티컬 버그 수정)가 높으면 대기 시간 상한을 낮게 설정합니다. (2) Room 진행률이 90% 이상이면 자연 종료를 기다립니다. (3) 배포 Window가 초과되어 다른 서버로 영향이 퍼지면 강제 종료합니다. 보상 지급 흐름: 강제 종료 전 Room 상태(진행 시간, 완료율)를 DB에 기록합니다. Persistence 서비스에 "비정상 종료 보상 지급" 이벤트를 Idempotency Key와 함께 전송합니다. 플레이어 재접속 시 보상 수령 UI를 노출합니다. 이중 지급 방지를 위해 보상 지급 상태를 플레이어 계정에 기록하고 지급 완료 후 플래그를 설정합니다.
 ## 11. 30초 모범답변
 > 게임 서버 아키텍처는 기능 분리보다 상태 소유권과 실패 경계를 정하는 일입니다. 독립 확장이 필요한 책임만 분리하고 통신 실패와 운영 비용을 함께 설계합니다. 로그인 API는 무상태로 수평 확장하고 Game Room은 특정 프로세스가 권위 상태를 소유한다.
 

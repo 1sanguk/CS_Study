@@ -285,12 +285,19 @@ Backup은 각 Shard의 시점이 다르면 Cross-shard 거래 상태가 맞지 �
 ## 10. 예상 꼬리질문
 
 - RPO와 RTO를 어떻게 정의하고 측정하나요?
+  > RPO는 장애 발생 시 허용 가능한 최대 데이터 손실 시간, RTO는 서비스 복구까지 허용 가능한 최대 중단 시간이다. RPO는 복제 Lag와 Failover 직전 마지막 Checkpoint 간격으로 측정하고, RTO는 장애 감지부터 Routing 갱신·Application 정상 응답까지의 전체 시간을 측정한다.
 - Split-brain을 어떻게 방지하나요?
+  > 네트워크 분할 상황에서 두 노드가 동시에 Primary로 동작하지 않도록 Fencing Token, STONITH, 또는 Raft·Paxos 기반 Consensus 프로토콜을 사용한다. 과반수 노드의 동의 없이는 쓰기를 허용하지 않아 단일 Primary를 보장한다.
 - Resharding 중 다운타임 없이 Cutover하는 방법은 무엇인가요?
+  > 대상 Shard에 Snapshot을 복사하고 CDC로 변경을 따라잡은 뒤, Dual Write 또는 짧은 쓰기 정지 상태에서 Routing Map Version을 갱신한다. 검증(Row 수·Checksum 비교) 후 이전 Shard 데이터를 정리하며 Rollback 경로를 사전에 확보한다.
 - Global UNIQUE 제약을 Sharded 환경에서 어떻게 구현하나요?
+  > 별도 중앙 Registry 테이블에 UNIQUE 제약을 두고 Shard 생성 전에 먼저 예약(INSERT)한다. 예약 성공 후 해당 Shard에 데이터를 생성하고 실패 시 Registry 레코드를 정리한다. Redis 기반 분산 락을 보조 수단으로 사용할 수 있다.
 - Schema Migration을 여러 Shard에 동시 적용할 때 어떻게 하나요?
+  > Expand-Contract 패턴을 사용해 먼저 새 컬럼·인덱스를 추가(Expand)하고 애플리케이션이 두 Schema를 모두 지원하도록 배포한 뒤, 완전 전환 후 이전 Schema를 제거(Contract)한다. Shard별 Migration 상태와 실패를 추적하고 부분 실패 시 Rollback 절차를 미리 정의한다.
 - Hot Shard를 감지하고 해소하는 방법은 무엇인가요?
+  > Shard별 QPS, CPU, Storage I/O를 개별 모니터링해 특정 Shard의 지표가 편중되면 Hot Shard로 판정한다. 해소 방법으로는 해당 Key에 Read Replica 추가, 자주 읽는 데이터를 Cache로 분리, Hot Key를 세분화해 여러 Shard로 분산하는 방법을 적용한다.
 - Replica와 Backup의 차이는 무엇인가요?
+  > Replica는 Primary의 모든 변경을 실시간으로 복제하므로 사용자 실수·악의적 삭제도 그대로 반영된다. Backup은 특정 시점의 스냅샷을 보존해 특정 시점으로 복구(Point-in-Time Recovery)가 가능하다. Replica는 읽기 확장·가용성 목적, Backup은 데이터 복구 목적이며 서로 대체할 수 없다.
 
 ## 11. 30초 모범답변
 

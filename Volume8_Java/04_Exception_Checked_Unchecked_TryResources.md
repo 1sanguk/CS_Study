@@ -198,12 +198,19 @@ JFR(Java Flight Recorder) Exception Event 또는 `-XX:+TraceExceptions`로 예�
 
 ## 10. 예상 꼬리질문
 - try-with-resources에서 Connection과 PreparedStatement 두 자원을 선언했을 때, PreparedStatement.close()에서 예외가 발생하면 getSuppressed()로 확인되는지 아니면 주 예외가 되는지 JDK(Java Development Kit) 소스 수준에서 설명하세요.
+  > 본문 정상 종료 후 자원 close 시 발생하는 예외는 JDK의 `Throwable.addSuppressed()`를 통해 Suppressed로 기록됩니다. 본문에서 예외가 발생하지 않았다면 PreparedStatement.close()의 예외가 주 예외가 됩니다. 반면 본문에서 예외가 발생한 상태라면 close 예외는 주 예외의 Suppressed 목록에 추가되어 `e.getSuppressed()[0]`으로 꺼낼 수 있습니다. JDK 소스(`Throwable.java`)에서 try-with-resources가 컴파일 시 생성하는 `primaryExc != null` 분기가 이 로직을 구현합니다.
 - Checked Exception을 Unchecked로 Wrap하는 패턴에서 Lombok @SneakyThrows와의 차이, 그리고 두 방법 모두 적합하지 않은 경우는 언제인가요?
+  > 명시적 `new RuntimeException(e)` Wrap은 Cause Chain을 보존하고 호출자가 catch로 잡을 수 있는 Unchecked 타입을 만듭니다. Lombok `@SneakyThrows`는 Bytecode 수준에서 Checked 예외를 그대로 던져 Compile Time 선언을 우회하므로 호출자가 catch하려면 예외 타입을 알아야 합니다. 두 방법 모두 적합하지 않은 경우는 Library 공개 API처럼 호출자 코드베이스를 통제할 수 없는 경우로, 이때는 Checked Exception을 명시적으로 선언해 계약을 드러내는 것이 안전합니다.
 - Match 결과 저장 Timeout 후 재시도 큐에 100만 건이 쌓였을 때 처리량 부족으로 중복 보상이 발생할 수 있는 시나리오와 방지 방법은 무엇인가요?
+  > 큐 처리 Worker가 느려 동일 matchId 항목이 여러 번 큐에 들어가거나 Consumer가 중복 소비하는 경우, 결과 조회 없이 재실행하면 중복 보상이 발생합니다. 방지 방법은 큐 삽입 전 matchId를 Redis SET에 원자적으로 추가해 이미 처리 중인 항목을 걸러내거나, DB Unique Key(`matchId`)로 INSERT 시 중복 시도를 DB 수준에서 원천 차단합니다. 큐 처리량 지표(`queue.size`, `consumer.lag`)를 Prometheus로 관찰해 적체 임계값 도달 시 Consumer 수를 동적으로 확장하는 Auto-scaling 정책도 병행합니다.
 - JFR `-XX:+TraceExceptions`로 Tick 루프에서 초당 5,000건 예외를 탐지했습니다. Stack Trace 생성 비용을 측정하는 방법과 `static final` 예외 재사용 시 Stack Trace가 비어있는 경우 운영 영향은 무엇인가요?
+  > Stack Trace 생성 비용은 JMH 벤치마크로 `new Exception()` 생성 비용과 `fillInStackTrace()` Override로 Stack Trace를 억제한 버전을 비교해 ns 단위로 측정합니다. `static final` 예외 인스턴스 재사용은 Allocation 비용은 제거하지만 Stack Trace가 최초 생성 시점에 고정되어 실제 예외 발생 위치가 사라집니다. 운영에서는 예외 로그에 호출 경로가 나타나지 않아 근본 원인 추적이 불가능해지고, 특히 간헐적 장애 진단 시 심각한 가시성 손실이 발생합니다.
 - Exception Translation 시 cause로 `DataAccessException`을 보존했는데, 외부 API Response에 cause의 getMessage()가 노출되는 코드가 있습니다. 이 정보 누출을 탐지하는 방법과 안전한 External Response 설계는 무엇인가요?
+  > 탐지는 SpotBugs `PT_ABSOLUTE_PATH_TRAVERSAL` 계열 또는 OWASP Dependency Check와 함께, `printStackTrace()·getMessage()·getCause()` 결과를 Response Body에 직접 write하는 코드 패턴을 ArchUnit `noClasses().should().callMethod(Throwable.class, "getMessage")` 형태로 CI에서 강제합니다. 안전한 External Response 설계는 GlobalExceptionHandler에서 cause chain 전체를 내부 로그에 기록하되 외부 Response에는 error_code, correlation_id, 사용자 메시지만 포함한 별도 DTO를 직렬화하는 구조입니다.
 - `finally` 블록에서 `return`을 사용하면 메서드에서 던진 예외가 어떻게 처리되는지 바이트코드 수준에서 설명하고, SpotBugs에서 이 패턴을 탐지하는 룰 ID는 무엇인가요?
+  > `finally` 블록에서 `return`이 실행되면 JVM Bytecode의 `jsr/ret` 또는 exception table을 처리하는 과정에서 진행 중이던 예외가 조용히 파기됩니다. 컴파일된 Bytecode에서 finally 블록은 예외 경로와 정상 경로 양쪽에 인라인되므로 `return`이 예외 전파를 덮어씁니다. SpotBugs 룰 `REC_CATCH_EXCEPTION`과 `finally return` 패턴은 `FINALLY_RETURN`(SpotBugs `FI_FINALLY_RETURN`) 룰로 탐지됩니다.
 - `OutOfMemoryError`가 발생했을 때 `catch(Error e)`로 잡아 자원을 정리하려는 코드가 있습니다. OOM(OutOfMemoryError) 상황에서 catch 블록이 실행된다는 보장이 있는지, 그리고 OOM 이후 JVM 상태를 안전하게 처리하는 운영 패턴은 무엇인가요?
+  > OOM은 catch 블록이 실행될 수 있지만, 자원 정리 코드 자체가 추가 메모리를 필요로 하면 다시 OOM이 발생할 수 있습니다. 또한 OOM 발생 시 JVM Heap 상태가 손상되어 이후 정상 동작을 보장할 수 없습니다. 운영 패턴은 JVM 옵션 `-XX:+ExitOnOutOfMemoryError` 또는 `-XX:OnOutOfMemoryError="kill -9 %p"`로 즉시 Process를 종료하고, Kubernetes Pod 재시작 정책으로 빠른 복구를 자동화합니다. Heap Dump는 `-XX:+HeapDumpOnOutOfMemoryError`로 OOM 시점에 자동 수집해 사후 분석에 활용합니다.
 
 ## 11. 30초 모범답변
 

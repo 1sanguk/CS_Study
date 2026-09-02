@@ -115,13 +115,13 @@ static Map<UUID, Session> sessions = new HashMap<>(); // Static Field → GC Roo
 | Strong Reference | Root Chain 끊길 때 | 항상 객체 | 일반 모든 참조 |
 | Soft Reference | 메모리 부족(OOM 직전) | 회수 전까지 객체, 이후 null | 메모리 감응 캐시 |
 | Weak Reference | 강한 참조 없을 때 (다음 GC) | 살아있으면 객체, 이후 null | WeakHashMap, 이벤트 리스너 |
-| Phantom Reference | Finalize 완료 후 | 항상 null | 자원 정리 후처리, Cleaner API |
+| Phantom Reference | GC가 회수 가능하다고 판단한 후 | 항상 null | 자원 정리 후처리, Cleaner API |
 
 | GC Collector | Pause 특성 | 적합 환경 |
 |---|---|---|
 | Serial GC | Full Stop-the-World | 단일 코어·소형 힙 |
 | G1GC (Java 9+ 기본) | 예측 가능한 짧은 Pause | 대용량 힙·범용 서버 |
-| ZGC | 수 ms 이하 Pause | 지연 민감 대용량 힙 |
+| ZGC | 1ms 미만(sub-millisecond) Pause | 지연 민감 대용량 힙 |
 | Shenandoah | ZGC 유사 저지연 | 저지연 대용량 힙 |
 
 ## 6. 장점과 단점
@@ -173,12 +173,19 @@ WeakHashMap Key에 대한 강한 참조가 끊어지면 다음 Minor GC에서 �
 
 ## 10. 예상 꼬리질문
 - G1GC Humongous Object가 반복 생성될 때 `G1HeapRegionSize` 조정과 Object Pool 중 어떤 기준으로 선택합니까? (Allocation Rate, 객체 생명주기)
+  > Humongous Object가 단수명(Tick당 생성 후 바로 버림)이면 Object Pool이 적합하다. 재사용 주기가 짧고 Allocation Rate가 높아 GC 빈도를 낮추는 효과가 크기 때문이다. 객체 수명이 길거나 크기가 일정하지 않으면 `G1HeapRegionSize`를 2배로 늘려 Humongous 기준선을 높이는 방식이 더 단순하다.
 - 게임 Tick마다 1MB짜리 `byte[]` 배열을 생성하면 GC 세대 이동에 어떤 영향을 주고 JFR Allocation Profile로 어떻게 탐지합니까?
+  > 1MB 배열은 G1GC 기본 Region Size(1~32MB)에 따라 Humongous Object로 분류돼 Old 영역에 직접 할당되며, Minor GC가 회수하지 못해 Full GC 빈도가 증가한다. JFR Allocation Profile에서 `byte[]` 타입의 할당 크기와 누적 바이트가 Top에 나타나며, 생성 Stack Trace에서 Tick 처리 메서드를 확인할 수 있다.
 - Thread Pool에서 `ThreadLocal.remove()` 없이 Thread를 반환하면 어떤 Memory Leak이 발생하고, Spring `RequestScope`는 어떻게 안전하게 관리합니까?
+  > Thread Pool Thread는 재사용되므로 `remove()` 없이 반환하면 이전 요청의 ThreadLocal 값이 다음 요청 처리 Thread에 그대로 남아 데이터 오염과 Memory Leak이 발생한다. Spring `RequestScope`는 DispatcherServlet이 요청 완료 후 `RequestContextHolder.resetRequestAttributes()`를 호출해 ThreadLocal을 자동 정리하므로, 커스텀 Thread Pool에서 직접 ThreadLocal을 사용하면 반드시 `finally` 블록에서 `remove()`를 호출해야 한다.
 - `Phantom Reference`·`Cleaner` API와 try-with-resources 중 Native 자원(Direct Buffer, File Handle) 정리에 어떤 것을 선택하고 그 이유는 무엇입니까?
+  > 명시적 수명이 코드로 표현 가능한 경우는 try-with-resources가 우선이다. 객체가 GC 대상이 될 때까지 자원이 살아있어야 하는 경우(예: Direct Buffer 해제 알림)는 `Cleaner` API를 안전망으로 사용한다. `Phantom Reference`는 `Cleaner`보다 저수준이며, 대부분의 경우 `Cleaner`로 대체 가능하다. try-with-resources가 정리 시점이 명확해 예측 가능하고 디버깅이 용이하다.
 - ZGC로 전환 후 p99 Latency가 5ms 이하가 되었지만 Throughput이 10~15% 감소했습니다. 이 Trade-off를 수용할 기준은 무엇입니까?
+  > 실시간 게임 서버처럼 Latency SLA(예: 50ms 이하 응답)가 핵심 지표이고 Throughput 감소가 서버 증설 비용으로 충당 가능하면 수용한다. Throughput 감소로 필요한 추가 서버 비용과 Latency 스파이크로 발생하는 이탈률·사용자 경험 손실을 정량 비교해 결정한다. 배치성 작업처럼 Latency보다 Throughput이 중요한 서비스는 G1GC를 유지하는 것이 적합하다.
 - Custom ClassLoader가 Metaspace Leak을 일으킬 때 Eclipse MAT에서 ClassLoader 인스턴스를 추적하는 방법과 회수 조건은 무엇입니까?
+  > Eclipse MAT에서 `OQL: SELECT * FROM java.lang.ClassLoader` 로 전체 ClassLoader를 나열하고, Incoming References를 통해 GC Root에서 강한 참조 Chain이 남아 있는지 추적한다. ClassLoader가 회수되려면 해당 Loader가 로딩한 모든 Class 인스턴스와 ClassLoader 자신에 대한 강한 참조가 모두 끊겨야 한다. Plugin을 비활성화할 때 ClassLoader 참조를 WeakReference로 변환하고, 관련 Thread·Static Field를 모두 정리해야 GC가 Metaspace를 반환한다.
 - `jcmd VM.native_memory`에서 Reserved와 Committed의 차이는 무엇이고, RSS와 어느 쪽을 비교해야 합니까?
+  > Reserved는 JVM이 OS에 주소 공간을 예약했지만 아직 실제 메모리를 할당하지 않은 크기이고, Committed는 실제로 물리 메모리(또는 스왑)에 매핑된 크기다. RSS와 비교할 때는 Committed 합계를 사용한다. Reserved가 훨씬 크게 나타나는 것은 정상이며, Committed가 Container 메모리 제한에 근접하는지를 모니터링해야 OOM 리스크를 파악할 수 있다.
 
 ## 11. 30초 모범답변
 > JVM GC는 Reference Count가 아니라 GC Root에서의 도달 가능성을 기준으로 Heap 객체를 회수합니다. GC가 있어도 Global Map·Listener·ThreadLocal이 객체를 계속 참조하면 논리적 Memory Leak이 발생합니다. Process RSS는 Heap 외에 Thread Stack, Metaspace, Code Cache, Direct Buffer까지 포함하므로 Heap만 줄여도 RSS는 크게 감소하지 않을 수 있습니다.
@@ -197,7 +204,7 @@ WeakHashMap Key에 대한 강한 참조가 끊어지면 다음 Minor GC에서 �
 - 세대별 GC: Young(Eden→Survivor→Promote) Minor GC 빠름, Old Major GC 느림 — Tenuring Threshold 초과 시 Old로 이동.
 - 논리적 Memory Leak: Global Map·Listener·ThreadLocal의 미해제 참조 → Heap Dump Dominator Tree로 진단, Session 종료 시 명시적 remove.
 - Heap vs RSS: Heap 줄여도 Thread Stack×N + Metaspace + Code Cache + Direct Buffer가 크면 RSS 감소 미미 — Container 설정 시 Headroom 포함.
-- 참조 종류: Strong(항상 보존) → Soft(메모리 부족 시 회수) → Weak(강한 참조 없을 때 회수) → Phantom(Finalize 후 회수).
+- 참조 종류: Strong(항상 보존) → Soft(메모리 부족 시 회수) → Weak(강한 참조 없을 때 회수) → Phantom(GC가 회수 가능하다고 판단한 후, get()은 항상 null).
 - Weak Reference 캐시 주의: GC 시점 비결정적 → 크기·TTL 제어 불가 → Caffeine·Guava Cache처럼 명시적 상한 있는 캐시가 예측 가능.
 - Collector 선택: 이름이 아니라 Pause 목표·Throughput·Heap 크기로 선택 — G1GC(범용)·ZGC(극저지연)·Shenandoah(저지연).
 

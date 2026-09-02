@@ -216,12 +216,19 @@ Session 상태를 Redis나 DB에 영속화해 서버 재시작 후 Resume Token�
 ## 10. 예상 꼬리질문
 
 - 게임 Packet이 초당 20개 이상 오는 환경에서 별도 Ping을 추가하면 어떤 부작용이 있고, 마지막 Packet 시각으로 생존을 판단할 때 서버→클라이언트 단방향 Push 상황에서는 어떤 문제가 생기나요?
+  > 초당 20개 이상 Packet이 오는 환경에서 별도 Ping을 추가하면 불필요한 대역폭 소모와 처리 비용이 발생한다. 마지막 Packet 시각으로 생존을 판단하면 서버→클라이언트 단방향 Push 상황에서 클라이언트가 수신만 하고 송신하지 않으면 서버는 연결이 살아있어도 Timeout으로 오판할 수 있다. 이 경우 클라이언트가 주기적으로 빈 Ack Packet을 송신하거나, 수신 전용 연결에는 별도 Ping을 유지해야 한다.
 - PC에서 로그인한 상태로 모바일에서 같은 Account로 Reconnect를 시도했습니다. 기존 PC 연결을 강제 종료하는 정책과 두 연결을 병존 허용하는 정책 중 FPS·MMORPG 각각에서 어떤 쪽이 적합한가요?
+  > FPS처럼 실시간 조작 입력이 핵심인 장르에서는 두 입력 소스가 충돌하면 서버 권위 상태가 손상되므로 기존 PC 연결을 즉시 강제 종료하는 정책이 적합하다. MMORPG처럼 채팅·인벤토리 같은 비실시간 기능이 많은 장르에서는 읽기 전용 모바일 세션을 병존 허용하거나, 세션을 역할별로 분리해 입력 권한을 하나에만 부여하는 정책을 검토할 수 있다.
 - Delta Sync를 위한 Event Log 보관 Window를 30초로 설정했는데 Grace Period가 60초라면 어떤 문제가 생기나요?
+  > Grace Period(60초) 안에 재접속해도 Event Log Window(30초)가 더 짧으므로, 30~60초 사이에 끊긴 클라이언트는 Delta Sync에 필요한 이벤트를 서버에서 찾을 수 없다. 이 경우 Delta 재전송 대신 Full Snapshot 동기화로 폴백해야 하며, 비용이 크고 서버 부하가 증가한다. Event Log Window는 Grace Period 이상으로 설정하거나, Full Snapshot 폴백 경로를 명시적으로 구현해야 한다.
 - Heartbeat Ping Sequence를 이용해 서버와 클라이언트 Clock Offset을 추정하는 방법을 설명하세요. NTP가 있는 환경에서는 이 추정이 필요한가요?
+  > 클라이언트가 `t1`(송신 시각)을 Ping에 포함해 전송하면 서버는 `t2`(수신 시각)·`t3`(Pong 송신 시각)를 담아 응답한다. 클라이언트가 `t4`(수신 시각)를 기록해 `RTT = (t4 - t1) - (t3 - t2)`, `Offset = ((t2 - t1) + (t3 - t4)) / 2`로 계산한다. NTP가 있어도 게임 서버에서는 수십 ms 미만의 정밀한 입력 타임스탬프 검증이 필요하므로, NTP 보정 후에도 애플리케이션 레벨 Offset 추정을 함께 사용하는 것이 더 정확하다.
 - Grace Period 30초를 모두 소진했는데 재접속이 5초 만에 이루어졌다면, 캐릭터가 이미 Match에서 제거된 상황을 클라이언트에게 어떻게 안내하나요?
+  > Resume Token 검증 시 Session 상태를 확인해 이미 제거된 경우 `SESSION_EXPIRED` 오류 코드와 함께 Match 결과(진행 중·종료)를 클라이언트에 응답한다. 클라이언트는 이 응답을 받으면 재접속 흐름 대신 Match 종료 화면 또는 로비로 안내한다. 클라이언트가 오해하지 않도록 "세션이 만료돼 Match에서 제거됐습니다" 같은 명확한 사유 메시지를 포함한다.
 - Resume Token에 `jti`(JWT ID) 필드를 추가해 Replay 방지를 구현했는데 Redis에서 `jti`를 저장·조회하는 비용이 Reconnect 처리량을 제한하고 있습니다. 어떻게 최적화하나요?
+  > `jti` 블랙리스트 저장 대신 Whitelist 방식으로 전환한다. 현재 유효한 Token의 `jti`만 Redis에 보관하고 Reconnect 성공 시 즉시 삭제(1회성 사용)한다. 또한 `jti` Key를 Session ID 기반 Hash Tag로 고정 Slot에 배치해 Redis Cluster 조회를 단일 노드 내로 최소화한다. 대용량 폭풍 상황에서는 `jti` 조회를 로컬 Bloom Filter로 1차 필터링해 Redis 부하를 줄인다.
 - Reconnect 성공률이 특정 통신사 사용자에서만 60%로 낮습니다. 원인을 어떻게 진단하고 Grace Period나 Token TTL 조정 외에 어떤 대안을 검토하나요?
+  > 해당 통신사 사용자의 RTT 분포와 TCP 연결 수립 실패율을 Region별로 분리해 측정한다. 통신사 NAT Mapping 유지 시간이 Grace Period보다 짧을 경우 IP 변경으로 Token 검증이 실패할 수 있다. 대안으로 Resume Token에 IP를 바인딩하지 않고 Session ID + 서명만으로 검증하거나, QUIC 프로토콜로 전환해 IP 변경 시에도 Connection ID로 세션을 유지하는 방법을 검토한다.
 
 ## 11. 30초 모범답변
 

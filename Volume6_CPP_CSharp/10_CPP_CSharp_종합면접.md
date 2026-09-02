@@ -280,12 +280,19 @@ C++에서는 World를 `unique_ptr`·값으로 Tick Thread가 소유하고 다른
 ## 21. 예상 꼬리질문
 
 - C++ 서버에서 Session·Player 간 `shared_ptr` Cycle이 있어 Session 종료 후에도 수집되지 않습니다. Cycle을 Memory Dump 없이 확인하는 방법과, `weak_ptr`로 전환할 때 어느 쪽 참조를 `weak`로 바꾸는 기준은 무엇인가요?
+  > Memory Dump 없이 확인하는 방법은 Valgrind Massif나 AddressSanitizer Leak Sanitizer로 빌드해 프로세스 종료 시 여전히 살아 있는 `shared_ptr` 블록과 참조 카운트를 출력하거나, 소멸자 로그를 찍어 Session 종료 후 Player·Session 소멸자가 호출되지 않는 것을 확인합니다. `weak_ptr`로 전환할 때 기준은 수명이 더 짧은 쪽 또는 종속적인 쪽의 참조를 `weak`로 바꿉니다. Session이 Player를 소유하고 Player가 Session을 참조 역방향으로 가리키는 경우, Player의 Session 참조를 `weak_ptr<Session>`으로 바꿉니다.
 - C# 서버 운영 중 `GC.Collect(2)`를 명시 호출하는 코드를 발견했습니다. 이 호출이 p99를 줄이는 조건과 오히려 Full GC Pause를 악화시키는 조건을 각각 설명하고, dotnet-counters로 판단하는 방법을 말씀해 주세요.
+  > p99를 줄이는 조건은 Combat 종료·Phase 전환처럼 예측 가능한 Low Traffic 구간에서 Gen 2 Heap에 불필요한 장수 객체가 쌓인 상태일 때, 미리 수집해 이후 Spike를 방지하는 경우입니다. 악화시키는 조건은 Heap에 장수 객체가 충분히 쌓이지 않은 상태에서 호출하면 Full GC 비용만 지불하고 회수할 메모리가 적어 Pause 대비 효과가 없으며, 이후 GC 스케줄도 왜곡됩니다. dotnet-counters에서 `gen-2-size`가 Baseline 대비 2배 이상이고 `gen-2-gc-count`가 낮아 자연 수집이 드문 상황에서 호출하면 효과적입니다.
 - C++ 서버에서 `std::vector<Packet>` Move 후 동일 Vector에 `push_back`을 호출하면 어떤 결과가 나오고, 이 버그를 런타임 전에 탐지하는 설계 방법은 무엇인가요?
+  > Move된 `std::vector`는 표준에서 유효하지만 상태가 지정되지 않은(Valid but unspecified state) 상태입니다. 대부분의 구현에서 빈 벡터(size=0, capacity=0)가 되므로 `push_back`은 새 Allocation을 유발하며 Packet 데이터는 이미 이전된 상태라 논리적으로 의미 없는 데이터가 쌓입니다. 런타임 전 탐지 방법은 Clang Static Analyzer나 Clang Tidy의 `bugprone-use-after-move` 검사를 CI에 추가하면 Move된 객체 사용 패턴을 빌드 시 경고합니다.
 - C# 서버에서 `IAsyncDisposable` 구현의 `DisposeAsync` 중 예외가 발생했을 때 `await using` Scope에서 자원이 어떻게 처리되는지, 그리고 Dispose 전 예외와 Dispose 중 예외 각각에서 자원 정리가 보장되는 조건을 설명해 주세요.
+  > `await using` Scope 내부에서 예외가 발생하면 `DisposeAsync()`가 호출되지만 `DisposeAsync()` 중 예외가 다시 발생하면 두 예외가 충돌합니다. .NET은 원래 예외를 전파하고 `DisposeAsync` 예외는 무시합니다. Dispose 전 예외에서 자원 정리는 `await using`이 자동으로 `DisposeAsync()`를 호출하므로 보장됩니다. Dispose 중 예외는 `DisposeAsync()` 내부에서 모든 자원 정리 경로를 try/catch로 감싸 부분 실패 시에도 나머지 자원이 정리되도록 구현해야 보장됩니다.
 - C++ 게임 서버에서 64B 미만 소형 객체 Allocation이 초당 100만 회 발생할 때 `jemalloc` 교체와 Custom Pool 설계 중 어느 쪽을 먼저 검토하는 판단 기준과, 효과를 perf/VTune으로 측정하는 방법을 말씀해 주세요.
+  > `jemalloc` 교체를 먼저 검토합니다. 구현 변경 없이 Allocator 교체만으로 소형 객체 단편화와 Lock 경합을 줄일 수 있어 위험이 낮습니다. jemalloc은 Thread-local Cache(tcache)로 소형 객체를 처리해 Lock 없이 빠른 할당·해제를 제공합니다. 교체 후에도 개선이 미흡하면 생명주기가 명확한 객체 타입에 한해 Custom Pool을 설계합니다. 효과 측정은 perf stat으로 교체 전후 `malloc`/`free` 함수의 CPU Cycle을 비교하고, VTune Memory Access 분석으로 Fragmentation과 Cache Miss 감소 여부를 확인합니다.
 - C# 서버에서 32코어 환경에 Server GC를 적용했는데 GC Heap 수가 CPU 코어 수와 동일하게 늘어 메모리가 급증했습니다. Container CPU Limit에 따라 GC Heap 수를 제한하는 설정과, `GCHeapHardLimit` 도입 기준을 설명해 주세요.
+  > `DOTNET_GCHeapCount` 환경변수나 `runtimeconfig.json`의 `System.GC.HeapCount`로 GC Heap 수를 명시적으로 제한합니다. Container CPU Limit이 8코어면 `HeapCount=8`로 설정합니다. `GCHeapHardLimit`은 GC가 사용할 수 있는 총 메모리 상한을 바이트로 지정하며, Container Memory Limit의 75~80%로 설정하면 OOM Killer를 방지합니다. 도입 기준은 Container Memory Limit이 있는데 .NET이 이를 인식하지 못해 Limit을 초과하는 상황, 또는 GC Heap이 전체 메모리를 점진적으로 소비해 다른 프로세스와 메모리 경쟁이 발생하는 경우입니다.
 - C++과 C# 서버 각각에서 핸들러 Hot Reload(패치 없이 설정·로직 교체) 구현 시, 진행 중인 요청이 이전 핸들러를 참조하는 동안 파괴되지 않도록 수명을 보장하는 방법을 언어별로 비교해 주세요. (C++: `shared_ptr` Snapshot·Epoch, C#: Reference Snapshot·`Interlocked.Exchange`)
+  > C++에서는 새 핸들러를 `std::shared_ptr<Handler>`로 빌드하고 `std::atomic_store(&currentHandler, newHandler)`로 원자적으로 교체합니다. 진행 중인 요청은 교체 전 `shared_ptr` 사본을 보유하므로 새 핸들러가 배포돼도 이전 핸들러의 참조 카운트가 0이 될 때까지 파괴되지 않습니다. Epoch 방식은 RCU(Read-Copy-Update) 패턴으로 Reader가 Epoch를 기록해 현재 Epoch에 접근 중인 Reader가 없어질 때 이전 핸들러를 해제합니다. C#에서는 `Interlocked.Exchange(ref _handler, newHandler)`로 원자적으로 교체하고 이전 참조를 반환받습니다. GC가 이전 핸들러를 자동으로 관리하므로 진행 중인 요청이 참조를 놓을 때까지 수집되지 않습니다. 두 방식 모두 교체 중 읽기는 Lock 없이 가능하고 쓰기는 단일 원자 연산으로 처리하는 것이 핵심입니다.
 
 ## 22. 30초 모범답변
 

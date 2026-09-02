@@ -174,7 +174,7 @@ bool ValidateHitscan(PlayerHistory& history, float clientFireTime,
 
 ## 7. 게임 서버·백엔드 실무 예시
 
-Server는 20Hz(50ms 간격) 기준으로 최대 250ms Window(5개 이상 상태)를 Ring Buffer에 보관한다. 공격 판정 시 Client Timestamp를 RTT 추정으로 Server 시간으로 변환하고 Window 내로 Clamp한다. Weapon Cooldown과 Sequence 범위도 함께 검증해 타임스탬프 조작을 차단한다.
+Server는 20Hz(50ms 간격) 기준으로 Ring Buffer에 Player 위치·Hitbox 히스토리를 보관한다. Valve Source Engine은 최대 1초(1000ms) 분량의 히스토리를 유지하며, 실제 운영 서버는 RTT 분포와 공정성 정책에 따라 최대 Rewind Window를 별도로 제한한다(예: 250ms 상한). 공격 판정 시 Client Timestamp를 RTT 추정으로 Server 시간으로 변환하고 Window 내로 Clamp한다. Weapon Cooldown과 Sequence 범위도 함께 검증해 타임스탬프 조작을 차단한다.
 
 Snapshot Jitter를 측정해 `bufferMs`를 동적으로 조절하고, Buffer Underrun 빈도·Rewind 거리·보정 Hit 비율을 지표로 수집한다.
 
@@ -211,12 +211,19 @@ Quaternion을 Linear Interpolation(Lerp)하면 길이가 1에서 벗어나 정�
 ## 10. 예상 꼬리질문
 
 - 원격 플레이어가 순간이동(Teleport)을 했는데 Interpolation이 순간이동 전 위치에서 후 위치까지 부드럽게 보간해버려 벽을 통과하는 시각 버그가 발생했습니다. 어떻게 방지하나요?
+  > Snapshot에 Teleport 플래그를 포함시키고, 클라이언트가 해당 플래그를 감지하면 Interpolation을 건너뛰고 즉시 목표 위치를 적용합니다. 또는 두 Snapshot 사이 거리가 일정 임계값(예: 5m)을 초과할 때 자동으로 Buffer를 비우고 최신 위치를 즉시 적용합니다. 보간 구간에서 벽 관통 여부를 검사하는 방법도 있지만 비용이 높으므로 플래그 방식을 우선 적용합니다.
 - 20Hz Snapshot 서버에서 Ring Buffer를 250ms Window로 설정하면 최소 몇 개의 Snapshot Entry가 필요하고, 여유분은 몇 개로 잡아야 하나요?
+  > 20Hz에서 Tick 간격은 50ms이므로 250ms를 커버하려면 최소 5개(250÷50)가 필요합니다. Jitter와 Lag Spike에서 일부 Snapshot이 연달아 도착하거나 손실될 수 있으므로 안전 여유로 2배인 10개를 권장합니다. 실제 운영에서는 Jitter p99 기준으로 Window를 설정하고, Window ms ÷ Tick ms × 2를 Ring Buffer 크기로 잡으면 됩니다.
 - Lag Compensation History에 Position·Rotation 외에 Hitbox Capsule 크기를 저장하지 않으면 어떤 버그가 발생하나요?
+  > 웅크리기, 점프, 특수 자세처럼 캐릭터 자세가 바뀔 때 Hitbox 크기도 함께 변경됩니다. Capsule 크기를 저장하지 않으면 Rewind 시 현재 자세의 Hitbox를 과거 위치에 배치하므로, 과거에 웅크리고 있던 캐릭터를 서 있는 크기의 Hitbox로 판정하게 됩니다. 결과적으로 피해자가 웅크려 회피한 상황에서도 Hit 판정이 발생하는 공정성 버그가 생깁니다.
 - 서버 Tick이 100ms 지연되는 Lag Spike가 발생했을 때 Ring Buffer에 빈 Gap이 생겨 Rewind에서 적합한 Snapshot을 찾지 못하는 경우를 어떻게 처리하나요?
+  > Gap 구간의 발사 이벤트에 대해서는 Gap 직전의 가장 최근 Snapshot을 사용해 근사 판정합니다. 판정 결과를 신뢰 불가 상태로 표시하고, 보정 Hit 비율 지표에 별도로 집계합니다. Lag Spike가 100ms를 초과하면 해당 구간의 발사 이벤트를 아예 무효 처리하고 클라이언트에 재시도를 안내하는 정책도 고려합니다. Ring Buffer 크기를 Tick 간격의 3배 이상으로 설정하면 일시적 Spike로 인한 Gap 발생을 줄일 수 있습니다.
 - 경쟁 FPS에서 RTT 200ms 이상 플레이어를 별도 Match에 라우팅하는 정책을 도입했을 때, 대기열 시간이 3배로 늘어나는 문제를 어떻게 완화하나요?
+  > 절대 RTT 임계값(200ms) 대신 Match 내 플레이어 RTT 편차 기준으로 그룹을 나눕니다. RTT 200ms 플레이어도 다른 플레이어들이 비슷한 수준이면 같은 Match에 수용합니다. 대기열 시간이 임계값(예: 3분)을 초과하면 RTT 허용 범위를 점진적으로 완화해 Match 성사율을 유지합니다. 이 방식으로 공정성을 유지하면서 대기열 부담을 줄일 수 있습니다.
 - 피해자가 "벽 뒤로 숨었는데 맞았다"고 신고했습니다. Lag Compensation 로그에서 어떤 정보를 수집해야 정상 보정인지 Cheat인지 판별할 수 있나요?
+  > 로그에 공격자 Client Timestamp, 변환된 Server Timestamp, Rewind된 시점의 피해자 Hitbox 좌표, 발사 Ray 벡터, Ray-Hitbox 교차 결과를 남겨야 합니다. 피해자가 은폐를 완료한 Server Timestamp와 Rewind 시점을 비교해 Rewind 시점이 은폐 완료 이전이라면 정상 보정입니다. Cheat 판별 기준으로는 공격자 Timestamp가 Weapon Cooldown 범위 밖이거나 Sequence 불일치 시 비정상으로 분류합니다.
 - bufferMs를 Jitter p95 기준으로 동적으로 늘렸더니 200ms까지 증가해 UI 입력 반응이 느리게 느껴진다는 피드백이 왔습니다. 상한을 몇 ms로 제한하고 초과 시 어떻게 처리하나요?
+  > FPS 장르는 최대 150ms, MMORPG는 200ms를 bufferMs 상한으로 권장합니다. 상한 초과 시 bufferMs를 상한으로 고정하고 부족한 Buffer를 Extrapolation(최대 100ms)으로 보완합니다. Buffer Underrun 빈도가 분당 20회 이상이면 상한을 10ms씩 단계적으로 올리고, 반응 지연 피드백이 증가하면 낮춥니다. bufferMs와 Underrun 빈도를 실시간 지표로 수집해 장르별 적정값을 지속적으로 조정합니다.
 
 ## 11. 30초 모범답변
 

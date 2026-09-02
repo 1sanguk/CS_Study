@@ -188,12 +188,19 @@ Data Race: JMM 차원에서 동기화 없이 두 Thread가 같은 변수에 접�
 
 ## 10. 예상 꼬리질문
 - CAS ABA 문제가 발생하는 게임 서버 시나리오(Session 풀 재사용)와 `AtomicStampedReference`로 Stamp를 같이 교체해 해결하는 방법은 무엇입니까?
+  > Session 객체가 풀에서 꺼내졌다가 반환된 뒤 다시 꺼내지면 CAS가 동일 참조를 보고 변경이 없다고 오판한다. `AtomicStampedReference`는 참조와 정수 Stamp를 함께 CAS하므로 같은 객체라도 Stamp가 달라져 ABA를 탐지할 수 있다.
 - Tick 루프에서 `ReentrantLock.tryLock(0, MILLISECONDS)`으로 Lock 획득 실패 시 어떤 전략을 취하고(스킵 vs 큐 적재), fairness=true 설정이 Throughput에 미치는 영향은 무엇입니까?
+  > 게임 Tick처럼 낡은 작업 처리가 무의미하면 실패 시 스킵하고 다음 Tick에 최신 상태로 재시도한다. fairness=true는 FIFO 대기열로 Starvation을 막지만 OS Thread 스케줄링 비용이 추가되어 Throughput이 30~50% 낮아질 수 있다.
 - Room 100개를 FixedThreadPool(n=CPU 코어 수) vs ForkJoinPool 중 어떤 기준으로 선택하고 async-profiler `--event cpu` 결과로 어떻게 병목을 검증합니까?
+  > Room Tick이 I/O 없는 순수 CPU 연산이면 FixedThreadPool(코어 수)이 적합하다. ForkJoinPool은 Work-stealing이 있어 작업 크기가 불균일할 때 유리하지만 Blocking I/O가 섞이면 Thread 고갈 위험이 있다. async-profiler CPU Flame Graph에서 Thread별 핫 메서드와 대기 비율을 보고 판단한다.
 - `volatile RoomSnapshot`을 교체할 때 Snapshot 내부 `List`를 `List.copyOf()`로 Immutable화하는 비용이 크면 CopyOnWriteArrayList vs Epoch-based 읽기 전용 공개 중 어떤 대안을 선택합니까?
+  > 쓰기가 드물고 읽기가 많으면 CopyOnWriteArrayList가 단순하다. 쓰기가 잦거나 List가 크면 Epoch 기반으로 짝수 Epoch에서 Writer가 쓰고 홀수 Epoch에서 Reader가 읽는 방식으로 복사 비용을 줄일 수 있다.
 - `ThreadLocal<ByteBuffer>`을 Tick마다 재사용하는 서버에서 `clear()` 누락으로 이전 Tick 데이터가 혼입됐을 때 JFR Custom Event 또는 `-XX:+PrintStringDeduplicationStatistics`로 어떻게 탐지합니까?
+  > JFR Custom Event에 ByteBuffer position/limit과 Tick ID를 기록해 Tick 시작 시 position이 0인지 Assert한다. 혼입이 의심되면 버퍼 첫 바이트를 이전 Tick 마커와 비교해 잔여 데이터를 탐지한다.
 - `synchronized` 블록 안에서 DB 조회 RPC 호출이 있어 p99 Latency가 200ms를 넘습니다. Deadlock은 없는데 Monitor Wait이 지배적일 때 Lock 범위를 어떻게 축소하고 async-profiler Lock Contention 보고서로 어떻게 검증합니까?
+  > DB 조회를 Lock 밖으로 빼 결과를 받은 뒤 Lock 안에서 상태만 갱신한다. async-profiler `--event lock` 보고서에서 Monitor 보유 시간과 대기자 수를 확인하고, 축소 후 Monitor Wait 비율이 10% 이하로 줄었는지 검증한다.
 - `AtomicLong` vs `LongAdder` 선택 기준이 되는 경합 임계값을 JMH `@Group`으로 측정하는 방법과 접속자 카운터에서 `LongAdder.sum()`의 근사값을 허용할 수 있는 조건은 무엇입니까?
+  > JMH `@Group`으로 Thread 수를 1→16→64로 늘리며 TPS를 측정해 AtomicLong Throughput이 꺾이는 지점(보통 8~16 Thread)을 LongAdder 전환 임계값으로 잡는다. 접속자 수 모니터링처럼 수 ms 오차가 허용되는 경우에만 근사값을 사용한다.
 
 ## 11. 30초 모범답변
 > Java Memory Model은 Thread 간 가시성과 순서를 Happens-before로 정의합니다. synchronized는 상호 배제와 가시성을, volatile은 단일 변수 가시성만 제공합니다. volatile count++는 Read-Modify-Write가 원자적이지 않아 Lost Update가 발생하므로 AtomicInteger 또는 synchronized를 사용합니다. 복합 불변식은 Lock 또는 Immutable 상태를 AtomicReference로 교체하는 방식으로 보호합니다.

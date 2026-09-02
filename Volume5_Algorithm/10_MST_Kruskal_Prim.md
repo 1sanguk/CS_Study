@@ -360,12 +360,19 @@ MST 경로 상 최대 Edge를 찾는 데 O(V) 시간이 필요하고, LCA + Spar
 ## 20. 예상 꼬리질문
 
 - 거점 50개 Graph에서 Kruskal로 MST를 구했는데 실행 시간이 예상보다 10배 느렸습니다. 병목 지점을 어떻게 특정하고 어떤 수치를 먼저 확인하겠습니까?
+  > 먼저 Edge 수를 확인한다. Edge가 V²에 가까운 Dense Graph라면 정렬 비용이 지배한다. 다음으로 Union-Find 구현에 경로 압축과 랭크 병합이 모두 적용되어 있는지 점검한다. 둘 중 하나라도 빠지면 Find가 O(N)까지 느려진다. 프로파일러로 정렬, Find, Union 각각의 시간 비중을 측정하고, Find 호출당 평균 경로 길이를 출력해 Tree 퇴화 여부를 진단한다.
 - Prim Heap 구현에서 같은 목적지 Vertex에 대해 오래된 Entry가 수천 개 쌓인 상황을 발견했습니다. 메모리·성능 영향과 해결 방법을 설명하세요.
+  > Lazy Heap 방식에서는 Tree에 새 Vertex가 추가될 때 나가는 Edge를 모두 Push해 같은 목적지에 대한 Entry가 여러 개 생긴다. 이 오래된 Entry들이 누적되면 Heap 크기가 O(E)까지 커져 메모리 사용량이 증가하고 Pop 시 오래된 Entry를 건너뛰는 비용이 누적된다. 해결 방법은 각 바깥 Vertex의 현재 최소 Key를 유지하고 Heap에서 꺼낼 때 이미 Tree에 포함된 Vertex면 Skip하는 것이다. Decrease-Key를 지원하는 Indexed Priority Queue로 전환하면 오래된 Entry 자체를 없앨 수 있다.
 - MST 계산 결과에서 선택된 Edge 수가 V-1보다 적을 때, 코드 버그인지 Graph 입력 문제인지 어떻게 구별하겠습니까?
+  > 먼저 Graph 입력의 연결성을 검증한다. BFS나 DFS로 모든 Vertex가 하나의 Component에 속하는지 확인한다. Connected이면 코드 버그다. 의심 지점은 Union-Find에서 같은 Component 판정이 잘못돼 유효한 Edge를 건너뛰거나, V-1개 선택 전에 루프가 조기 종료되는 경우다. 불연결 Graph라면 MST가 존재하지 않으며 Minimum Spanning Forest가 결과임을 API 계약에 명시해야 한다.
 - 게임 거점 Network에 신규 지역이 추가되어 Edge가 200개 늘어났습니다. MST를 전체 재계산하지 않고 증분 갱신하는 방법과 그것이 불가능한 경우를 설명하세요.
+  > 새 Edge (u, v, w)를 하나씩 추가할 때는 현재 MST에서 u와 v를 잇는 경로 상 최대 Weight Edge를 찾고, 새 Edge w가 더 작으면 기존 최대 Edge를 교체한다. 이 작업은 O(V)이며 LCA + Sparse Table을 사전 구축하면 O(log V)로 줄일 수 있다. 증분 갱신이 불가능한 경우는 Edge 삭제가 동반될 때다. 삭제는 MST 구조를 더 복잡하게 바꾸어 Link-Cut Tree 없이는 효율적으로 처리하기 어렵다.
 - 두 거점을 잇는 Edge Weight가 동시에 3개 이상 동점일 때, Kruskal 결과 MST가 운영 환경마다 달라지는 문제가 발생했습니다. 결정성을 보장하려면 어떻게 처리하겠습니까?
+  > 정렬 Key를 (weight, min(u,v), max(u,v))처럼 Edge를 유일하게 식별하는 보조 Key로 확장해 동점 Edge의 순서를 결정적으로 만든다. Java의 Arrays.sort는 Stable Sort이므로 추가 Key 없이 입력 순서를 보조 기준으로 사용할 수도 있다. 중요한 것은 어떤 환경에서도 동일한 정렬 기준이 일관되게 적용되는 것이며, 기준을 코드 주석과 문서에 명시해 재현 가능성을 보장한다.
 - 서버 장애로 MST Edge 1개가 끊겼을 때, Kruskal 전체 재계산 없이 다음 최소 비용 Edge로 교체하는 방법과 그 복잡도를 설명하세요.
+  > 끊긴 Edge (u, v)를 제거하면 MST가 두 Component로 분리된다. 두 Component를 잇는 후보 Edge 중 Weight가 최소인 Edge를 선택해 MST에 추가한다. 후보 Edge는 원본 Graph에서 두 Component를 가로지르는 Edge를 선형 탐색해 O(E)에 찾는다. 사전에 MST의 각 Edge에 대해 "대체 Edge"를 미리 계산해 두는 방식은 O(V²) 전처리 후 O(1) 교체가 가능하지만 구현 복잡도가 높다.
 - Union-Find 없이 인접 행렬만으로 MST를 구현해야 하는 제약이 생겼을 때 어떤 알고리즘을 선택하고 어떻게 구현하겠습니까?
+  > Prim의 O(V²) 인접 행렬 구현을 선택한다. visited 배열로 Tree에 포함된 Vertex를 관리하고, key[v] 배열에 각 바깥 Vertex의 현재 최소 연결 비용을 유지한다. 매 단계 미방문 Vertex 중 key 값이 최소인 것을 선형 탐색(O(V))으로 찾아 Tree에 추가하고, 인접 행렬 한 행을 읽어 key 값을 갱신한다. V번 반복으로 전체 O(V²)이며 Dense Graph에서는 Heap 방식과 동등하거나 더 빠를 수 있다.
 
 ## 21. 30초 모범답변
 

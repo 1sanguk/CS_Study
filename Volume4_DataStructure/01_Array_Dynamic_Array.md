@@ -309,12 +309,19 @@ Big-O는 같아도 메모리 배치가 다르다. 연결 리스트는 각 노드
 
 ## 10. 예상 꼬리질문
 - 재할당이 게임 틱 p99에 실제로 나타나는지 어떻게 확인하나요?
+  > 재할당이 발생하는 시점을 로그나 메트릭으로 기록하고 틱 처리 시간 p99 시계열과 대조한다. 프로파일러로 메모리 할당 이벤트를 추적하거나 Allocation Rate 메트릭을 틱 단위로 수집해 스파이크가 재할당과 겹치는지 확인한다.
 - Swap-and-pop으로 삭제했을 때 Handle→Index Map 갱신을 빠뜨리면 어떤 버그가 생기나요?
+  > 이동된 마지막 원소의 Handle이 이전 Index를 가리키게 되어 해당 Handle로 접근하면 잘못된 Entity를 참조하는 Stale Reference 버그가 발생한다. 삭제된 Entity의 Handle이 새 Entity를 가리키는 ABA 성격의 문제도 생길 수 있어 Generation 카운터로 검증해야 한다.
 - `reserve()` 이후에도 재할당이 발생할 수 있는 경우는 어떤 경우인가요?
+  > `reserve(n)` 호출 이후 삽입 횟수가 n을 초과하면 다시 재할당이 발생한다. 예측보다 많은 원소가 추가되거나 Capacity 상한을 잘못 산정하면 Hot Path에서 재할당이 재발한다. Reserve 기준을 실측 p99 값보다 여유 있게 잡고 실제 Capacity를 모니터링해야 한다.
 - 네트워크 스레드와 로직 스레드 사이에 Lock-free Queue를 쓸 때 ABA 문제는 어떻게 처리하나요?
+  > ABA 문제는 CAS 연산이 포인터 값만 비교할 때 주소가 같아도 다른 객체가 재사용된 경우를 구분하지 못해 발생한다. Tagged Pointer(포인터 하위 비트에 Generation 인코딩), Hazard Pointer, 또는 Epoch-based Memory Reclamation으로 해제된 노드가 재사용되기 전에 안전하게 제거한다.
 - `vector<Player>`와 `vector<unique_ptr<Player>>` 중 Entity 시스템에서 어느 쪽이 Cache 관점에서 유리하고 언제 바꾸나요?
+  > `vector<Player>`는 Player 본체가 연속 배치되어 순회 시 Cache 친화적이나 재할당 시 이동 비용이 크고 참조가 무효화된다. `vector<unique_ptr<Player>>`는 포인터만 연속이고 Player 주소가 안정적이지만 포인터 추적마다 Cache Miss가 발생한다. 외부 참조 안정성이 필수이거나 이동 비용이 크면 `unique_ptr`, 순회 성능이 우선이면 값 저장을 선택하고 실측으로 결정한다.
 - ECS에서 Component를 별도 배열로 분리하면 Swap-and-pop 삭제 시 어떤 추가 작업이 필요한가요?
+  > Entity가 여러 Component 배열(Position, Velocity 등)에 각각 Index를 가지므로 Swap-and-pop 삭제 시 모든 Component 배열에서 해당 Entity의 Index를 동기적으로 갱신해야 한다. 하나라도 빠뜨리면 다른 Component에서 잘못된 Entity 데이터를 참조하는 불일치 버그가 발생한다.
 - 최대 연결 수를 알 수 없는 채팅 서버에서 Packet 배열의 Reserve 기준을 어떻게 잡나요?
+  > 과거 운영 데이터에서 동시 연결 수와 틱당 수신 Packet 수의 p95~p99를 측정해 초기 Reserve 기준으로 삼는다. 연결별·틱별 상한(예: 연결당 최대 Packet 수 × 최대 연결 수)을 설정해 Reserve가 무제한으로 커지지 않게 한다. Capacity 대비 실제 Size 비율을 모니터링해 기준을 주기적으로 재조정한다.
 
 ## 11. 30초 모범답변
 > Array는 연속 메모리 덕분에 O(1) 인덱스 접근과 Hardware Prefetch 이점이 있고, Dynamic Array는 Capacity가 가득 차면 더 큰 블록으로 재할당해 끝 삽입을 분할 상환 O(1)로 제공합니다. 게임 서버에서 실무 포인트는 두 가지입니다. 재할당이 발생하는 순간 삽입은 O(N)으로 틱 p99 스파이크가 날 수 있어서 과거 p99 원소 수로 미리 `reserve()`합니다. 그리고 재할당이 일어나면 기존 포인터·참조가 모두 무효화되기 때문에 Entity 시스템에서는 직접 포인터 대신 Handle과 Generation으로 참조를 검증합니다.

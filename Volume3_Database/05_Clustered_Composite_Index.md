@@ -243,12 +243,25 @@ Secondary Index로 조건에 맞는 행을 찾은 뒤 인덱스에 없는 열이
 ## 10. 예상 꼬리질문
 
 - 범위 조건 이후 열은 어떻게 사용되나요?
+  > 범위 조건 이후 열은 탐색 경계를 추가로 좁히기 어렵지만 Index Condition Pushdown(ICP)으로 잔여 필터로 적용될 수 있다. 스토리지 엔진이 인덱스에서 행을 읽을 때 뒤 열 조건을 직접 평가해 불필요한 행을 서버 계층으로 올리기 전에 걸러낸다. 탐색 범위와 필터 적용은 구분해야 한다.
+
 - Composite Index가 ORDER BY를 만족하는 조건은 무엇인가요?
+  > WHERE 동등 조건으로 고정된 Prefix 뒤의 열 순서가 ORDER BY와 방향까지 일치해야 Sort 단계를 생략할 수 있다. 혼합 방향(ASC/DESC)이 섞이면 DBMS와 버전에 따라 지원 여부가 다를 수 있으므로 실행 계획으로 실제 Sort 발생 여부를 확인한다.
+
 - InnoDB에서 PK가 Secondary Index에 어떤 영향을 주나요?
+  > InnoDB의 Secondary Index 리프는 Key 값과 함께 PK 값을 Row Locator로 저장한다. PK가 클수록 모든 Secondary Index 리프에 반복되어 인덱스 전체 크기가 증가한다. 또한 Secondary Index로 행을 찾은 뒤 PK를 이용해 Clustered Index를 한 번 더 탐색하는 Lookup이 발생할 수 있다.
+
 - 단조 증가 PK와 UUID PK의 차이는 무엇인가요?
+  > 단조 증가 PK는 항상 마지막 페이지에 삽입되어 Page Split이 적지만 해당 페이지가 Hot Spot이 될 수 있다. UUID PK는 삽입 위치가 무작위라 Page Split이 잦고 B+Tree 내부 단편화가 증가한다. 크기도 CHAR(36) 기준 36바이트로 커서 Secondary Index에 반복 저장되는 비용도 높다. 시간 순서 UUID(UUIDv7)나 짧은 대리 BIGINT가 대안이 될 수 있다.
+
 - INCLUDE 열이 Key 열과 어떻게 다른가요?
+  > INCLUDE 열은 인덱스 리프에만 저장되고 탐색 경계나 정렬에는 사용되지 않는다. Key 열은 B+Tree 탐색과 정렬에 참여하지만 INCLUDE 열은 Covering 효과만 제공한다. 인덱스 크기는 늘지만 Key 열 수를 줄여 탐색 효율을 유지하면서 Lookup 없이 필요한 열을 함께 반환할 수 있다.
+
 - Index Intersection이란 무엇인가요?
+  > 단일 쿼리에서 두 개 이상의 인덱스를 각각 탐색한 결과를 교집합하여 최종 행을 구하는 실행 방식이다. 일부 DBMS는 지원하지만 각 인덱스 Lookup과 교집합 연산 비용이 추가된다. Composite Index로 한 번에 탐색하는 것보다 느릴 수 있어 실행 계획으로 비교한다.
+
 - 인덱스 열 순서를 바꿔야 할 때 어떻게 하나요?
+  > 새 인덱스를 먼저 생성하고 쿼리가 새 인덱스를 사용하는지 실행 계획으로 확인한 뒤 이전 인덱스를 제거하는 순서로 진행한다. 운영 중 인덱스 생성은 Online DDL 지원 여부와 테이블 Lock 시간을 확인하고, 쓰기 부하가 낮은 시간대에 수행하거나 gh-ost 같은 무중단 도구를 검토한다.
 
 ## 11. 30초 모범답변
 

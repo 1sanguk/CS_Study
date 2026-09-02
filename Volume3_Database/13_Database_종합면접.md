@@ -285,12 +285,19 @@ CPU·I/O·Memory 등 인프라 지표를 먼저 확인한다. Lock Blocking Chai
 ## 10. 예상 꼬리질문
 
 - 자연키와 대리키는 어떻게 선택하나요?
+  > 자연키는 업무 의미를 갖지만 변경 가능성이 있어 FK로 참조 중일 때 수정 비용이 크다. 대리키(AUTO_INCREMENT, UUID)는 업무와 무관하게 안정적이지만 업무상 유일성을 별도 UNIQUE 제약으로 표현해야 한다. 값이 변할 가능성이 있거나 FK 참조가 많은 경우 대리키를 선택한다.
 - Nested Loop·Hash·Merge Join을 비교해 주세요.
+  > Nested Loop Join은 외부 테이블의 각 행마다 내부 테이블을 탐색하며 내부 테이블에 Index가 있을 때 유리하고 소규모 결과에 적합하다. Hash Join은 작은 테이블로 Hash Table을 만들어 큰 테이블과 매칭하며 동등 조건 대용량에 강하지만 메모리를 많이 사용한다. Merge Join은 두 테이블이 정렬되어 있을 때 순차적으로 병합하며 정렬 비용을 제거할 수 있다.
 - Outbox 패턴이 DB와 메시지 발행의 정합성을 어떻게 보장하나요?
+  > DB Transaction 내에서 비즈니스 데이터와 Outbox 이벤트를 함께 Commit해 두 작업의 원자성을 보장한다. 별도 Outbox Publisher 프로세스가 Outbox 테이블을 폴링하거나 CDC로 이벤트를 감지해 메시지 브로커로 발행하고 발행 성공 시 레코드를 삭제한다. 재시도가 멱등하도록 이벤트 ID로 중복을 걸러낸다.
 - Cache 장애 시 원본 DB를 어떻게 보호하나요?
+  > Cache 장애 시 모든 요청이 DB로 직접 전달되는 Cache Stampede와 Thundering Herd를 막기 위해 짧은 Timeout과 Circuit Breaker를 적용한다. Circuit Breaker가 열리면 DB 요청을 차단하거나 일부 기능을 강등(Degraded Mode)해 원본이 무너지지 않도록 한다. 필수 기능 외 비필수 조회는 오류 응답으로 대체한다.
 - 단일 DB에서 Sharding이 필요한 시점은 언제인가요?
+  > Index 최적화, 쿼리 튜닝, 수직 확장, Read Replica로 읽기 분산까지 적용한 뒤에도 Primary 쓰기 처리량 또는 단일 노드 저장 용량이 한계에 도달했을 때 Sharding을 검토한다. Sharding은 데이터 모델과 운영 절차 전체를 바꾸므로 측정 가능한 한계 수치를 기준으로 결정하며 서두르지 않는다.
 - Recovery Runbook을 어떻게 검증하나요?
+  > 정기적으로 실제 장애 시나리오(Failover, Restore, Shard 재구성 등)를 스테이징 환경에서 모의 실행(Game Day, Chaos Engineering)해 RTO·RPO 목표를 달성하는지 확인한다. Runbook의 각 단계를 자동화하고 실행 결과를 기록해 절차가 최신 상태를 유지하는지 점검한다.
 - 면접에서 DB 설계를 설명할 때 어떤 순서로 답변하면 좋나요?
+  > 개념을 한 문장으로 정의한 뒤 해결하려는 문제와 핵심 동작을 설명하고, 정확성·성능·운영 Trade-off를 비교한다. 게임 서버 구체 사례와 실패·복구 경험을 붙이고 확인할 지표로 마무리하면 설계 선택의 근거를 체계적으로 보여줄 수 있다.
 
 ## 11. 30초 모범답변
 

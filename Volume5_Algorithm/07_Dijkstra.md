@@ -417,12 +417,19 @@ Cache 구조는 `(출발 Zone, 목적 Zone, Map Version)` 조합을 Key로 씁�
 ## 18. 예상 꼬리질문
 
 - 게임 Zone 이동 비용이 모두 동일한 상황에서도 Dijkstra를 그대로 사용하겠습니까, 아니면 다른 알고리즘으로 교체하겠습니까? 그 판단 근거는 무엇인가요?
+  > 비용이 모두 동일하면 BFS로 충분하다. BFS는 O(V+E)로 Dijkstra의 O((V+E) log V)보다 빠르고 Priority Queue 없이 단순 Queue만 사용해 구현이 간결하다. Dijkstra는 Priority Queue Allocation과 Push/Pop의 로그 비용이 추가되므로 불필요한 오버헤드가 생긴다. 향후 비용이 달라질 가능성이 있다면 Dijkstra를 유지하되, 현재 요구사항에서는 BFS가 더 적합하다.
 - 가중치가 0과 1뿐이면 어떻게 최적화하나요?
+  > 0-1 BFS를 사용한다. Deque(양방향 Queue)를 사용해 비용 0 Edge로 이동하는 Vertex는 Deque 앞(front)에 삽입하고, 비용 1 Edge는 Deque 뒤(back)에 삽입한다. 이렇게 하면 Deque 앞에서 꺼낸 Vertex가 항상 현재까지의 최소 비용을 가지므로 Priority Queue 없이 O(V+E)에 최단 거리를 구할 수 있다. Dijkstra의 O((V+E) log V) 대비 로그 인수를 제거한다.
 - Pathfinding Worker Thread가 하나뿐인데 대형 Graph에서 탐색 시간이 가변적으로 길어질 때 Tick Budget을 보호하는 방법은 무엇인가요?
+  > 탐색 상태(Queue, visited, dist 배열)를 유지하면서 Tick마다 처리할 최대 Node 수 또는 시간 상한을 두는 Incremental Pathfinding을 사용한다. Budget 초과 시 현재까지 발견한 부분 경로를 임시 결과로 사용하거나, 이전 프레임의 경로를 유지한다. 요청을 취소 가능하게 설계해 플레이어가 목적지를 바꾸면 진행 중인 탐색을 중단한다. 탐색 시간 p99를 모니터링해 Budget 설정을 조정한다.
 - 같은 비용 경로의 Tie-break를 어떻게 정하나요?
+  > 비용이 같은 최단 경로가 여러 개일 때 추가 기준으로 결정성을 부여한다. 일반적인 방법은 비용 동점 시 Hop 수가 적은 경로(Edge 개수 최소)를 선택하거나, Vertex ID가 사전순으로 작은 경로를 선택하는 것이다. 구현에서는 Priority Queue의 비교 Key를 (cost, hop_count, vertex_id) 순으로 구성해 자동으로 Tie-break를 처리한다. Replay 결과 결정성이 필요하면 Tie-break 기준을 코드와 문서에 명시한다.
 - 수천 명의 플레이어가 서로 다른 시작 위치에서 같은 Boss Zone까지 최단 경로를 반복 요청할 때, 매번 독립 탐색 대신 어떤 구조로 비용을 줄이겠습니까?
+  > Boss Zone을 단일 시작점으로 역방향 Dijkstra를 한 번 수행하면 모든 Zone에서 Boss Zone까지의 최단 거리를 한 번에 구할 수 있다(역방향 인접 리스트 필요). Map이 정적이라면 서버 시작 시 사전 계산해 Cache로 저장하고 Cache Key에 Map Version을 포함한다. Map이 변경될 때만 해당 영역의 거리를 재계산하는 Incremental 방식으로 재계산 비용을 줄인다.
 - Dijkstra 기반 경로 탐색과 A* 탐색을 같은 게임 서버에서 혼용한다면 어떤 기준으로 어떤 상황에 각각 적용하겠습니까?
+  > Dijkstra는 단일 시작점에서 모든 Vertex까지의 최단 거리가 필요할 때, 또는 신뢰할 수 있는 Heuristic이 없을 때 사용한다. A*는 특정 목적지까지의 경로만 필요하고 Admissible Heuristic(예: 유클리드 거리, 맨해튼 거리)을 구할 수 있을 때 적합하다. A*는 Heuristic이 방향 정보를 제공해 불필요한 영역 탐색을 줄이므로 목적지가 하나인 실시간 길 찾기에 유리하다. Heuristic 과대 추정이나 동적 비용 변경으로 Admissibility가 깨지면 최적성을 잃으므로 Heuristic 정확도를 검증한다.
 - 동적 Map의 경로 Cache는 어떻게 무효화하나요?
+  > Cache Key를 (출발 Zone, 목적 Zone, Map Version)으로 구성하고, Map Version은 장애물 추가, 비용 변경, 문 잠금 이벤트마다 단조 증가시킨다. Map 변경 이벤트 발생 시 변경된 Edge와 인접한 Zone이 포함된 Cache Entry만 선택적으로 무효화해 전체 Cache를 날리는 비용을 줄인다. 무효화된 경로를 사용 중인 플레이어에게는 다음 Waypoint 이동 전 Edge 유효성을 재확인하는 방어 로직을 추가한다.
 
 ## 19. 30초 모범답변
 

@@ -196,12 +196,19 @@ Java 우선순위 규칙: ① Abstract Class 또는 Concrete 상위 클래스 �
 
 ## 10. 예상 꼬리질문
 - `Animal a = new Dog(); a.staticMethod()`를 실행하면 Dog.staticMethod()가 아닌 Animal.staticMethod()가 호출됩니다. async-profiler에서 이 코드의 호출 경로가 예상과 다를 때 Static Hiding과 Override 차이를 어떻게 빠르게 진단하고, 이 버그를 CI에서 방지하는 방법은 무엇인가요?
+  > Static Method는 Override가 아닌 Hiding이므로 Reference 선언 타입 기준으로 Compile Time에 선택됩니다. 진단은 `javap -c`로 Bytecode의 invokestatic vs invokevirtual을 확인해 Static Hiding 여부를 즉시 판별합니다. CI 방지는 PMD `MethodNamingConventions` 또는 SonarQube `java:S2176` 룰로 Static Method Hiding을 탐지하고, @Override 어노테이션이 없는 같은 이름의 Static Method 선언에 경고를 설정합니다.
 - `Square extends Rectangle`에서 setWidth(5) 호출 시 setHeight도 5로 바뀌어 넓이 계산이 틀립니다. 게임 서버에서 `BossItem extends Item`이 동일한 LSP 위반을 일으키는 시나리오를 만들고, 추상화 경계를 어떻게 재설계합니까?
+  > BossItem이 Item.setQuantity()를 Override해 항상 수량을 1로 고정하면, Item을 인자로 받는 인벤토리 로직이 BossItem 대입 시 예상과 다르게 동작하는 LSP 위반이 발생합니다. 재설계 방향은 상속 계층을 끊고 BossItem을 별도 타입으로 분리하거나, 수량 변경 불가 속성을 Item 인터페이스의 `isStackable()` 계약으로 명시해 호출자가 사전 조건을 확인하도록 추상화 경계를 올립니다.
 - ISP를 적용해 `ICharacterService`(메서드 12개)를 `IHealthService·ICombatService·IInventoryService` 3개로 분리했을 때, 각 서비스를 주입받아야 하는 Handler에서 발생하는 DI 복잡도와 이를 완화하는 패턴은 무엇인가요?
+  > Handler 생성자 파라미터가 3개로 늘어나 DI 설정이 장황해집니다. 완화 패턴으로는 Facade 객체(`CharacterFacade`)를 두어 3개 서비스를 묶어 Handler에 단일 주입하거나, Spring의 `@Autowired` 필드 주입 대신 생성자 주입을 유지하면서 Handler를 목적별로 더 작게 나눠 각 Handler가 하나의 서비스만 의존하도록 분리합니다.
 - Composition으로 DamageRule을 주입받는 Match에서 Tick 중 버프 이벤트로 Rule을 교체해야 합니다. `volatile DamageRule rule` 필드로 교체하면 Race Condition이 해결되는지, 아니면 추가 동기화가 필요한지 Thread-safety 관점에서 분석하세요.
+  > `volatile`은 단일 참조 교체의 가시성은 보장하므로, Rule 교체 자체(참조 쓰기·읽기)는 안전합니다. 그러나 Rule 교체와 현재 Tick의 calculate() 호출 사이에 원자성이 없어, 교체 직전 Rule로 계산하다가 Tick 중간에 다른 Rule로 전환되는 Half-tick 불일치가 발생할 수 있습니다. 완전한 해결은 `AtomicReference<DamageRule>`로 교체 후 Tick 시작 시 로컬 변수에 스냅샷을 캡처해 Tick 내내 동일한 Rule을 사용하는 방식이 안전합니다.
 - `@Override`를 붙이지 않은 채 `calculate(Integer amount)` 메서드가 Base의 `calculate(int amount)` Override 의도였지만 Autoboxing으로 Overload가 됐습니다. SpotBugs·SonarQube에서 이런 버그를 탐지하는 룰 ID와 해당 룰이 잡지 못하는 경계 케이스를 설명하세요.
+  > @Override 어노테이션이 없으면 Compiler가 Signature 불일치를 경고하지 않아 Overload로 조용히 처리됩니다. SonarQube `java:S1161`(Override 어노테이션 누락 탐지)과 SpotBugs `EQ_OVERRIDING_EQUALS_NOT_SYMMETRIC`이 유사 패턴을 잡습니다. 이 룰이 잡지 못하는 경계 케이스는 Interface에 선언된 메서드를 implements 클래스에서 @Override 없이 구현하는 경우와, 제네릭 타입 파라미터가 관여해 Erasure 후 Signature가 같아지는 경우입니다.
 - Interface Default Method로 `DamageRule`에 `logDamage()`를 추가했는데 Abstract Class 계층에도 같은 이름이 있어 JDK 충돌 해결 우선순위가 적용됩니다. 어떤 순서로 우선순위가 결정되고, Abstract Class 구현이 Interface Default를 숨겼는지 검증하는 방법은 무엇인가요?
+  > 우선순위는 ① 구체 클래스·추상 클래스의 메서드 > ② 더 구체적인(하위) Interface Default > ③ 같은 수준 두 Interface Default 충돌 시 구현 클래스가 명시 선택 순서입니다. Abstract Class 구현이 Interface Default를 숨기는지는 `javap -verbose`로 실제 Bytecode에서 어느 클래스의 메서드가 invokevirtual 대상인지 확인하거나, JUnit 테스트에서 Interface Reference로 인스턴스를 참조해 logDamage()를 호출하고 Abstract Class 구현이 실행되는지 검증합니다.
 - 매 Tick 100만 번 `rule.calculate()` 호출 시 async-profiler flame graph에서 Megamorphic 가상 메서드 호출이 병목으로 나타납니다. 구현체를 final로 선언하거나 Inline Cache를 활용하는 방법과 Trade-off, JIT 최적화 여부를 `-XX:+PrintInlining` 또는 JFR Compiler Event로 확인하는 방법을 설명하세요.
+  > 구현체가 3개 이상이면 JIT C2가 Megamorphic 호출로 판단해 Devirtualization·Inlining을 포기합니다. 구현체를 `final`로 선언하면 C2가 단일 타입임을 증명해 Inline Cache를 통한 Devirtualization을 시도합니다. Trade-off는 final 선언으로 확장성이 제한되고 테스트에서 Subclass 대체가 불가능해집니다. JIT 최적화 여부는 `-XX:+PrintInlining` 출력에서 `callee is too large` 또는 `virtual call`이 사라지는지 확인하고, JFR `jdk.CompilerInlining` 이벤트에서 해당 메서드의 inlined 여부를 필터링해 검증합니다.
 
 ## 11. 30초 모범답변
 

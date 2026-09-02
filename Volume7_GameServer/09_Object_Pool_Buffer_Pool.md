@@ -245,12 +245,19 @@ Return() 함수 내에서 반환 전에 `memset(h.ptr, 0, BUCKET_SIZES[idx])`를
 ## 10. 예상 꼬리질문
 
 - Lua나 C 환경에서 RAII를 사용할 수 없을 때, 반환 누락으로 Pool이 서서히 고갈되는 문제를 어떻게 탐지하고 방지하나요?
+  > Rent 시 Ticket ID를 발급하고 반환 시 Ticket을 무효화한 뒤, 주기적으로 유효 Ticket 수(대여 중 객체 수)와 Pool 보유 수의 합이 전체 용량과 일치하는지 검사합니다. 불일치 시 누락 Stack Trace를 로그에 남기고, Debug 빌드에서는 Rent마다 호출 지점을 기록해 반환 누락 위치를 식별합니다.
 - Pool Trim 주기를 5분으로 설정했는데 트래픽 부하 후 메모리가 즉시 줄지 않고 5분간 유지됩니다. Peak 재발 예측이 가능한 경우와 그렇지 않은 경우에 Trim 기준을 어떻게 다르게 잡나요?
+  > Peak 재발이 예측 가능한 경우(예: 매일 오후 8~10시 피크)에는 Peak 직후에도 Trim을 보류하고 예측 창 이후에만 Trim을 실행해 재할당 폭풍을 방지합니다. 예측이 불가능한 경우에는 5분 주기 Trim을 유지하되, Pool 보유 Byte가 Peak 이후 10분간 최대치의 50% 아래로 유지될 때만 Trim을 실행해 공격적 회수와 재할당 비용을 균형 잡습니다.
 - Pool Miss Rate를 Prometheus로 수집하는데, 해당 수치가 1%에서 8%로 증가했을 때 Pool 크기를 늘리기 전에 먼저 확인해야 하는 지표 두 가지는 무엇인가요?
+  > 첫째로 Worker별 Concurrent Rent 수를 확인합니다. 특정 Worker가 Buffer를 오래 보유(비동기 완료 지연)하면 Pool Miss가 증가하므로 Pool 크기보다 Completion Thread 수나 Send Queue 상한이 문제입니다. 둘째로 Size Class별 Miss 분포를 확인합니다. 특정 Bucket(예: 4KB)에서만 Miss가 집중되면 해당 Bucket 크기나 비율만 조정하면 되며 전체 Pool 확장은 불필요합니다.
 - Buffer를 여러 비동기 Stage를 거쳐 전달할 때 각 Stage 경계에서 소유권 이전이 명확하지 않으면 어떤 버그가 생기나요? Reference Counting과 std::move 중 어떤 방식을 권장하나요?
+  > 소유권이 불명확하면 한 Stage가 Buffer를 Pool에 반환한 뒤 다음 Stage가 접근하는 Use-after-return이 발생하거나, 두 Stage 모두 반환 시도하는 Double Return이 발생합니다. Stage가 선형으로 이어지는 파이프라인이면 `std::move`로 소유권을 명확히 이전하는 것이 단순하고 안전합니다. Stage가 분기하거나 완료 순서가 불확실하면 `shared_ptr` 기반 Reference Counting으로 마지막 소유자가 반환하도록 설계합니다.
 - C# ArrayPool<T>를 사용하는 코드에서 try/finally 없이 Rent한 Buffer가 예외 경로에서 반환되지 않아 Pool이 고갈됐습니다. 재발 방지를 위해 ArrayPool 래핑 패턴을 어떻게 설계하나요?
+  > `IDisposable`을 구현하는 `PooledBuffer<T>` 래퍼를 만들어 소멸자에서 `ArrayPool<T>.Shared.Return`을 호출합니다. 사용 측은 `using` 블록으로 감싸 예외 경로에서도 반환을 보장합니다. Double Return 방지를 위해 내부에 반환 여부 플래그를 두고, Dispose가 두 번 호출될 때 두 번째는 무시합니다.
 - Bullet·Effect처럼 수명이 100~200ms인 단명 객체 100만 개/초가 생성되는 경우, Pool과 Arena Allocator 중 어떤 기준으로 선택하나요?
+  > 수명이 균일하고 동일 Frame 내에서 일괄 해제할 수 있다면 Arena Allocator가 유리합니다. Frame 종료 시 포인터 하나만 리셋하므로 개별 반환 비용이 없고 단편화도 발생하지 않습니다. 반면 수명이 불균일하거나 객체가 Frame 경계를 넘어 살아 있다면 Object Pool을 사용합니다. Profile에서 Allocation이 병목임을 먼저 확인하고, Bullet처럼 수명이 명확히 짧고 일괄 해제 가능한 경우에 Arena를 우선 검토합니다.
 - Pool 객체에 이전 Session의 오래된 Callback이 남아 있어 반환 후 재사용된 객체에서 Callback이 실행됐습니다. Reset 계약에 Callback 목록 초기화를 포함하는 것만으로 충분한가요?
+  > Callback 목록 초기화 자체는 필요하지만 충분하지 않습니다. Reset 시점에 이미 Schedule된 비동기 타이머나 외부 시스템에 등록된 Callback은 목록을 지워도 실행될 수 있습니다. Reset 계약에 Callback 취소(CancellationToken 신호 또는 등록 해제)까지 포함하고, Session Generation이나 Revision 필드를 두어 Callback 실행 시점에 객체가 이미 재사용됐는지 확인 후 폐기하는 방어 로직을 추가해야 합니다.
 
 ## 11. 30초 모범답변
 

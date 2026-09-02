@@ -145,6 +145,7 @@ class TextbookReader {
     document.querySelectorAll('#content pre code').forEach(el => hljs.highlightElement(el));
     this._addCopyButtons();
     this._wrapTables();
+    this._buildPageToc();
     const area = document.getElementById('reader-area');
     area.scrollTop = 0;
     document.getElementById('reading-progress-fill').style.width = '0%';
@@ -285,6 +286,7 @@ class TextbookReader {
       const progress = max > 0 ? (area.scrollTop / max) * 100 : 0;
       progressFill.style.width = progress + '%';
       scrollTopBtn.classList.toggle('visible', area.scrollTop > 200);
+      this._updateTocActive();
     }, { passive: true });
 
     scrollTopBtn.addEventListener('click', () => {
@@ -299,6 +301,64 @@ class TextbookReader {
         else        this.navigateTo(this.currentIndex - 1, 'prev');
       }
     }, { passive: true });
+  }
+
+  /* ── Page TOC ───────────────────────────────────────────── */
+  _buildPageToc() {
+    const toc  = document.getElementById('page-toc');
+    const area = document.getElementById('reader-area');
+    toc.innerHTML = '';
+    this._tocHeadings = [];
+    if (this._tocObserver) { this._tocObserver.disconnect(); this._tocObserver = null; }
+
+    const headings = [...document.querySelectorAll('#content h2')]
+      .filter(h => /^\d/.test(h.textContent.trim()));
+    if (headings.length < 2) return;
+
+    headings.forEach((h, i) => { h.id = `ptoc-${i}`; });
+    this._tocHeadings = headings;
+
+    const title = document.createElement('div');
+    title.className = 'ptoc-title';
+    title.textContent = '목차';
+    toc.appendChild(title);
+
+    const list = document.createElement('ul');
+    list.className = 'ptoc-list';
+    headings.forEach(h => {
+      const li = document.createElement('li');
+      li.className = 'ptoc-item ptoc-h2';
+      const a  = document.createElement('a');
+      a.href   = `#${h.id}`;
+      a.textContent = h.textContent;
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        // #reader-area 기준 절대 스크롤 위치로 직접 이동
+        const target = area.scrollTop
+          + h.getBoundingClientRect().top
+          - area.getBoundingClientRect().top
+          - 12;
+        area.scrollTo({ top: target, behavior: 'smooth' });
+      });
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+    toc.appendChild(list);
+    this._updateTocActive();
+  }
+
+  _updateTocActive() {
+    if (!this._tocHeadings || !this._tocHeadings.length) return;
+    const toc  = document.getElementById('page-toc');
+    const area = document.getElementById('reader-area');
+    const areaTop = area.getBoundingClientRect().top;
+    let active = this._tocHeadings[0];
+    for (const h of this._tocHeadings) {
+      if (h.getBoundingClientRect().top - areaTop <= 40) active = h;
+    }
+    toc.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+    const link = toc.querySelector(`a[href="#${active.id}"]`);
+    if (link) link.classList.add('active');
   }
 
   /* ── Table wrapper (모바일 가로 스크롤) ─────────────────── */

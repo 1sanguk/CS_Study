@@ -426,12 +426,19 @@ i-j-k 순서에서 특정 (i,j) 쌍을 먼저 확정하면, 나중에 허용될 
 ## 21. 예상 꼬리질문
 
 - 조기 종료 최적화를 적용했는데 음수 Cycle이 있는 Graph에서 종료가 너무 늦거나 빨리 되는 경우가 생길 수 있나요?
+  > 음수 Cycle이 있으면 도달 가능한 Vertex 거리가 계속 줄어들어 갱신이 멈추지 않는다. 조기 종료는 한 Pass에서 갱신이 없을 때 멈추는데, 음수 Cycle 경로가 Pass마다 갱신을 생성하면 V-1번을 넘겨 종료가 늦어진다. 반대로 음수 Cycle이 시작점에서 도달 불가능한 Component에 있으면 조기 종료가 정상보다 빨리 일어날 수 있다.
 - 게임 경제 Exchange Graph에서 음수 Cycle을 탐지했을 때, 영향받는 아이템 집합을 어떻게 추출해서 콘텐츠 담당자에게 넘기나요?
+  > V번째 Relaxation에서 거리가 줄어든 Vertex들이 음수 Cycle의 직접 영향권이다. 해당 Vertex 집합에서 BFS/DFS로 도달 가능한 모든 Vertex를 추가로 탐색하면 간접 영향을 받는 아이템까지 포함된다. Parent Chain을 역추적해 Cycle을 구성하는 Edge 목록과 각 교환 비율을 함께 출력한다.
 - Floyd-Warshall Matrix에서 `dist[v][v] < 0`인 Vertex가 두 개 이상 발견됐습니다. 이 경우 음수 Cycle 영향을 받는 (i,j) 쌍을 어떻게 판정하나요?
+  > 각 음수 Cycle Vertex k에 대해 i에서 k로 도달 가능하고(dist[i][k] != INF) k에서 j로 도달 가능한(dist[k][j] != INF) 모든 (i,j) 쌍이 영향을 받는다. 음수 Cycle Vertex가 여러 개면 각각에 대해 이 조건을 확인하고 영향 쌍의 합집합을 구한다.
 - Zone Graph가 패치로 Edge 10개가 추가됐을 때, Matrix 전체를 재계산할지 해당 Zone 쌍만 Dijkstra로 갱신할지 판단 기준은 무엇인가요?
+  > 변경된 Edge가 전체 Edge 수에서 차지하는 비율과 영향받는 Zone 쌍 수를 본다. 변경 Edge가 전체의 1% 미만이고 영향 Zone이 소수라면 해당 시작점에서 Dijkstra를 실행해 부분 갱신한다. 변경이 광범위하거나 음수 Edge가 추가됐다면 Matrix 전체를 재계산하는 것이 안전하다.
 - Bellman-Ford Parent Chain을 역추적해 경로를 복원하는 도중 무한 Loop가 발생했습니다. 어떤 조건에서 이 상황이 생기고 어떻게 방어하나요?
+  > 음수 Cycle이 있는 경우 Parent Chain이 Cycle을 형성해 역추적이 무한 반복된다. 방어 방법은 역추적 단계를 최대 V번으로 제한하거나, 이미 방문한 Vertex를 기록해 재방문 시 Cycle로 판정하고 중단한다. 음수 Cycle이 없는 경우에는 Parent 갱신 로직의 버그로 자기 참조가 생기는 경우도 있으므로 단언으로 parent[v] != v를 확인한다.
 - Zone 200개 Floyd-Warshall Matrix를 Redis에 캐시할 때 Serialization 포맷과 TTL을 어떻게 설정하겠습니까?
+  > 200×200 정수 배열은 MessagePack이나 Protocol Buffers로 직렬화하면 JSON 대비 크기를 크게 줄일 수 있다. TTL은 콘텐츠 패치 주기보다 짧게 설정해 Stale Matrix를 방지하고, 패치 배포 시 버전 Key(예: matrix:v{version})를 사용해 즉시 무효화한다. 재계산 완료 후 원자적으로 Key를 교체한다.
 - Graph 업데이트가 1초에 수십 회 발생하는 상황에서 Floyd-Warshall 사전 계산 전략 자체가 의미 없어지는 기준은 어디라고 보나요?
+  > 재계산 주기가 O(V³) 수행 시간보다 짧아지는 시점이 기준이다. V=200이면 O(V³)=800만 연산으로 수십 ms가 걸릴 수 있는데, 업데이트가 초당 수십 회면 재계산이 항상 뒤처진다. 이 경우 사전 계산을 포기하고 요청 시점에 Dijkstra를 실행하거나, 자주 바뀌지 않는 Zone 간 거리만 Matrix로 유지하는 Hybrid 전략으로 전환한다.
 
 ## 22. 30초 모범답변
 

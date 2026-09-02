@@ -190,12 +190,19 @@ Runtime 분기 안의 String 연산은 컴파일러가 최적화하지 못해 �
 ## 10. 예상 꼬리질문
 
 - `String.intern()`을 세션 ID 저장에 사용해 String Pool 중복을 줄이려 했는데, 세션 수가 100만 개 이상일 때 오히려 Metaspace/PermGen 압박이 생기는 이유와 대안은 무엇인가요?
+  > `intern()`된 String은 JVM 내부 String Pool(Metaspace에 위치)에 영구적으로 보관돼 GC가 회수하지 못한다. 세션 ID처럼 수명이 짧은 문자열을 100만 개 intern하면 Metaspace가 지속적으로 증가해 OOM이 발생한다. 대안으로 세션 ID를 String 대신 `long` 또는 `UUID`(128비트 정수) 타입으로 관리하거나, 명시적 크기 제한이 있는 `Caffeine` 캐시로 중복을 관리한다.
 - `final byte[] payload`를 필드로 갖는 Immutable 패킷 클래스에서 Getter가 배열 참조를 그대로 반환할 때 어떤 버그가 생기고, `Arrays.copyOf` vs `ByteBuffer.wrap` 중 어떤 방법으로 방어하나요?
+  > 배열 참조를 그대로 반환하면 호출자가 배열 내용을 직접 수정해 패킷의 불변 계약이 깨진다. `Arrays.copyOf`는 매번 새 배열을 할당해 완전한 불변성을 보장하지만 복사 비용이 발생한다. `ByteBuffer.wrap(payload).asReadOnlyBuffer()`는 복사 없이 읽기 전용 뷰를 제공하나 원본 배열이 다른 경로로 수정되면 뷰에도 반영된다. 진정한 불변이 필요하면 `Arrays.copyOf`를 선택하고, 성능이 중요하면 읽기 전용 ByteBuffer를 반환한다.
 - JFR Allocation Profiling 결과 `Integer[]` 생성이 Top 3에 올라있습니다. IntelliJ/SonarQube에서 Autoboxing 발생 위치를 탐지하는 방법과 `IntObjectHashMap` 전환 시 API 호환성을 유지하는 방법은 무엇인가요?
+  > IntelliJ에서 "Inspection → Auto-boxing/unboxing"을 활성화하면 Autoboxing 발생 구간을 노란색으로 표시한다. SonarQube `JAVA:S5411` 규칙으로 Autoboxing이 포함된 Boolean 표현식을 CI에서 강제 탐지한다. `IntObjectHashMap`으로 전환 시 기존 `Map<Integer, T>` 인터페이스를 유지하려면 Adapter 클래스를 두고, 내부 구현만 교체하는 방식으로 API 호환성을 보존한다.
 - 멀티스레드 채팅 서버에서 `StringBuilder`를 static 필드로 선언해 공유했을 때 어떤 증상이 나타나고, Thread Dump에서 어떻게 확인하나요?
+  > `StringBuilder`는 Thread-safe하지 않으므로 여러 스레드가 동시에 `append`를 호출하면 내부 `char[]`가 손상돼 결과 문자열이 뒤섞이거나 `ArrayIndexOutOfBoundsException`이 발생한다. Thread Dump에서 여러 스레드가 동일 `StringBuilder` 객체 주소에 접근 중인 상태를 확인할 수 있으며, synchronized 없이 같은 객체를 공유하는 스레드가 RUNNABLE 상태로 중첩 표시된다.
 - `long playerId = player.getId()`에서 `getId()`가 `Long` 타입을 반환할 때 Unboxing NullPointerException이 발생하는 조건과, Optional 또는 null 체크로 방어하는 패턴은 무엇인가요?
+  > `getId()`가 `null`을 반환하면 `long` 기본형으로 Unboxing하는 순간 `NullPointerException`이 발생한다. DB에서 ID가 없는 경우나 초기화 전 객체 접근 시 발생할 수 있다. 방어 패턴: `Long id = player.getId(); if (id == null) throw new IllegalStateException("playerId is null");` 또는 `Optional.ofNullable(player.getId()).orElseThrow()`로 명시적으로 처리한다. 설계 단계에서 플레이어 ID 필드를 primitive `long`으로 선언해 null 가능성 자체를 제거하는 것이 근본 해결책이다.
 - int 범위를 초과하는 경험치 계산에서 `long exp = baseExp * multiplier`로 선언했는데 Overflow가 여전히 발생합니다. 올바른 승격 방법과 `Math.multiplyExact` 사용 시 ArithmeticException 처리 Trade-off는 무엇인가요?
+  > `baseExp`와 `multiplier`가 `int` 타입이면 `baseExp * multiplier` 연산이 먼저 int 범위에서 수행된 후 long에 대입되므로 Overflow가 발생한다. 올바른 승격 방법은 `long exp = (long) baseExp * multiplier`처럼 피연산자 하나를 명시적으로 long으로 캐스팅한다. `Math.multiplyExact`는 Overflow 시 `ArithmeticException`을 던져 오류를 즉시 감지할 수 있지만, 게임 서버에서 매 Tick마다 예외가 발생하면 처리 비용이 있으므로 최대값 보정(clamp) 방식과 목적에 맞게 선택한다.
 - `record PositionDTO(float x, float y, List<Buff> buffs)`처럼 record가 Mutable List 필드를 갖는 경우 어떤 불변식 위반이 발생하고, Compact Constructor에서 `List.copyOf`로 완전한 Immutable을 보장하는 방법은 무엇인가요?
+  > record의 Canonical Constructor가 인수로 받은 `List<Buff>`를 그대로 저장하면 호출자가 원본 리스트를 수정했을 때 DTO 내부 상태가 함께 변경된다. Compact Constructor에서 `this.buffs = List.copyOf(buffs)`를 명시하면 방어 복사로 외부 수정을 차단한다. `List.copyOf`는 null 요소를 허용하지 않으므로 null 포함 가능성이 있으면 `Collections.unmodifiableList(new ArrayList<>(buffs))`를 사용한다.
 
 ## 11. 30초 모범답변
 

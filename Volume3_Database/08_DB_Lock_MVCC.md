@@ -268,12 +268,19 @@ Blocked Session과 Blocking Session을 연결한 뒤 각 트랜잭션 시작 시
 ## 10. 예상 꼬리질문
 
 - Lock Escalation은 왜 발생하고 어떻게 막나요?
+  > 수많은 행 Lock을 개별로 관리하는 메모리 비용이 임계치를 넘으면 DBMS가 자동으로 Page 또는 Table 수준의 더 큰 Lock으로 승격한다. 승격되면 관련 없는 행까지 차단되어 동시성이 급격히 낮아진다. 배치 작업을 작은 단위로 나누어 한 번에 잠기는 행 수를 줄이고, 불필요하게 넓은 인덱스 범위를 읽는 쿼리를 개선하면 완화할 수 있다.
 - Range Lock은 어떤 문제를 막나요?
+  > 조건 범위에 새 행이 삽입되는 Phantom Read를 방지한다. 예를 들어 `WHERE score BETWEEN 1000 AND 2000` 조회 후 다른 트랜잭션이 score=1500인 행을 삽입하면 같은 조건 재조회 시 결과가 달라진다. Range Lock(Gap Lock)은 해당 범위의 Key 간격에 삽입을 차단해 이를 방지하지만 삽입 차단 범위가 커지면 동시 삽입 성능이 낮아질 수 있다.
 - Key-range Lock과 Gap Lock은 어떻게 다른가요?
+  > Gap Lock은 인덱스 Key 사이의 빈 구간에 걸리는 잠금으로 해당 구간에 새 행 삽입을 차단한다. Key-range Lock은 Gap Lock과 레코드 Lock을 결합한 개념으로, 특정 레코드와 그 앞 구간을 함께 잠근다(MySQL InnoDB의 Next-Key Lock). Gap Lock은 실제 행이 없는 빈 범위에만 적용되는 반면 Next-Key Lock은 기존 행도 함께 잠근다는 점이 차이다.
 - Hot Counter Row의 Lock 경합을 어떻게 줄이나요?
+  > 모든 요청이 하나의 카운터 행을 갱신하면 Row Lock이 집중된다. 여러 샤딩 Counter 행에 분산해 합산하거나(예: 10개 행에 랜덤 분산 후 SUM), 변경 이벤트를 Queue에 쌓고 단일 Worker가 배치 집계하거나, 실시간 정확도보다 근사치가 허용된다면 Redis 같은 In-Memory Store에 Counter를 위임하는 방법을 검토한다.
 - MVCC Version 정리가 지연되면 어떤 증상이 나타나나요?
+  > 테이블 또는 Undo Segment 크기가 계속 증가하고, 조회 시 Version Chain을 길게 따라가야 해 읽기 성능이 저하된다. PostgreSQL에서는 Dead Tuple이 쌓여 Vacuum이 따라가지 못하면 테이블 팽창(Bloat)이 발생한다. MySQL InnoDB에서는 Undo Log가 커지고 Purge Thread가 밀린다. 오래된 트랜잭션을 찾아 종료하고 분석 쿼리는 Replica로 이전하는 것이 일반적인 대응이다.
 - Intent Lock과 일반 Table Lock의 관계는 무엇인가요?
+  > Intent Lock은 테이블 수준에서 하위 행에 Lock이 있다는 의도를 표시하는 가벼운 잠금이다. Table Lock 요청이 들어왔을 때 모든 행 Lock을 일일이 검사하는 대신 Intent Lock의 존재만 확인해 충돌 여부를 빠르게 판단하도록 돕는다. Intent Exclusive Lock이 있으면 Table-level Exclusive Lock이 대기해야 하지만, 다른 행에 대한 Row Lock들은 서로 영향을 주지 않는다.
 - Deadlock Graph에서 무엇을 읽어야 하나요?
+  > 각 트랜잭션이 보유 중인 Lock과 대기 중인 Lock을 확인하고 순환 관계를 파악한다. 어떤 테이블·인덱스의 어떤 Key 범위에서 충돌이 발생했는지, 각 트랜잭션의 마지막 SQL이 무엇인지, 자원 획득 순서가 일치하지 않는 지점이 어디인지를 읽는다. 순환을 끊기 위해 자원 접근 순서를 통일하거나 Lock 보유 시간을 줄이는 것이 근본 해결책이다.
 
 ## 11. 30초 모범답변
 

@@ -399,12 +399,19 @@ O(n) 보장의 핵심 불변식은 "left와 right 모두 절대 뒤로 이동하
 ## 18. 예상 꼬리질문
 
 - 정렬되지 않은 100만 개 아이템 ID 배열에서 합이 K인 쌍을 찾아야 할 때 정렬 후 Two Pointer와 Hash Set 중 어느 쪽을 선택하겠습니까? 배열을 여러 번 재사용하는 경우와 단발성 조회 경우를 나눠 설명해 주세요.
+  > 단발성 조회는 Hash Set이 유리하다. 정렬 O(n log n) 비용을 지불하지 않고 평균 O(n)으로 처리 가능하다. 배열을 여러 번 재사용한다면 정렬 비용을 한 번 지불하고 Two Pointer를 반복 적용하는 것이 낫다. 다만 원본 Index를 반환해야 하면 정렬 시 Index Pair를 함께 보존해야 한다.
 - 가변 Window에서 left가 뒤로 이동하는 버그가 생겼을 때 로그 없이 재현하기 어렵습니다. 코드 레벨에서 역행을 탐지하는 방법을 구체적으로 설명해 주세요.
+  > left 이동 직전에 이전 값을 저장해두고 이동 후 `assert(left >= prevLeft)`를 추가한다. 또는 left 이동 횟수를 카운터로 집계해 n을 초과하면 AssertionError를 발생시킨다. 테스트에서 작은 입력으로 각 Pointer 이동 값을 배열에 기록해 단조 증가 여부를 사후에 검증하는 Property Test도 효과적이다.
 - 합이 정확히 K인 구간 개수는 음수가 있을 때 어떻게 구하나요?
+  > Prefix Sum Frequency Map을 사용한다. prefix[i] - prefix[j] = K를 만족하는 쌍 수가 곧 구간 수다. 배열을 순서대로 순회하면서 현재 Prefix Sum에서 K를 뺀 값이 Map에 있는 횟수를 더하고, 현재 Prefix Sum을 Map에 기록한다. 전체 O(n), 공간 O(n)이다.
 - Last Seen Map으로 Left를 한 번에 이동할 때 Map에 오래된 위치가 남아 있으면 어떤 버그가 생기고 어떻게 방어하나요?
+  > 현재 Window 왼쪽보다 이전에 있는 오래된 위치로 Left가 뒤로 이동하는 버그가 생긴다. 예를 들어 "abba"에서 두 번째 a를 처리할 때 Map에 첫 번째 a 위치(0)가 남아 있으면 Left를 1 대신 0으로 이동하지 않는다. 방어는 `left = max(left, lastSeen[ch] + 1)`로 현재 Left보다 앞으로 이동하지 않도록 보장한다.
 - Monotonic Deque에 값 대신 Index를 넣는 이유는 무엇인가요?
+  > 값만 넣으면 해당 값이 현재 Window 안에 있는지 판단할 수 없다. Window가 오른쪽으로 이동해 오래된 최댓값이 범위를 벗어났는지 확인하려면 그 값이 어느 위치에 있었는지 알아야 한다. Index를 저장해야 `deque.front() < left`로 Window 밖인지 판단하고 제거할 수 있다. 중복 값도 Index로 구분해 올바르게 처리할 수 있다.
 - 게임 서버에서 Sliding Window Rate Limit 대신 Token Bucket을 선택하는 기준은 무엇인가요? 선착순 이벤트와 일반 API 각각 어떤 전략을 쓰겠습니까?
+  > Token Bucket은 순간 Burst를 허용하고 일정 속도로 Token을 채운다. 일반 API처럼 간헐적 Burst가 정상인 경우에 적합하다. Sliding Window는 지난 N초 동안의 요청 수를 정확히 제한하므로 선착순 이벤트처럼 경쟁이 집중되는 구간에서 공정성이 중요할 때 유리하다. 선착순 이벤트에는 Sliding Window, 일반 API에는 Token Bucket을 적용하고 비활성 사용자 상태는 TTL로 정리한다.
 - Late Event가 있는 Streaming Window는 어떻게 처리하나요?
+  > Watermark를 도입해 "현재 시각 - 허용 지연"보다 이전 Event는 무시하거나 별도 Late Bucket으로 집계한다. 허용 지연을 짧게 잡으면 정확도가 낮아지고 길게 잡으면 메모리와 결과 지연이 증가한다. 실무에서는 허용 지연 내 도착한 Event는 Window에 반영하고, 이후 도착한 Event는 보정 처리 또는 드롭 정책을 API 계약으로 명시한다.
 
 ## 19. 30초 모범답변
 

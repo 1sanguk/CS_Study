@@ -200,12 +200,19 @@ Event Log에서 해당 matchId의 DB 저장 성공 여부를 확인합니다. DB
 ## 10. 예상 꼬리질문
 
 - Login Rate Limit을 Redis로 집계할 때 Key TTL을 60초로 설정했는데 분산 환경에서 카운터 Drift가 발생하는 원인과 Redis Cluster Hash Slot 설계 방법은 무엇인가요?
+  > 여러 Redis 노드에 같은 Key가 분산되면 INCR이 서로 다른 Slot에서 실행돼 전체 카운터 합산이 되지 않아 Drift가 발생한다. IP 또는 계정 기반 Rate Limit Key를 `{user_id}:ratelimit` 형태로 Hash Tag를 사용해 동일 Slot에 고정하면 단일 노드에서 원자적 INCR이 보장된다. Cluster 리샤딩 중에는 Key 이동으로 카운터가 초기화될 수 있으므로 Slot Migration 타이밍을 Rate Limit 정책과 함께 관리한다.
 - Chat Channel Partition 수를 100개로 늘렸는데 특정 채널의 Fan-out 지연이 오히려 증가했습니다. Cross-Partition 오버헤드를 어떻게 측정하고 최적 Partition 수를 결정하나요?
+  > 단일 채널이 여러 Partition에 분산되면 Sequence 조율을 위한 Cross-Partition 통신이 발생해 네트워크 왕복 지연이 추가된다. 채널당 Partition 수를 1로 고정하고 Partition 간 부하를 채널 단위로 분산하는 것이 맞다. 최적 Partition 수는 채널당 피크 메시지 처리량을 단일 Partition Worker 처리 한도로 나눠 결정하며, Fan-out 지연 p95를 Partition 수 변수로 측정해 검증한다.
 - 1만 명이 구독하는 글로벌 채팅 채널에서 초당 1,000건 메시지가 들어올 때 발생하는 1,000만 건/초 Write 부하를 어떻게 완화하나요?
+  > Fan-out을 Client에 직접 Push하는 대신 메시지를 채널 스트림(Kafka Topic 또는 Redis Stream)에 한 번만 기록하고, 클라이언트가 Polling하거나 SSE로 Subscribe하는 Pull 모델로 전환한다. 글로벌 채널은 메시지를 일정 간격(예: 100ms)으로 배치 집계해 Fan-out 횟수를 줄이거나, 구독자를 Region별로 분산해 로컬 Broadcast 서버가 처리하도록 계층화한다.
 - Ranking Redis Sorted Set ZADD가 초당 5,000건임에도 ZRANGEBYSCORE p99가 200ms를 초과합니다. Redis 단일 Key 경합인지 Slow Query인지 어떻게 구분하고 조치하나요?
+  > `SLOWLOG GET`으로 실제 명령 실행 시간을 확인하고, `redis-cli --latency`로 네트워크 지연과 서버 처리 지연을 분리한다. 단일 Key에 수백만 명이 집계된 경우 ZRANGEBYSCORE 탐색 범위가 커서 O(log N + M) 비용이 높아진다. 조치: 상위 1,000위만 Sorted Set에 두고 나머지는 DB에서 조회하는 계층화 전략을 사용하거나, 시즌별 Versioned Key로 분리해 Set 크기를 줄인다.
 - Game Server 프로세스가 Match Result Event를 발행하기 전에 죽었을 때 Ranking 점수 누락을 Transactional Outbox와 Saga 패턴 중 어떤 방식으로 처리하고 선택 기준은 무엇인가요?
+  > Transactional Outbox는 Match Result를 DB에 저장하는 트랜잭션 안에 Outbox 레코드를 함께 INSERT해 프로세스 사망 후에도 별도 릴레이가 이벤트를 재발행하도록 보장한다. Saga는 여러 서비스에 걸친 보상 트랜잭션이 필요할 때 적합하다. Ranking 점수 반영처럼 단일 서비스 내 이벤트 영속화 문제는 Outbox가 단순하고 적합하며, 서비스 간 분산 트랜잭션이 필요할 때 Saga를 선택한다.
 - Login Service를 Game Server와 분리 배포할 때 Public Key를 어디서 가져오고, Key Rotation 중 kid 필드 없이 구 Key와 신 Key가 혼재하면 어떤 검증 실패가 발생하나요?
+  > Public Key는 JWKS(JSON Web Key Set) 엔드포인트에서 주기적으로 가져와 게임 서버 로컬에 캐시한다. `kid` 필드가 없으면 신 Key로 서명된 Token을 구 Key로 검증 시도해 서명 불일치 오류가 발생하고, 반대의 경우도 동일하게 검증 실패가 생긴다. 해결책은 JWT Header에 `kid`를 포함해 검증 키를 식별하고, JWKS에 구 Key와 신 Key를 Overlap 기간 동안 모두 등록하는 것이다.
 - Chat Spam 필터를 Redis Rate Limit으로 구현했는데 특정 User가 50개 계정으로 분산 전송해 개별 한도를 우회합니다. IP·장치 ID 기반 집계 시 발생하는 오탐과 완화 방법은 무엇인가요?
+  > NAT 공유 IP나 같은 기기에서 여러 계정을 쓰는 정상 사용자가 IP·장치 ID 기반 제한에 의해 오탐으로 차단될 수 있다. 완화 방법: IP·장치 ID 단위 소프트 한도(계정 한도의 3배)를 별도로 두고, 초과 시 즉시 차단 대신 캡차나 추가 검증으로 처리한다. 행동 패턴(메시지 내용 유사도, 전송 간격 분산)을 추가 신호로 사용해 봇 탐지 정확도를 높인다.
 
 ## 11. 30초 모범답변
 

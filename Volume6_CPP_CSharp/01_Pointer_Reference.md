@@ -399,12 +399,19 @@ p99 급등이 특정 프레임에 몰린다면 Vector Capacity 초과로 인한 
 ## 18. 예상 꼬리질문
 
 - 게임 서버 Entity Pool에서 unique_ptr와 Raw Pointer Observer를 함께 쓸 때 Observer가 먼저 소멸한 Owner의 객체에 접근하는 버그를 어떻게 탐지하나요?
+  > AddressSanitizer(ASan)를 빌드에 활성화하면 Use-after-free 시점의 정확한 Call Stack을 출력한다. Observer가 Raw Pointer를 저장하는 코드를 찾아 해당 포인터의 수명 범위를 Owner의 unique_ptr Scope와 대조한다. 장기적으로는 Observer를 (slotIndex, generation) Handle로 교체하고 접근 시 유효성을 검사하는 구조로 전환해 컴파일 타임에 수명 위반을 방지한다.
 - C API를 Wrapping한 함수에서 Pointer Null 체크를 빠뜨려 서버 크래시가 발생했습니다. Null 허용 여부를 API 계약으로 표현하는 방법은 무엇인가요?
+  > Null을 허용하지 않는 인자는 Reference로 받거나 `[[nodiscard]]` + `gsl::not_null<T*>`로 표현해 컴파일러가 경고를 내도록 한다. Null을 허용하는 선택적 인자는 `T*` 또는 `std::optional<T>`로 명시한다. Wrapper 함수 진입 시 Precondition을 `assert` 또는 계약 라이브러리로 명시하고, 문서에 Null 가능 여부를 기록한다. 내부 C 함수 호출 전에 방어적 Null 검사를 추가해 Undefined Behavior를 차단한다.
 - Packet Buffer를 순회하는 코드에서 범위를 벗어난 Pointer 산술로 Undefined Behavior가 발생했습니다. std::span이나 Iterator Pair로 교체할 때 어떤 경계 조건을 확인해야 하나요?
+  > std::span으로 교체 시 size()가 0인 빈 Buffer, 읽을 바이트가 남은 크기보다 큰 경우, 가변 길이 필드에서 선언된 크기가 실제 남은 Buffer를 초과하는 경우를 확인한다. 파싱 루프에서 매 Field 읽기 전 `offset + fieldSize <= span.size()`를 검사하고 실패 시 오류를 반환한다. UBSan(UndefinedBehaviorSanitizer)을 활성화해 테스트 환경에서 경계 위반을 즉시 탐지한다.
 - 함수가 const std::string&을 반환했는데 호출자에서 값이 깨지는 버그가 발생했습니다. 원인이 무엇이고 어떻게 수정하나요?
+  > 함수 내부 Local std::string을 const Reference로 반환한 것이 원인이다. 함수가 반환되면 Local 객체가 소멸해 Dangling Reference가 된다. 수정 방법은 std::string을 값으로 반환하는 것이다. Return Value Optimization(RVO)으로 불필요한 복사가 제거되어 성능 손실이 없다. 반환 값이 외부 객체의 Reference여야 한다면 그 객체가 함수 호출 이후에도 살아있는지 확인한다.
 - 비동기 전송 함수에 std::span<const std::byte>를 넘겼더니 전송 완료 전에 원본 Buffer가 해제되어 손상된 데이터가 전송됐습니다. 어떻게 수명을 보장하겠습니까?
+  > std::span은 소유하지 않으므로 원본 Buffer의 수명을 전송 완료 시점까지 직접 연장해야 한다. 세 가지 방법이 있다. 첫째, Buffer를 shared_ptr로 소유하고 Callback Closure에 Capture해 완료까지 수명을 연장한다. 둘째, Buffer를 전송 큐가 값으로 소유하게 이동(std::move)한다. 셋째, 완료 Callback에서 Buffer 해제를 수행하는 명시적 수명 관리 구조로 설계한다. 비동기 함수 API에 "Buffer 수명은 Completion Callback까지 유지되어야 한다"는 Precondition을 문서화한다.
 - 게임 서버에서 Callback Queue에 캡처된 shared_ptr<Session>이 쌓여 메모리가 계속 증가하는 현상이 발생했습니다. weak_ptr로 교체할 때 어떤 실행 분기가 달라지나요?
+  > shared_ptr Capture는 Callback이 실행될 때까지 Session을 살려두므로 Queue가 밀리면 이미 논리적으로 종료된 Session도 유지된다. weak_ptr로 교체하면 Callback 실행 시점에 `lock()`을 호출하고, 이미 Session이 종료되었다면 빈 shared_ptr를 반환받아 해당 Callback을 조용히 건너뛴다. 즉, 추가 분기는 "Session이 아직 살아있는 경우에만 처리, 이미 종료됐으면 무시"이다. 종료 후 미처리 Callback 로그를 남기면 디버깅에 도움이 된다.
 - 멀티스레드 게임 서버에서 유효한 Entity*를 통해 컴포넌트를 읽는데 간헐적으로 값이 깨집니다. 포인터 유효성 외에 무엇을 추가로 확인해야 하나요?
+  > 포인터가 유효해도 Data Race가 발생할 수 있다. 다른 Thread가 같은 시간에 Entity의 컴포넌트를 수정 중이라면 읽는 Thread는 반쯤 쓰인 값을 읽을 수 있다. 확인 항목은 (1) 컴포넌트 접근을 보호하는 Mutex나 RWLock이 있는지, (2) 컴포넌트 필드가 std::atomic으로 선언되어 있는지, (3) 게임 루프에서 읽기와 쓰기가 같은 Tick Thread에서만 이루어지도록 설계되어 있는지다. ThreadSanitizer(TSan)를 활성화해 Data Race를 재현 가능하게 탐지한다.
 
 ## 19. 30초 모범답변
 

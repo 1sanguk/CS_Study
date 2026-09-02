@@ -406,13 +406,21 @@ maxSize는 Consumer 처리량과 허용 최대 대기 시간을 기준으로 정
 
 ## 10. 예상 꼬리질문
 - Queue Depth p99가 갑자기 튀었을 때, Producer 속도 문제인지 Consumer 처리 속도 문제인지 어떤 지표로 구분하는가?
+  > Enqueue Rate(Producer 속도)와 Dequeue Rate(Consumer 처리 속도)를 각각 측정해 비교한다. Enqueue Rate는 변화 없는데 Depth가 증가하면 Consumer 처리 속도 저하이고, Dequeue Rate가 일정한데 Depth가 증가하면 Producer 폭주다. Consumer 처리 시간 p99도 함께 확인해 특정 작업 유형이 병목인지 파악한다.
 - Tick Double Buffer에서 Swap 시점에 Lock을 걸지 않으면 어떤 Race Condition이 생기는가? Lock 없이 안전하게 처리할 수 있는 방법은 무엇인가?
+  > Swap 중 I/O Thread가 incoming Queue에 Enqueue를 동시에 시도하면 포인터가 부분 갱신된 상태를 읽어 Data Race가 발생한다. Lock 없이 안전하게 처리하려면 Atomic Pointer Swap(CAS)을 사용해 incoming·processing 포인터를 원자적으로 교환하거나, Single-Producer Single-Consumer 구조에서 Release·Acquire 메모리 순서를 명시해 두 스레드 간 가시성을 보장한다.
 - 게임 서버 AI FSM이 재귀 깊이 200을 초과할 수 있는 구조로 짜여 있다면 어떻게 Stack Overflow를 방지하겠는가?
+  > 재귀 호출을 명시적 Stack 자료구조와 반복문으로 대체해 호출 깊이를 Heap 할당 Stack 크기로 제어한다. 최대 깊이 한계를 코드에 명시하고 초과 시 오류를 반환하거나 상태 전환을 다음 틱으로 미룬다. 재귀 필요성 자체를 검토해 FSM 상태 전환 그래프에 사이클이 있는지 확인한다.
 - Single-Producer Single-Consumer Ring Buffer에서 Head·Tail을 서로 다른 Cache Line에 배치하는 이유는 무엇인가?
+  > Head와 Tail이 같은 Cache Line에 있으면 Producer가 Tail을 갱신할 때와 Consumer가 Head를 갱신할 때 서로 다른 CPU Core가 같은 Cache Line을 무효화·재로드하는 False Sharing이 발생해 성능이 저하된다. 두 Index를 별도 Cache Line(64바이트 정렬)에 배치하면 각 스레드가 독립된 Cache Line을 갱신해 충돌을 제거한다.
 - Bounded Queue가 Full 상태일 때 오래된 패킷을 버리는 방식(Drop Oldest)과 새 패킷을 버리는 방식(Drop Newest) 중 게임 서버 위치 갱신에 어느 쪽이 더 적합한가?
+  > 위치 갱신은 최신 상태만 의미가 있으므로 Drop Oldest가 적합하다. 오래된 위치 데이터를 버리고 최신 위치를 유지해야 처리 시점에 정확한 좌표를 반영할 수 있다. 반면 구매·채팅처럼 누락이 허용되지 않는 패킷은 Drop 자체를 피하고 명시 거부 후 Client Retry 경로를 사용해야 한다.
 - Worker Pool에서 특정 Worker의 Queue만 지속 가득 찰 때(Hot Partition) 어떻게 진단하고 완화하는가?
+  > Worker별 Queue Depth, Dequeue Rate, 처리 지연 p99를 독립 메트릭으로 추적해 특정 Worker에 편중되는지 확인한다. 원인이 Hot Player(특정 player_id 해시 집중)라면 해당 Player를 다른 Worker로 임시 재배치하거나 Virtual Partition(Worker 수보다 많은 Partition Key)을 도입해 재매핑 비용 없이 리밸런싱한다.
 - 무제한 Queue에서 Consumer 처리량이 Producer보다 느릴 때 Queue가 계속 쌓이면 Timeout 재시도가 왜 상황을 더 악화시키는가?
+  > Timeout된 요청의 재시도가 새 요청으로 Queue에 다시 추가되어 Producer 생성량이 실질적으로 증가하고 Queue 소진 속도보다 쌓이는 속도가 더 빨라진다. 이미 처리된 요청도 재시도될 경우 중복 처리가 발생하고 Consumer 부하가 추가로 증가하는 피드백 루프가 형성된다. Bounded Queue와 명시적 거부로 Backpressure를 Client에게 조기에 전달해야 한다.
 - Stack 기반 Undo/Redo에서 외부 결제처럼 역연산이 불가능한 명령이 포함된 경우 어떻게 처리하는가?
+  > 역연산이 불가능한 명령은 Undo Stack에서 제외하거나 해당 명령까지의 Undo 시도를 차단하고 사용자에게 명시적으로 알린다. 도메인 보상 작업(환불, 취소 요청)을 별도 API로 분리해 역연산 대신 보상 트랜잭션을 실행하고, Undo Stack에는 보상 가능한 명령만 포함시킨다.
 
 ## 11. 30초 모범답변
 > Stack은 LIFO로 DFS·Undo·AI FSM 호출 스택에, Queue는 FIFO로 패킷 수신·작업 분배에, Deque는 Sliding Window 최댓값처럼 양방향 접근이 필요한 곳에 씁니다. 선택 기준은 꺼내는 순서입니다. 게임 서버에서는 패킷 Queue를 반드시 Bounded로 설계하고 maxSize를 틱당 처리량 × 허용 대기 틱 수로 산정합니다. Queue가 가득 찰 때 위치 갱신은 Drop Oldest로 Coalescing하고, 구매·채팅은 명시 거부 후 Client Retry로 처리합니다.

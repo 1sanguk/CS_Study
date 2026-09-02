@@ -308,13 +308,21 @@ Chaining은 세션 삭제가 빈번하고 Load Factor를 0.8 이상 높게 유�
 
 ## 10. 예상 꼬리질문
 - Load Factor를 0.75보다 더 낮게(예: 0.5) 설정해야 하는 게임 서버 시나리오는 어떤 경우인가요?
+  > 세션 조회가 매 틱(16ms)마다 수만 번 발생해 충돌 하나가 p99에 직결되는 환경, 또는 Rehash 순간 GC Stop-the-World가 허용되지 않는 실시간 서버에서 Load Factor를 낮게 유지한다. 메모리를 더 많이 써서 충돌 확률 자체를 줄이는 트레이드오프다.
 - 게임 서버 틱(16ms 주기) 도중 Rehash Spike가 터지면 p99에 어떤 영향이 생기고, 사전에 막으려면 무엇을 해야 하나요?
+  > Rehash는 O(N) 복사이므로 원소가 많을수록 한 번의 삽입이 수ms~수십ms 지연으로 변한다. 예상 최대 동접 × 1.5 / Load Factor로 초기 Capacity를 Reserve하면 서비스 중 Rehash 자체를 없앨 수 있다.
 - ConcurrentHashMap의 `computeIfAbsent`가 원자 연산임에도 람다가 두 번 실행될 수 있는 경우는 언제인가요?
+  > 두 스레드가 동시에 같은 Key로 `computeIfAbsent`를 호출하면 양쪽 모두 람다를 실행할 수 있고, 마지막 결과 하나만 Map에 남는다. 따라서 람다 내부에서 DB 삽입 같은 단발성 부작용이 있다면 두 번 실행될 수 있다.
 - 세션 Map에서 Rehash 직후 기존 Session 포인터가 무효화되는 상황은 어떤 구현에서 발생하나요?
+  > C++의 Flat Hash Map처럼 엔트리를 배열에 직접 저장하는 구현에서 Rehash 시 새 배열로 원소를 이동하면 기존 포인터·참조가 무효화된다. Java ConcurrentHashMap은 노드 객체 주소가 유지되므로 이 문제가 없지만, 직접 구현한 Open Addressing Map은 반드시 계약을 확인해야 한다.
 - HashMap에서 서로 다른 Key를 각각 다른 스레드가 수정할 때도 Data Race가 발생하는 이유는 무엇인가요?
+  > Resize 과정에서 내부 버킷 배열 자체를 교체하고 size 카운터를 갱신하는 작업은 공유 상태다. 서로 다른 Key를 건드려도 두 스레드가 동시에 Resize를 트리거하면 배열 참조가 중간 상태로 노출되어 Data Race가 발생한다.
 - Hash Flooding 공격에서 Chain 길이가 TREEIFY_THRESHOLD(8)를 넘으면 Java HashMap이 어떻게 대응하고, 그 대응이 완전한 방어가 되지 않는 이유는 무엇인가요?
+  > Chain을 Red-Black Tree로 전환해 최악 조회를 O(N)에서 O(log N)으로 줄인다. 그러나 Tree 전환 자체가 O(N log N) 비용이며, 공격자가 계속 같은 버킷으로 Key를 쏟으면 Tree 크기가 커져 여전히 CPU를 소모한다. 근본 방어는 무작위 Seed Hash로 공격자가 충돌 Key를 사전 계산하지 못하게 막는 것이다.
 - 게임 서버에서 세션 Map과 Entity Dense Array를 함께 쓸 때, 세션 삭제 순간 두 구조의 불변식이 깨지는 시나리오와 방어 방법은 무엇인가요?
+  > Swap-and-pop으로 Dense Array의 마지막 원소를 삭제 위치로 이동했는데 Map의 Index를 갱신하지 않으면, 이동된 Entity의 Map Entry가 이전 Index를 가리켜 잘못된 객체를 반환한다. 두 갱신을 같은 소유 Thread 또는 Lock으로 원자적으로 처리하고 항상 쌍으로 묶어 한쪽만 갱신되는 경로를 없애야 한다.
 - 외부 플레이어 입력 문자열을 Map Key로 쓰지 않고 내부 UUID로 치환할 때 발생하는 추가 Lookup 비용은 어떻게 측정하나요?
+  > 입력 문자열 → UUID 매핑 조회가 한 번 추가된다. 이 조회 자체의 평균 지연을 측정하려면 치환 Map의 get() 호출에 타이머를 추가하고 p50·p99 분포를 수집한다. 전체 세션 조회 p99와 비교해 치환 비용이 차지하는 비율을 확인한다.
 
 ## 11. 30초 모범답변
 > Hash Table은 평균 O(1) 조회를 제공하지만 Load Factor와 Hash 분포가 실질 성능을 결정합니다. 게임 서버에서는 세 가지를 주로 판단합니다. 첫째, Load Factor를 0.75 이하로 유지하고 예상 최대 동접 × 1.5 / Load Factor로 초기 Capacity를 Reserve해 Rehash Spike 자체를 막습니다. 둘째, 로직·네트워크 스레드가 동시에 접근하면 HashMap이 아닌 ConcurrentHashMap을 씁니다. 셋째, 외부 플레이어 입력을 Map Key로 직접 쓰면 Hash Flooding으로 O(N) 악화가 가능하므로 무작위 Seed Hash나 내부 UUID 치환을 적용합니다.

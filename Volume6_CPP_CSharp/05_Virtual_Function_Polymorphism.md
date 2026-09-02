@@ -345,12 +345,19 @@ Construction 중 vptr는 현재 Class를 가리키므로 Base Constructor에서 
 ## 17. 예상 꼬리질문
 
 - Handler Registry에 등록된 ICommandHandler가 Session Reference를 내부에 캐싱했을 때 Session 종료 후 어떤 수명 버그가 발생하고, 어떻게 설계를 수정합니까?
+  > Session Reference가 Dangling이 되어 Handler 호출 시 Undefined Behavior·크래시가 발생합니다. Handler는 `Handle(Session&, Packet&)` 형태로 호출마다 Session을 전달받고 내부에 캐싱하지 않도록 설계를 수정합니다. Session 수명이 필요하다면 `weak_ptr<Session>`으로 보유하고 `lock()`으로 유효성을 확인해 사용합니다.
 - Skill Effect 구조를 Virtual Interface에서 ECS Type별 배열로 전환할 때 기존 `override`로 구현된 특수 Effect 10개를 이전하는 순서와 회귀 검증 방법은 무엇입니까?
+  > 이전 순서: (1) 기존 Virtual Interface와 새 Type별 System을 병행 운영하는 Adapter 계층을 먼저 만든다. (2) Effect 10개를 하나씩 Type별 배열 System으로 이전하고 Adapter를 통해 기존 코드와 동일하게 동작하는지 확인한다. (3) 모든 Effect 이전 후 Adapter를 제거한다. 회귀 검증은 Effect별 입력·출력 단위 테스트를 이전 전에 작성하고, 이전 후 동일 테스트를 통과하는지 확인합니다. 실제 Tick p99를 이전 전후로 비교해 성능 이득을 측정합니다.
 - 게임 서버 Hot Path에서 `dynamic_cast` Downcast가 매 Frame 수천 번 호출되는 것이 발견됐습니다. Visitor 패턴 또는 Virtual Double Dispatch로 교체할 때 Trade-off는 무엇입니까?
+  > Visitor 패턴은 타입별 처리를 Compile Time에 확정하고 `dynamic_cast` 비용을 없앨 수 있지만, 새 Entity 타입 추가 시 Visitor 인터페이스와 모든 Concrete Visitor에 메서드를 추가해야 합니다. Virtual Double Dispatch는 타입을 추가하기 쉽지만 두 번의 Virtual 호출 비용이 생깁니다. 타입 집합이 고정이고 새 연산이 자주 추가되면 Visitor, 타입이 계속 추가되면 Double Dispatch가 적합합니다. 둘 다 `dynamic_cast`보다는 일반적으로 빠릅니다.
 - Monster AI State를 Virtual Interface로 구현하다 State 전환 중 Enter() 또는 Exit() 내에서 또 State를 바꾸는 재진입 버그가 발생했습니다. 어떻게 방어합니까?
+  > State Machine에 `isTransitioning` 플래그를 두어 전환 중 재전환 시도를 즉시 거절하거나 큐에 넣습니다. 또는 Enter/Exit 내에서 직접 전환하지 않고 다음 Tick에 적용할 Pending State를 기록하고, Tick 루프에서 Pending State를 확인해 전환하는 방식으로 재진입 자체를 구조적으로 막습니다. 직접 전환이 불필요한 설계인지 도메인 관점에서 재검토합니다.
 - ICommandHandler Base에 새 Pure Virtual을 추가했을 때 Handler 구현이 100개를 넘는 Codebase에서 누락된 Override를 Compile Time에 모두 탐지하는 방법은 무엇입니까?
+  > Pure Virtual을 추가하면 해당 Pure Virtual을 Override하지 않은 Derived Class는 Abstract Class가 되어 인스턴스화 시 Compile Error가 발생합니다. 따라서 모든 Concrete Handler가 최소 한 곳에서라도 생성된다면 컴파일 자체가 실패합니다. 추가로 `-Wall -Woverride` 또는 clang-tidy의 `cppcoreguidelines-virtual-class-destructor`로 정적 분석을 적용해 누락을 검출합니다. Factory 함수를 통해 모든 Handler를 생성하는 구조로 강제하면 누락 탐지가 더 확실합니다.
 - `vector<unique_ptr<Entity>>`에서 특정 Entity 타입만 일괄 처리하는 요구가 생겼을 때 `dynamic_cast`로 순회하는 방식과 Type별 별도 Vector를 유지하는 방식 중 어느 상황에서 어느 쪽을 선택합니까?
+  > Entity 수가 적거나 특정 타입 처리 빈도가 낮으면 `dynamic_cast` 순회가 구현이 단순합니다. Entity 수가 많고 매 Tick 해당 타입만 집중 처리하는 Hot Path라면 Type별 별도 Vector가 Cache 지역성과 순회 성능에 유리합니다. 기준: Profiler에서 `dynamic_cast` 순회가 측정 가능한 Tick 비용을 차지한다면 Type별 별도 Vector로 전환합니다. 단, 두 컨테이너 간 동기화 비용을 함께 고려합니다.
 - 서비스 중 Handler Registry를 Hot Reload로 교체했는데 구 Handler 소멸 후 Worker Thread에서 이미 꺼낸 포인터로 접근해 Segfault가 발생했습니다. 이 버그를 재현하는 최소 시나리오와 Epoch·`shared_ptr` Snapshot 중 어느 방식으로 수정하겠습니까? 각 방식의 동기화 비용 차이는 무엇입니까?
+  > 최소 재현 시나리오: Worker가 Registry에서 Handler 포인터를 꺼낸 직후, Main Thread가 Registry를 새 버전으로 교체하고 구 Registry를 소멸시키면 Worker의 포인터가 Dangling이 됩니다. `shared_ptr` Snapshot 방식은 Worker가 Dispatch 시작 시 Registry의 `shared_ptr`를 로컬에 복사해 보유하고 완료 후 해제합니다. 구 Registry는 모든 Worker가 Snapshot을 해제할 때까지 살아있습니다. 동기화 비용은 Atomic Reference Count 증감으로 비교적 낮습니다. Epoch 방식은 전역 Epoch Counter와 Thread-local Epoch 비교로 교체 가능 여부를 판단하며 구현이 복잡하지만 Allocation 없이 더 낮은 오버헤드가 가능합니다. 간단하고 안전한 구현이 필요하면 `shared_ptr` Snapshot을 선택합니다.
 
 ## 18. 30초 모범답변
 

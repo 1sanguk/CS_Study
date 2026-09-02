@@ -56,12 +56,15 @@
       <!-- 리더 영역 -->
       <div id="reader-area">
         <button id="btn-prev" class="nav-btn" aria-label="이전 챕터">&#8249;</button>
-        <article id="content">
-          <div class="loading-placeholder">
-            <div class="spinner"></div>
-            <p>로딩 중...</p>
-          </div>
-        </article>
+        <div class="reader-inner">
+          <article id="content">
+            <div class="loading-placeholder">
+              <div class="spinner"></div>
+              <p>로딩 중...</p>
+            </div>
+          </article>
+          <aside id="page-toc"></aside>
+        </div>
         <button id="btn-next" class="nav-btn" aria-label="다음 챕터">&#8250;</button>
       </div>
 

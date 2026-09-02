@@ -181,12 +181,19 @@ JFR에서 `Deoptimization` 이벤트를 필터링해 어떤 Method에서 발생�
 ## 10. 예상 꼬리질문
 
 - `-XX:+PrintCompilation` 출력에서 `made not entrant`와 `made zombie`가 각각 어떤 상태를 의미하고 운영에서 어떤 영향을 주나요?
+  > `made not entrant`는 해당 컴파일된 코드에 새로운 진입이 차단된 상태로, Deoptimization 후 재컴파일을 위해 기존 코드를 무효화할 때 나타난다. `made zombie`는 코드를 실행 중인 스레드가 없어 Code Cache에서 완전히 제거 가능한 상태다. 운영에서 이 이벤트가 빈번하면 Type Profile 가정이 자주 깨져 Deoptimization-재컴파일 사이클이 반복되며, Hot Path에서 일시적인 성능 저하가 발생할 수 있다.
 - JVM Tiered Compilation에서 특정 Method가 C1에 머무르고 C2로 진행하지 않는 이유와, C2 컴파일을 강제하는 방법 및 부작용은 무엇인가요?
+  > Method가 C2 컴파일 임계값(기본 10,000회 호출)에 도달하지 않거나, C2 컴파일 큐가 과부하 상태이거나, Code Cache가 가득 차면 C1에 머무른다. `-XX:CompileThreshold`를 낮추거나 `-Xcomp`로 즉시 컴파일을 강제할 수 있으나, Profile 데이터가 부족한 상태에서 최적화하면 잘못된 가정으로 Deoptimization이 오히려 증가하는 부작용이 생긴다.
 - Reflection을 많이 사용하는 Plugin 프레임워크를 GraalVM Native Image로 전환할 때 `-H:ReflectionConfigurationFiles` 누락으로 발생하는 런타임 오류와 사전 탐지 방법은 무엇인가요?
+  > 설정 파일 누락 시 `java.lang.ClassNotFoundException` 또는 `InaccessibleObjectException`이 런타임에 발생한다. 사전 탐지 방법은 `native-image-agent`를 JVM 모드로 실행해 Reflection 접근 패턴을 자동 수집하고 `reflect-config.json`을 생성하는 것이다. CI에서 `native-image --initialize-at-build-time`으로 빌드 단계에 클래스 초기화 오류를 조기에 검출한다.
 - 두 Plugin이 각각 다른 ClassLoader로 같은 버전의 Guava를 로딩할 때 발생하는 메모리 중복 비용과 격리 vs 공유 Trade-off를 어떻게 결정하나요?
+  > 동일 버전 Guava를 두 ClassLoader가 각각 로딩하면 Metaspace에 Class 메타데이터와 Code Cache가 중복 할당되며, 두 ClassLoader의 Guava 클래스 간 캐스트가 불가능해진다. Plugin 간 공유가 필요한 라이브러리는 Parent Loader(Application Loader)에서 한 번만 로딩하고 위임하는 방식으로 공유한다. Plugin 버전 충돌이 예상되거나 격리가 보안 요구사항이면 중복 비용을 감수하고 격리를 선택한다.
 - JFR Recording에서 JIT Compile 이벤트가 배포 후 5분까지 계속될 때 Warm-up 완료 시점을 어떤 지표로 판단하나요?
+  > JFR에서 단위 시간당 JIT Compile 이벤트 수가 최대치 대비 10% 미만으로 감소하고, p99 응답 시간이 안정 구간에 수렴하는 시점을 Warm-up 완료로 판단한다. 추가로 Hot Method Top 10의 컴파일 단계가 모두 C2로 전환됐는지 확인하고, GC Pause 빈도가 안정적인지 병행 모니터링한다.
 - Container CPU Limit이 밀리코어 500(0.5코어)일 때 `-XX:ActiveProcessorCount`를 명시하지 않으면 ForkJoinPool.commonPool() Thread 수가 어떻게 설정되고 어떤 문제가 생기나요?
+  > JVM이 Host 코어 수(예: 32코어)를 기준으로 `ForkJoinPool.commonPool()`의 병렬도를 31로 설정한다. 실제 CPU 할당은 0.5코어뿐이므로 31개 Thread가 경쟁하면 CPU 스로틀링으로 Context Switch 오버헤드가 극심해지고 p99 응답이 급등한다. `-XX:ActiveProcessorCount=1`을 명시하면 commonPool 병렬도가 1로 제한돼 실제 CPU 할당에 맞는 Thread 수로 동작한다.
 - Static Initializer에서 DB Connection을 여는 코드가 있는데 DB가 다운된 상태로 Class가 처음 로딩되면 어떤 예외가 발생하고, 이후 같은 Class를 다시 로딩하려 하면 어떤 문제가 생기나요?
+  > Static Initializer가 예외를 던지면 JVM이 `ExceptionInInitializerError`로 감싸서 전파하고, 해당 Class를 실패 상태로 표시한다. 이후 같은 ClassLoader에서 동일 Class에 접근하면 재초기화를 시도하지 않고 `NoClassDefFoundError`를 즉시 발생시켜 서버가 재시작 전까지 해당 Class를 사용할 수 없다. 이 때문에 외부 자원 연결은 Static Initializer 대신 명시적 초기화 메서드나 LazyHolder 패턴으로 분리해야 한다.
 
 ## 11. 30초 모범답변
 

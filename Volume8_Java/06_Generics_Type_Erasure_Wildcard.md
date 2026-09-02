@@ -190,12 +190,19 @@ Compiler가 Type Erasure 후 Override 다형성을 유지하기 위해 자동으
 
 ## 10. 예상 꼬리질문
 - `TypeReference<List<Player>>`를 사용할 때 익명 서브클래스가 제네릭 타입 정보를 유지하는 원리와, 이 방법이 Type Erasure를 피할 수 있는 이유와 한계는 무엇인가요?
+  > 익명 서브클래스는 바이트코드에 슈퍼타입 시그니처를 그대로 보존한다. Reflection으로 `getGenericSuperclass()`를 호출하면 파라미터 타입을 읽을 수 있다. 단, 로컬 변수 타입 추론(var)이나 런타임에 동적으로 생성된 타입은 이 방법으로도 복원할 수 없다.
 - 게임 서버 `PlayerRepository<T>`를 Spring Bean으로 등록했을 때 런타임에 `T`의 실제 타입을 알 수 없는 이유와, Spring `ResolvableType`으로 이를 해결하는 방법은 무엇인가요?
+  > Bean 등록 시 타입 파라미터 T가 Erasure되어 `PlayerRepository<Player>`와 `PlayerRepository<NPC>`가 동일한 Class로 취급된다. Spring `ResolvableType.forClass(...).getGeneric(0)`을 사용하면 Bean 클래스의 슈퍼타입 시그니처에서 실제 타입 인자를 추출할 수 있다.
 - Generic Varargs 메서드에서 `@SafeVarargs`를 잘못 적용했을 때 Heap Pollution이 발생하는 구체적인 시나리오와, SpotBugs·SonarQube에서 이 패턴을 탐지하는 방법은 무엇인가요?
+  > varargs 배열을 다른 제네릭 타입 배열로 저장하거나 외부에 노출하면 런타임에 ClassCastException이 발생한다. SpotBugs `VA_FORMAT_STRING_USES_NEWLINE`과 SonarQube `java:S3038` 규칙이 `@SafeVarargs` 없이 제네릭 Varargs를 사용하거나 배열을 반환하는 패턴을 탐지한다.
 - Packet Handler Registry `dispatch()` 내부 Unchecked Cast가 실제로 안전하다는 것을 증명하는 방법과, 안전하지 않은 경우를 탐지하기 위한 단위 테스트 설계는 무엇인가요?
+  > `register(Class<T>, PacketHandler<T>)` 계약이 타입 일치를 컴파일 타임에 강제하므로 Map에 올바른 쌍만 들어간다는 불변식을 주석으로 문서화한다. 단위 테스트에서는 잘못된 타입의 Handler를 등록하려는 코드가 컴파일 오류를 발생시키는지 확인하고, dispatch 시 ClassCastException이 발생하지 않음을 assertDoesNotThrow로 검증한다.
 - `class Foo<T extends Comparable<T>>`처럼 재귀 Generic Bound가 있는 경우 Type Erasure 후 T가 어떤 타입으로 치환되고, Bridge Method가 생성되는 조건은 무엇인가요?
+  > T의 첫 번째 Bound인 `Comparable`로 치환된다. Foo를 상속한 구체 클래스에서 `compareTo(FooSubtype)`을 Override하면 Erasure 후 `compareTo(Comparable)`과 시그니처가 다르므로 Compiler가 `compareTo(Object)` Bridge Method를 자동 생성해 JVM dispatch를 유지한다.
 - Kotlin Reified Type Parameter와 Java `Class<T>` Token을 비교했을 때, 게임 서버 Packet 파싱처럼 런타임 타입이 필요한 상황에서 두 방법의 구현 차이와 성능 Trade-off는 무엇인가요?
+  > Kotlin Reified는 `inline fun<reified T>`로 호출 지점에 타입 정보를 인라인해 `T::class`를 직접 사용할 수 있다. Java Class Token은 명시적으로 `Class<T>` 파라미터를 전달해야 한다. Reified는 API가 간결하지만 인라인 함수 크기가 커질 수 있고, Class Token은 호출부가 verbose하지만 JVM 레벨 동작이 명확하다.
 - Java 17+ sealed class와 Generic을 함께 사용해 Packet Handler Registry를 구현할 때, Pattern Matching switch로 instanceof 분기를 제거하는 방법과 Type Erasure 때문에 불가능한 경우는 무엇인가요?
+  > `sealed interface Packet permits MovePacket, ChatPacket`을 정의하면 `switch(packet) { case MovePacket m -> ...; case ChatPacket c -> ...; }`로 완전한 분기가 가능하다. 단, `case List<MovePacket> list` 처럼 제네릭 타입 파라미터를 기준으로 분기하는 것은 Type Erasure로 불가능하며 컴파일 오류가 발생한다.
 
 ## 11. 30초 모범답변
 > Generics는 Compile Time 타입 안전성과 재사용성을 제공합니다. Compiler는 Type Erasure로 파라미터를 Bound 또는 Object로 치환하고 Bridge Method를 삽입합니다. Producer는 `? extends`, Consumer는 `? super`(PECS)를 적용하고, 런타임 타입이 필요하면 `Class<T>` Token을 명시적으로 전달합니다.

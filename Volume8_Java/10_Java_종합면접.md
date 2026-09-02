@@ -212,7 +212,7 @@ Map<String, Session> cache = new WeakHashMap<>();
 - JIT Warm-up 전 초기 응답 지연
 - GC Pause가 p99에 영향 (특히 Full GC)
 - Boxing(Autoboxing) 비용 — Hot Path에서 Primitive 배열 대신 `Integer[]` 사용 시 GC 부담
-- Virtual Thread의 `synchronized` Pinning — `ReentrantLock` 교체 필요
+- Virtual Thread의 `synchronized` Pinning — JDK 21~23에서 발생, JDK 24(JEP 491)에서 해결. native method Pinning은 잔존. JDK 21~23 환경에서는 `ReentrantLock` 교체 필요
 
 **설계 Trade-off**
 - 추상화(Interface·Generic)는 유연성 ↑, 런타임 복잡도 ↑
@@ -262,12 +262,19 @@ JIT 외 원인: ① Class Loading 폭발(최초 요청 시 수천 개 Class 로�
 ## 10. 예상 꼬리질문
 
 - JIT Warm-up 단축을 위해 CDS(Class Data Sharing)와 AppCDS를 적용하는 절차와 GraalVM AOT 대비 Trade-off는 무엇입니까?
+  > AppCDS 적용 절차는 ① `-Xshare:dump`로 공유 아카이브 생성 → ② `-XX:SharedArchiveFile=app.jsa`로 재실행해 Class Loading 캐시를 활용합니다. GraalVM AOT(native-image)는 JIT Warm-up이 없어 시작 지연이 거의 없지만, 런타임 리플렉션·동적 클래스 로딩에 별도 설정(`reflect-config.json`)이 필요하고 JIT의 프로파일 기반 최적화를 받지 못해 장기 실행 Throughput이 JIT보다 낮을 수 있습니다.
 - `ConcurrentHashMap.compute`가 `get` 후 `put`보다 안전한 이유와 compute 내부에서 DB I/O가 있을 때 발생하는 문제는 무엇입니까?
+  > `compute`는 해당 Key의 Bucket Lock을 잡은 채로 람다를 실행하므로 check-then-act 복합 연산이 원자적으로 처리됩니다. `get` 후 `put` 사이에는 다른 Thread가 개입해 경쟁 조건이 발생할 수 있습니다. 반면 `compute` 내부에서 DB I/O를 수행하면 Bucket Lock을 긴 시간 점유해 같은 Key에 접근하는 다른 Thread가 모두 대기하는 Lock Contention이 발생합니다. DB I/O는 compute 밖에서 미리 수행하고 결과만 compute에 전달하는 패턴이 안전합니다.
 - `try-with-resources`에서 `close()` 도중 예외가 발생하면 원래 예외와 close 예외가 어떻게 처리되고 `getSuppressed()`로 어떻게 꺼냅니까?
+  > 본문에서 예외가 발생한 상태에서 close 예외가 추가로 발생하면, 본문 예외가 주 예외가 되고 close 예외는 `primaryException.addSuppressed(closeException)` 형태로 Suppressed 목록에 추가됩니다. `catch (Exception e) { e.getSuppressed() }`로 배열을 꺼내며 복수 자원의 경우 선언 역순으로 close되므로 Suppressed도 역순으로 쌓입니다. 본문 예외가 없는 정상 흐름에서 close 예외가 발생하면 해당 예외가 단독 주 예외가 됩니다.
 - G1GC Full GC 500ms가 발생하는 상황에서 ZGC로 전환하기 전 `G1HeapRegionSize` 조정과 `InitiatingHeapOccupancyPercent` 낮추기를 먼저 시도하는 이유는 무엇입니까?
+  > G1GC Full GC는 주로 Mixed GC가 Old 영역을 충분히 회수하지 못할 때 발생합니다. `InitiatingHeapOccupancyPercent`를 45에서 35로 낮추면 G1이 더 일찍 Concurrent Marking을 시작해 Old 영역이 한계에 도달하기 전에 회수합니다. `G1HeapRegionSize` 조정은 대형 객체(Humongous Object)가 Region을 낭비하는 경우 Region 크기를 늘려 효율을 높입니다. ZGC 전환은 GC 알고리즘 자체를 교체하는 대규모 변경이므로 G1 튜닝으로 먼저 개선 여지를 확인한 뒤 진행합니다.
 - Room Owner 패턴에서 inbox `ArrayBlockingQueue`가 가득 찰 때 Action Drop vs Sender 대기 중 어떤 기준으로 선택하고 Drop 발생 시 Prometheus Alert 임계값은 어떻게 설정합니까?
+  > 게임 서버에서 실시간성이 중요한 Combat Action은 Drop을 선택해 Sender가 블록되지 않게 하고, 보상 지급·DB 저장처럼 유실 불가한 Action은 Sender 대기(offer + timeout 또는 BackPressure 신호)를 선택합니다. Prometheus Alert는 `inbox_drop_count` 카운터가 Tick당 1% 이상 발생하거나 `queue_size / capacity` 비율이 80%를 초과하면 Warning, 95% 이상이면 Critical로 설정하고 Drop 발생 시 해당 Room ID를 Label로 집계해 Hot Room을 식별합니다.
 - Virtual Thread Pinning과 synchronized Monitor Wait을 동시에 진단할 때 JFR `jdk.VirtualThreadPinned`와 `jdk.JavaMonitorWait` 이벤트를 함께 분석하는 방법은 무엇입니까?
+  > JFR 기록 시 `-XX:StartFlightRecording=settings=profile`로 두 이벤트를 함께 수집합니다. JMC에서 `jdk.VirtualThreadPinned` 이벤트는 Virtual Thread가 Carrier Thread에 고정된 기간과 스택을 보여주며, 같은 시간축의 `jdk.JavaMonitorWait` 이벤트와 Thread 이름으로 상관 분석해 synchronized 블록 내 Pinning 구간을 특정합니다. JDK 21~23 환경에서 synchronized 내부 I/O로 인한 Pinning은 `ReentrantLock`으로 교체해 해결하고, JDK 24(JEP 491) 이후에는 Pinning 자체가 제거됩니다.
 - 동시성 버그를 CI에서 사전 탐지하기 위해 SpotBugs `@GuardedBy`·Error Prone `@Immutable`·ThreadSafe Annotation 중 어떤 조합을 적용하고 각각의 탐지 범위와 False Positive 비율은 어떻습니까?
+  > SpotBugs `@GuardedBy`는 특정 필드·메서드 접근 시 올바른 Lock을 잡지 않는 패턴을 정적 분석으로 탐지하며 False Positive가 낮습니다. Error Prone `@Immutable`은 어노테이션이 붙은 클래스의 Mutable Field 선언을 Compile Time에 차단합니다. ThreadSafe Annotation(JCIP)은 문서화 목적이 강하고 SpotBugs와 연동 시 분석 범위를 좁히는 데 활용합니다. 세 가지를 조합하면 설계 의도 문서화(ThreadSafe) → Compile Time 불변식 검증(Error Prone) → 런타임 근접 정적 분석(SpotBugs) 순서로 계층적으로 커버하며, False Positive는 `@SuppressFBWarnings`로 케이스별 제외합니다.
 
 ## 11. 30초 모범답변
 > Java 서버는 JVM에서 Bytecode를 실행하고 Hot Path를 JIT 최적화하며 GC로 객체를 회수합니다. 정확성은 equals·hashCode·Generic·Exception·Happens-before 계약에서 나오고, 공유 상태는 synchronized·Atomic·Room Owner 패턴으로 보호합니다. 외부 I/O는 Virtual Thread나 CompletableFuture로 처리하되 DB 연결 같은 외부 자원은 Semaphore로 상한을 둡니다. 운영에서는 GC Pause·Thread·Queue·외부 I/O를 동일 시간축에서 관찰합니다.

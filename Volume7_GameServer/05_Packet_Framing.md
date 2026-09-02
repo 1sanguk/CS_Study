@@ -271,12 +271,19 @@ Application 계층 분할 재조립 설계: (1) **Fragment 식별**: Message ID(
 ## 10. 예상 꼬리질문
 
 - Partial Header가 도착한 상태에서 연결이 끊겼을 때 Circular Buffer에 남은 Byte가 다음 세션 재사용으로 이어지는 버그를 Session 초기화에서 어떻게 방지하나요?
+  > Session 해제 시 Circular Buffer의 readPos와 writePos를 모두 0으로 초기화하고, Buffer 메모리를 재사용 전 zeroing하거나 새 Session에 별도 Buffer 인스턴스를 할당합니다. Session Pool에서 재사용할 경우 Pool 반환 시점에 Parser 상태머신도 함께 초기화해 잔류 바이트 해석 오류를 차단합니다.
 - Frame Body를 Zero-copy Span으로 비동기 Handler에 넘겼는데 Buffer 재사용 후 데이터가 깨졌습니다. 수명을 보장하는 설계 방법(Reference-counted Segment, owning copy)을 비교해 주세요.
+  > Reference-counted Segment는 Handler가 Span을 보유하는 동안 Buffer 해제를 막아 복사 없이 수명을 보장하지만, Ref Count 관리 비용이 있습니다. Owning copy는 Dispatch 시점에 데이터를 복사하므로 구현이 단순하고 안전하지만 복사 비용이 생깁니다. 고빈도 소형 Packet은 복사 비용이 낮으므로 Owning copy가 안전하고, 대형 Packet에는 Ref-counted Segment가 유리합니다.
 - 초당 1만 건 소형 Packet(100B) 서버에서 Circular Buffer를 16KB로 설정했는데 Buffer 부족이 발생했습니다. Buffer 크기 결정 기준(p99 recv 크기·Burst Factor)을 설명해 주세요.
+  > Buffer 크기는 p99 단일 recv 크기 × Burst Factor(통상 4~8배)로 산정합니다. 100B × 10,000 TPS에서 순간 Burst가 몰리면 16KB는 160패킷밖에 수용하지 못합니다. 실제 p99 recv 바이트 수와 최대 Burst 간격을 계측한 뒤 그 결과에 여유 배수를 곱해 64KB~256KB 수준으로 재조정합니다.
 - libFuzzer로 Parser를 검증했는데 Corpus 100만 건에서 Crash가 0건이었습니다. Fuzz 커버리지가 충분한지 확인하는 방법(Coverage Report, Edge Case 수동 추가)은 무엇인가요?
+  > `llvm-cov`로 Branch Coverage 리포트를 생성해 Length 검증·경계 분기·State 전환 코드가 실행됐는지 확인합니다. 잘린 Header(1~3바이트), 최대 Length, Length=0, 연속 Frame 등 프로토콜 경계값을 Corpus에 수동 추가해 Fuzzer가 해당 경로를 탐색하도록 합니다. Coverage 80% 이상이라도 비즈니스 로직 경계는 수동 케이스로 보완해야 합니다.
 - 1KB 압축 데이터가 100MB로 해제되는 Compression Bomb 시도가 있었습니다. 해제 전 크기 제한을 어느 단계에서 어떻게 검증하나요?
+  > Length-prefix Header를 읽은 직후, 메모리 할당 전에 압축 해제 예상 크기를 검증합니다. 압축 포맷(zlib 등)이 해제 크기를 헤더에 포함하면 그 값을 최대 허용 크기(예: 1MB)와 비교하고, 없으면 스트리밍 해제 중 누적 바이트에 상한을 두어 초과 시 즉시 연결을 종료합니다.
 - Rolling Deploy 중 구 Client(v1)·신 Server(v2) 조합에서 Reserved 필드 해석 차이로 Parser Error가 발생했습니다. Reserved 필드 호환성을 보장하는 방법은?
+  > Reserved 필드는 수신 측에서 값과 무관하게 무시(skip)하도록 명시적으로 코딩합니다. 신 버전 Server는 Reserved 위치의 값을 검증하지 않고 그대로 두며, 구 Client가 0으로 채운 필드를 새 의미로 해석할 때는 Protocol Version 필드로 버전을 구분해 분기 처리합니다.
 - Parser Error가 특정 ISP에서 집중됩니다. MTU 차이로 인한 Fragmentation인지, Protocol 오류인지 구분하는 지표(Packet 크기 분포, Fragment Count)는 무엇인가요?
+  > Fragmentation이 원인이면 recv 크기 분포가 특정 ISP에서 MTU 근방(1500B 이하)에 집중되고 TCP Fragment 재조립 지연이 발생합니다. Protocol 오류라면 Parser Error 직전 Packet의 매직 바이트나 Type 코드가 손상되어 있습니다. 두 경우를 구분하려면 Parser Error 시 직전 recv 크기와 오류 발생 오프셋을 로그로 남겨 Fragmentation 경계와 일치하는지 대조합니다.
 
 ## 11. 30초 모범답변
 

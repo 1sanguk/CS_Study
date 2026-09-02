@@ -125,6 +125,8 @@ Statement 2 Snapshot ──> committed state at S2
 
 같은 트랜잭션의 반복 읽기에서 같은 행 버전을 보도록 한다. MVCC 구현에서는 첫 읽기 시점 또는 트랜잭션 Snapshot을 유지할 수 있다. 실제 제품은 더 강한 보장을 할 수 있다. Snapshot으로 일반 조회의 Phantom이 보이지 않거나 범위 Lock으로 삽입을 막는 경우가 있다. 반대로 Write Skew는 남을 수 있다.
 
+MySQL InnoDB는 REPEATABLE READ가 기본 격리 수준이며, 일반 SELECT(Consistent Read)에서는 트랜잭션 첫 읽기 시점 Snapshot을 유지해 Phantom이 보이지 않는다. Locking Read(SELECT ... FOR UPDATE·FOR SHARE)와 UPDATE·DELETE의 범위 탐색에서는 next-key lock(레코드 Lock + Gap Lock)을 사용해 삽입을 차단함으로써 Phantom을 추가로 방지한다. READ COMMITTED에서는 Gap Lock이 비활성화되어 Phantom이 발생할 수 있다. PostgreSQL의 Repeatable Read는 Snapshot Isolation으로 구현되어 Phantom이 보이지 않지만 Write Skew는 남을 수 있다. 제품 문서를 직접 확인한다.
+
 #### Serializable
 
 동시 실행 결과가 어떤 순서로 하나씩 실행한 결과와 동등하도록 하는 가장 강한 격리 수준이다. 범위 Lock으로 충돌 작업을 대기시키거나, 읽기·쓰기 의존성을 추적해 위험한 트랜잭션 하나를 직렬화 실패로 중단하는 방식으로 구현될 수 있다.
@@ -305,7 +307,7 @@ Dirty Read는 미커밋 값을 읽는 것, Non-repeatable Read는 같은 행을 
 
 ### Q2. SQL 표준 격리 수준 4가지를 설명해 주세요.
 
-Read Uncommitted는 미커밋 값을 허용한다. Read Committed는 Commit된 값만 읽고 각 문장마다 새 Snapshot을 본다. Repeatable Read는 트랜잭션 시작 Snapshot을 유지해 같은 행 재조회가 일관되다. Serializable은 결과가 어떤 직렬 순서와 동등하도록 가장 강하게 보장한다. 실제 DBMS 구현은 이름과 다를 수 있어 제품 문서를 확인해야 한다.
+Read Uncommitted는 미커밋 값을 허용한다. Read Committed는 Commit된 값만 읽고 각 문장마다 새 Snapshot을 본다(PostgreSQL 기본값). Repeatable Read는 트랜잭션 시작 Snapshot을 유지해 같은 행 재조회가 일관되다(MySQL InnoDB 기본값). Serializable은 결과가 어떤 직렬 순서와 동등하도록 가장 강하게 보장한다. 실제 DBMS 구현은 이름과 다를 수 있어 제품 문서를 확인해야 한다.
 
 ### Q3. Snapshot Isolation과 Serializable의 차이는 무엇인가요?
 
@@ -326,12 +328,19 @@ Serializable에서도 Deadlock과 Serialization Failure가 발생하고 애플�
 ## 10. 예상 꼬리질문
 
 - 같은 DB 엔진에서 Repeatable Read와 Snapshot Isolation은 어떻게 다른가요?
+  > 두 용어는 혼용되기도 하지만 일반적으로 Snapshot Isolation은 트랜잭션 시작 시점의 일관된 Snapshot을 읽고 Write-Write 충돌에서 한쪽을 실패시키는 구체적 모델을 가리킨다. SQL 표준 Repeatable Read는 동일 행 재조회의 일관성만 요구하며 Snapshot 방식보다 약한 정의다. PostgreSQL의 REPEATABLE READ는 실제로 Snapshot Isolation으로 구현되어 Phantom이 보이지 않지만 Write Skew는 남을 수 있다.
 - Deadlock 감지와 해소 방식을 설명해 주세요.
+  > DBMS는 트랜잭션 간 대기 관계를 Wait-for Graph로 관리하고 주기적으로 순환을 탐지한다. 순환이 발견되면 롤백 비용이 가장 낮은 트랜잭션을 희생자로 선택해 Rollback하여 나머지가 진행되도록 한다. 예방 관점에서는 모든 트랜잭션이 자원을 동일한 순서로 획득하고, Lock 보유 시간을 짧게 유지하며, 필요한 인덱스를 두어 Lock 범위를 줄인다.
 - 일반 SELECT와 `SELECT FOR UPDATE`는 어떻게 다른가요?
+  > MVCC 환경에서 일반 SELECT는 트랜잭션 Snapshot에 보이는 이전 Commit 버전을 잠금 없이 읽는다. `SELECT FOR UPDATE`는 해당 행에 X Lock을 걸고 현재 최신 커밋 값을 읽으며, 이후 UPDATE가 같은 트랜잭션에서 일어나도록 경쟁 요청을 직렬화한다. 잔액 차감처럼 최신 상태를 보고 즉시 변경해야 하는 경우에 Locking Read가 필요하다.
 - 비동기 Replica에서 읽으면 격리 수준이 의미 없나요?
+  > 트랜잭션 격리 수준은 Primary 내부의 동시 트랜잭션 간 관찰 문제를 제어한다. 비동기 Replica는 복제 지연으로 인해 Primary에서 이미 Commit된 변경이 아직 반영되지 않은 이전 값을 반환할 수 있다. 이는 격리 수준과 별개인 복제 일관성 문제로, Replica에서 읽을 때는 허용 가능한 지연을 별도로 설계해야 한다.
 - 분산 시스템에서 Write Skew를 어떻게 막나요?
+  > 단일 DB에서는 Serializable 격리나 관련 행 전체에 `FOR UPDATE` Lock을 걸어 방지할 수 있다. 분산 시스템에서는 여러 서비스가 독립 DB를 사용하므로 단일 트랜잭션으로 묶기 어렵다. 불변식을 한 서비스가 소유하는 단일 행으로 표현하거나, 분산 Lock을 사용하거나, 충돌을 감지해 보상하는 Saga 패턴으로 대응한다.
 - Optimistic Lock과 Pessimistic Lock 중 어떤 상황에서 무엇을 선택하나요?
+  > 낙관적 Lock은 충돌이 드물고 읽기가 쓰기보다 많은 경우에 적합하다. 읽을 때 버전 번호를 기록하고 쓸 때 버전이 변경되었으면 재시도한다. 비관적 Lock(`FOR UPDATE`)은 충돌 빈도가 높거나 충돌 시 재시도 비용이 큰 경우에 적합하다. 재시도 없이 한 번에 처리하지만 Lock 대기와 Deadlock 위험이 있다.
 - Serialization Failure와 Deadlock을 코드에서 어떻게 구분하나요?
+  > DBMS는 두 경우 모두 오류를 반환하지만 오류 코드가 다르다. PostgreSQL에서 Serialization Failure는 SQLSTATE `40001`, Deadlock은 `40P01`이다. MySQL에서 Deadlock은 오류 번호 `1213`, Lock Wait Timeout은 `1205`다. 두 경우 모두 전체 트랜잭션을 재시도해야 하며 멱등 설계가 전제되어야 한다.
 
 ## 11. 30초 모범답변
 

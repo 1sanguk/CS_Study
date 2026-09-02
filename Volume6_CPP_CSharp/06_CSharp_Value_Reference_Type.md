@@ -331,12 +331,19 @@ Mutable Class 참조를 Queue에 넣으면 Producer가 Enqueue 후 객체를 수
 ## 18. 예상 꼬리질문
 
 - ECS Tick에서 `Position[]·Velocity[]`를 별도 배열로 분리했는데 순차 접근 시 Cache Miss가 예상보다 높게 나왔습니다. 어떤 접근 패턴이 원인이고, SoA(Structure of Arrays)·AoS(Array of Structures) 중 어느 쪽으로 재조정합니까?
+  > Position과 Velocity를 같은 인덱스로 동시에 읽는 패턴은 두 배열이 서로 다른 Cache Line에 있어 번갈아 읽을 때 경쟁이 생깁니다. 이 경우 SoA(별도 배열)는 Position만 읽거나 Velocity만 읽는 단일 배열 접근 시 유리하고, 두 배열을 함께 읽는 Tick 로직에는 AoS(`{Position, Velocity}` 구조체 배열)가 Cache Line당 필요한 데이터를 모아 더 효율적입니다. 실제 접근 패턴을 BenchmarkDotNet과 하드웨어 성능 카운터로 측정해 결정합니다.
 - `record struct MessageSnapshot`에 `List<Player>` Field를 포함해 Queue에 Enqueue했는데 Consumer에서 내용이 달라지는 버그가 발생했습니다. 원인과 방어 방법은 무엇입니까?
+  > `record struct` 복사 시 `List<Player>` Reference 값만 복사되어 Producer와 Consumer가 같은 List 인스턴스를 가리킵니다. Producer가 List를 수정하면 Consumer에도 영향을 줍니다. 방어 방법은 Enqueue 시 `new List<Player>(original.Players)`로 Deep Copy하거나, `IReadOnlyList<Player>` 또는 `ImmutableList<Player>`로 타입을 바꿔 수정 자체를 막습니다. Struct Snapshot 내부에 Mutable Reference Field가 있으면 값 의미가 아님을 항상 명시합니다.
 - `CollectionsMarshal.AsSpan`으로 `List<Position>` 내부를 직접 수정하다 List Add 후 Dangling 접근이 발생했습니다. 안전하게 사용하는 제약 조건과 패턴은 무엇입니까?
+  > `CollectionsMarshal.AsSpan`은 List 내부 배열의 Span을 직접 노출합니다. List에 Add나 Remove를 하면 내부 배열이 재할당될 수 있어 기존 Span이 무효가 됩니다. 안전하게 사용하려면 Span이 살아있는 구간 동안 List 크기를 변경하지 않아야 합니다. 패턴: Span을 얻기 전 `list.Capacity`가 충분한지 확인하고, 수정 구간을 명확히 분리합니다. 크기 변경이 필요하면 Span을 먼저 해제(Scope 종료)한 후 Add를 수행합니다.
 - `interface`를 구현한 Struct를 Interface 변수에 대입할 때 Boxing이 발생하는 경로를 Allocation Profiler 없이 코드 레벨에서 탐지하는 방법은 무엇입니까?
+  > SharpLab(sharplab.io)에서 코드를 붙여 넣어 IL을 확인하면 `box` Opcode가 있는 경로를 찾을 수 있습니다. dotnet-ildasm으로 로컬에서 IL을 추출해도 됩니다. Roslyn Analyzer 중 `Meziantou.Analyzer`나 `Roslynator`는 Struct를 Interface 변수에 대입하는 패턴을 정적 분석으로 경고합니다. `where T : IMyInterface`로 Generic Constraint를 사용하면 JIT가 Struct를 구체 타입으로 최적화해 Boxing을 회피합니다.
 - Equality에 포함되는 Mutable Score Field를 가진 Struct를 Dictionary Key로 사용하다 Score 변경 후 조회 실패가 발생했습니다. 원인과 Key 설계 원칙은 무엇입니까?
+  > Struct가 Dictionary에 삽입될 때의 Hash Code와 Score 변경 후의 Hash Code가 달라져 다른 버킷에 위치하게 됩니다. 조회 시 원래 Hash로 버킷을 찾지 못해 키를 발견하지 못합니다. Key 설계 원칙: Dictionary Key로 사용하는 타입의 `GetHashCode`에 포함되는 Field는 Key가 Dictionary에 있는 동안 변경하지 않아야 합니다. 불변 Field만 Hash에 포함하거나, Struct 자체를 `readonly`로 만들어 변경을 구조적으로 막는 것이 원칙입니다.
 - 64바이트 `readonly struct`의 Non-readonly Extension Method 호출에서 방어적 Copy 발생 여부를 BenchmarkDotNet으로 확인하는 방법과 `in` 사용이 유리한 Struct 크기 기준은 무엇입니까?
+  > BenchmarkDotNet에서 `[DisassemblyDiagnoser]`를 사용해 JIT 어셈블리를 확인하거나, `[MemoryDiagnoser]`로 Allocation Count를 측정합니다. SharpLab에서 IL의 `ldobj` 또는 `stobj` 명령으로 방어적 Copy 여부를 확인할 수도 있습니다. `in` 사용이 유리한 기준은 일반적으로 포인터 크기(8바이트, 64비트 기준)를 초과하는 Struct이지만, 간접 접근 비용 때문에 너무 작은 Struct(16바이트 이하)에서는 오히려 불리할 수 있어 실측이 필요합니다.
 - `Nullable<int>` 타입과 Nullable Reference Annotation `Session?`을 동일하게 취급한 코드에서 Runtime null 검사가 달라지는 구체적 시나리오와 수정 방법은 무엇입니까?
+  > `Nullable<int>`(`int?`)는 Runtime에 `HasValue`와 `Value`를 가진 Value Type Wrapper이므로 null 검사가 Runtime에 실제로 동작합니다. `Session?`는 Nullable Reference Annotation으로 Compiler 분석 Metadata이며, Runtime에 `Session` 타입 자체는 Reference Type이라 null 할당이 가능하지만 `HasValue` 체크 없이 null 역참조 시 `NullReferenceException`이 발생합니다. 두 타입을 혼동해 `Session?.Method()`처럼 Elvis 연산자를 `int?`에 쓰면 동작하지 않을 수 있습니다. 수정 방법: `int?`는 `.HasValue`와 `.Value`로, `Session?`는 null 조건부 연산자 `?.`와 `is not null` 패턴으로 각각 구분해서 처리합니다.
 
 ## 19. 30초 모범답변
 

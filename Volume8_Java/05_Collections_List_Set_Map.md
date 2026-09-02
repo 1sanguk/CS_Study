@@ -188,13 +188,20 @@ Load Factor 초과로 Rehash가 발생할 때 모든 원소를 새 배열로 재
 TreeMap O(log n) 삽입·삭제는 10만 건에서 약 17 비교이므로 이론상 충분합니다. 실제 병목을 async-profiler flame graph로 확인: ① 잦은 삽입·삭제로 Red-Black Tree 회전 + GC Allocation이 주 원인 → 배치 갱신(Tick 종료 후 일괄 반영) 검토. ② synchronized TreeMap 경합 → ConcurrentSkipListMap으로 교체(Lock-free 범위 조회). ③ Top N(100~1000위)만 필요하면 PriorityQueue로 상위 N만 유지. ④ 전체 랭킹은 비동기 배치로 계산 후 Redis ZADD/ZRANGE로 서빙.
 
 ## 10. 예상 꼬리질문
-- HashMap에서 Bucket 하나에 엔트리가 8개를 초과해 LinkedList에서 Red-Black Tree로 전환되는 treeify 조건을 설명하고, 악의적인 Hash 충돌 공격(Hash DoS)이 들어왔을 때 서버가 받는 영향과 방어 방법은 무엇인가요?
+- HashMap에서 Bucket 하나에 노드가 TREEIFY_THRESHOLD(8) 이상이고 전체 테이블 용량이 MIN_TREEIFY_CAPACITY(64) 이상일 때 LinkedList에서 Red-Black Tree로 전환되는 treeify 조건을 설명하고, 악의적인 Hash 충돌 공격(Hash DoS)이 들어왔을 때 서버가 받는 영향과 방어 방법은 무엇인가요?
+  > Java 8부터 Bucket 충돌이 8개 이상이고 테이블 크기가 64 이상이면 Red-Black Tree로 전환해 최악 조회를 O(n)에서 O(log n)으로 낮춘다. Hash DoS는 특정 Bucket에 충돌을 몰아 CPU를 고갈시키므로, 외부 입력을 Key로 쓸 때는 randomized hashCode(SipHash 등)나 입력 길이 제한으로 방어한다.
 - ConcurrentHashMap.compute() 내부 Mapping Function에서 외부 DB I/O를 호출하면 어떤 문제가 발생하고, 이 경우 computeIfAbsent와 별도 Lock 중 어느 쪽이 적합한가요?
+  > compute() 실행 중 해당 Bucket이 잠기므로 DB I/O가 길어지면 같은 Key에 대한 다른 Thread가 장시간 대기하고 최악에는 Deadlock이 발생한다. DB를 먼저 조회한 뒤 결과를 computeIfAbsent에서 사용하거나, DB 포함 로직을 별도 Lock으로 보호하고 Map 갱신만 compute로 처리하는 것이 안전하다.
 - LinkedHashMap(accessOrder=true)으로 LRU 캐시를 구현했는데 멀티스레드 환경에서 사용하면 어떤 문제가 발생하고, Thread-safe LRU를 구현하는 방법과 각각의 성능 Trade-off는 무엇인가요?
+  > LinkedHashMap은 Thread-safe하지 않아 동시 접근 시 내부 연결 리스트가 손상된다. Collections.synchronizedMap으로 감싸면 전체 메서드에 Lock이 걸려 처리량이 낮아진다. Caffeine은 striped locking과 Window TinyLFU로 높은 동시성과 더 정밀한 캐시 정책을 제공한다.
 - 게임 서버 세션 Map에서 `sessions.size()`가 실제 활성 세션 수와 다르게 나타납니다. ConcurrentHashMap.size()가 근사값일 수 있는 이유와, 정확한 카운터가 필요할 때 LongAdder를 별도로 유지해야 하는 이유를 설명하세요.
+  > ConcurrentHashMap.size()는 내부 Cell 배열의 합산값으로 동시 갱신 중 스냅샷 시점에 따라 근사값이 반환될 수 있다. 정확한 세션 수가 필요하면 put/remove와 함께 LongAdder를 증감시켜 별도 카운터를 유지한다.
 - ArrayList에서 `removeIf(Predicate)` 내부 구현이 일반 for-each + remove보다 효율적인 이유와, 이 메서드가 ConcurrentModificationException을 내지 않는 조건은 무엇인가요?
+  > removeIf는 내부적으로 비트마스크로 제거 대상을 표시한 뒤 한 번의 압축 이동으로 처리해 N번의 System.arraycopy를 피한다. 단일 Thread 내에서 modCount를 직접 제어하므로 ConcurrentModificationException이 발생하지 않는다. 외부에서 동시 수정이 있으면 예외가 발생할 수 있다.
 - 초당 1,000건 이상 점수 갱신이 있는 게임 서버 랭킹에서 synchronized TreeMap 대신 ConcurrentSkipListMap이 유리한 조건과 한계는 무엇인가요?
+  > ConcurrentSkipListMap은 Lock-free 읽기를 지원해 읽기 비율이 높은 랭킹 조회에서 처리량이 높다. 단, 삽입·삭제가 O(log n)이며 메모리 사용이 TreeMap보다 크다. 동점자를 키에 포함하지 않으면 덮어쓰기가 발생하므로 복합 키(점수+playerId) 설계가 필요하다.
 - ConcurrentHashMap의 entrySet().removeIf()를 사용해 만료된 세션을 일괄 제거할 때 동시 수정 환경에서 어떤 일관성이 보장되고, 어떤 경우 일부 엔트리가 누락될 수 있나요?
+  > ConcurrentHashMap의 iterator는 weakly consistent로 제거 시작 이후 삽입된 엔트리는 포함될 수도 아닐 수도 있다. 만료 시각 기준으로 제거하더라도 Predicate 평가와 실제 제거 사이 시간 간격으로 인해 방금 만료된 일부 세션이 누락될 수 있으며, 이는 다음 제거 주기에서 처리되도록 설계한다.
 
 ## 11. 30초 모범답변
 
@@ -212,7 +219,7 @@ TreeMap O(log n) 삽입·삭제는 10만 건에서 약 17 비교이므로 이론
 
 - List·Set·Map 선택 기준: 순서·중복 필요 → List, 중복 제거·멤버십 → Set, Key 조회 → Map — 연산 요구를 먼저 정한다.
 - ArrayList vs LinkedList: ArrayList는 Index 조회·순회 O(1) Locality 우세, LinkedList는 위치를 이미 아는 변경에만 유리 — 대부분 ArrayList가 실측 성능 우위.
-- HashMap 내부 동작: hashCode → Bucket 선택 → equals로 정확한 Key 확인 — Java 8부터 충돌 8개 초과 시 Tree로 전환.
+- HashMap 내부 동작: hashCode → Bucket 선택 → equals로 정확한 Key 확인 — Java 8부터 버킷 내 노드가 TREEIFY_THRESHOLD(8) 이상이고 전체 테이블 용량이 MIN_TREEIFY_CAPACITY(64) 이상일 때 Red-Black Tree로 전환(두 조건 미충족 시 resize 우선).
 - hashCode·equals 계약: equals true → hashCode 반드시 같음 — hashCode만 같아도 equals는 false 가능 (Hash 충돌).
 - Mutable Key 위험: 삽입 후 hashCode 관련 필드 변경 → 원래 Bucket에서 찾지 못함 → UUID·String 같은 불변 Key 사용.
 - ConcurrentHashMap 복합 연산: get→put 분리는 Race Condition 발생 → compute·merge·putIfAbsent로 원자성 확보.

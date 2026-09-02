@@ -349,12 +349,19 @@ Destructor에서 예외를 던지지 않는 것을 원칙으로 합니다. Stack
 ## 17. 예상 꼬리질문
 
 - 비동기 Completion에서 `shared_from_this()`로 수명을 연장한 Session이 Closing 이후에도 계속 살아있다면, 어떤 조건을 먼저 확인하나요?
+  > Outstanding I/O 개수와 Closing State를 확인합니다. Callback이 등록될 때마다 `shared_from_this()`로 Strong Count가 늘어나므로, Closing 이후 새 I/O 시작을 차단하고 기존 Outstanding I/O가 모두 완료·취소되어 Count가 0이 될 때까지 기다려야 Session이 해제됩니다.
 - `weak_ptr`를 오래 보유한 Observer가 많을 때 `make_shared`와 `new + shared_ptr` 방식 중 메모리 관점에서 어느 쪽이 더 나은가요?
+  > 이 경우 `new + shared_ptr`가 유리합니다. `make_shared`는 Control Block과 객체를 같은 Allocation에 배치하므로 Weak Reference가 남아 있는 한 객체가 파괴되어도 Control Block 메모리가 해제되지 않습니다. `new + shared_ptr`로 분리하면 객체는 Strong Count 0 시점에 즉시 해제되고 Control Block만 Weak Count가 0이 될 때까지 유지됩니다.
 - Container 재할당은 RAII Wrapper에 어떤 영향을 주나요?
+  > RAII Wrapper 자체의 소유 자원은 영향이 없습니다. `vector`가 재할당하면 원소 RAII 객체가 새 Storage로 Move·Copy되고 기존 Storage의 객체들은 Destructor를 통해 정리됩니다. 문제는 주소 안정성입니다. 재할당 후 기존 포인터나 참조는 Dangling이 되므로, RAII로 자원 수명은 보장되더라도 외부에서 보관한 포인터는 무효가 됩니다.
 - `enable_shared_from_this`를 상속하지 않은 클래스에서 `this`로 `shared_ptr`를 두 번 만들면 어떤 문제가 생기나요?
+  > 두 `shared_ptr`가 독립된 Control Block을 가지므로 각자의 Strong Count를 추적합니다. 두 Count가 모두 0이 되면 같은 객체에 대해 Destructor가 두 번 호출되어 Double Free가 발생합니다. `enable_shared_from_this`를 상속하고 `shared_from_this()`를 사용하면 단일 Control Block을 공유해 이 문제를 방지합니다.
 - Rule of Zero를 따를 수 없어 Custom Destructor를 직접 작성할 때, Rule of Five 요구사항 중 가장 자주 빠뜨리는 항목과 그 버그는 무엇인가요?
+  > Move Constructor와 Move Assignment를 빠뜨리는 경우가 가장 많습니다. Destructor를 직접 선언하면 암시적 Move 생성이 억제되어 `vector` 재할당 등에서 Copy가 선택됩니다. Move Assignment를 빠뜨리면 Move 대입 시 Copy가 일어나 자원 해제 후 재할당하는 불필요한 비용이 생기거나, 자기 대입 처리가 누락되면 자원이 먼저 해제되는 버그가 발생합니다.
 - `shared_ptr`의 Reference Count는 왜 Thread-safe인데 객체 접근은 아닌가요?
+  > Control Block의 Strong Count·Weak Count는 Atomic 연산으로 보호되므로 여러 Thread가 동시에 `shared_ptr`를 Copy·Destroy해도 Count 자체는 안전합니다. 그러나 Count 보호는 Count라는 정수 하나에 대한 것이며, `shared_ptr`가 가리키는 객체의 Member 변수들은 별도의 동기화 없이는 동시 접근에 대한 보호가 없습니다.
 - 게임 서버 Memory Pool에서 `unique_ptr<Packet, PoolDeleter>`를 사용하다 크기가 예상보다 2배로 늘어났습니다. Stateful Deleter가 Empty Base Optimization을 받지 못하는 조건은 무엇인가요?
+  > Stateless Deleter(상태 없는 함수 포인터·함수 객체)는 Empty Base Optimization으로 `unique_ptr` 크기에 추가되지 않을 수 있습니다. 그러나 PoolDeleter가 Pool 포인터나 크기 정보 같은 Member 변수를 가지면 Stateful이 되어 크기가 추가됩니다. 또한 `final`로 선언된 클래스나 이미 다른 Base를 가진 경우 EBO가 적용되지 않습니다. 해결은 Deleter를 Stateless하게 설계하거나 Pool을 전역·Thread-local로 접근하는 방식으로 바꿉니다.
 
 ## 18. 30초 모범답변
 

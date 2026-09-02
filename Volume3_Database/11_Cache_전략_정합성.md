@@ -282,12 +282,25 @@ Write-Through는 성공 전에 Cache와 원본을 동기 갱신해 내구성과 
 ## 10. 예상 꼬리질문
 
 - Outbox 기반 무효화가 단순 Cache 삭제보다 나은 이유는 무엇인가요?
+  > DB Commit 직후 Process가 죽으면 단순 Cache 삭제는 누락된다. Transactional Outbox는 이벤트를 DB Commit과 같은 Transaction 안에 기록하므로 Commit 성공이 이벤트 발행을 보장한다. 이후 Publisher가 재시도 가능하게 이벤트를 소비하면 삭제 누락을 복구할 수 있다.
+
 - Versioned Key는 언제 일반 Cache 삭제보다 유용한가요?
+  > 콘텐츠나 설정처럼 특정 Version이 불변(Immutable)하고 이전 Version과 동시에 공존해야 하는 경우에 유용하다. 새 Version 포인터만 전환하면 이전 Key가 자연스럽게 TTL 만료되고 배포 롤백 시 포인터만 되돌리면 된다. 일반 삭제는 삭제 후 Stampede가 발생할 수 있지만 Versioned Key는 이전 Key가 남아 있어 Miss 없이 전환된다.
+
 - Bloom Filter를 Cache Penetration 방지에 사용할 때 주의할 점은 무엇인가요?
+  > Bloom Filter는 False Negative가 없어 "없음"을 정확히 걸러 낼 수 있지만 False Positive가 존재해 실제 없는 ID를 "있을 수 있다"고 통과시키는 경우가 있다. Filter에 새 ID가 추가되면 갱신이 필요하고, 삭제는 표준 Bloom Filter에서 지원되지 않는다. 또한 Filter 자체의 메모리 비용과 갱신 시점의 정합성도 고려해야 한다.
+
 - Read-Your-Writes 일관성을 어떻게 구현하나요?
+  > 쓰기 성공 후 Cache를 삭제하고 동일 사용자의 다음 읽기 요청은 Cache Miss를 유도해 DB에서 최신 값을 읽게 한다. 또는 쓰기 응답에 최신 값을 직접 포함해 Client가 바로 반영하고, 이후 요청에서만 Cache를 채운다. Sticky Session이나 사용자별 쓰기 버전 태그로 구현 서버가 달라도 최신 DB를 조회하게 할 수 있다.
+
 - 다단계 Cache(L1 In-process + L2 Redis)의 무효화는 어떻게 하나요?
+  > DB 변경 후 L2 Redis Key를 삭제하고 각 서버의 L1에 무효화 메시지를 발행한다. Pub/Sub이나 메시지 브로커로 L1 삭제를 전파하지만 전파 지연 동안 일부 서버의 L1에 이전 값이 남을 수 있다. L1 TTL을 짧게 두어 최악의 Stale Window를 제한하고, 정확성이 중요한 데이터는 L1 없이 L2만 사용하거나 Version 태그로 구분한다.
+
 - Delayed Double Delete의 한계는 무엇인가요?
+  > DB Commit 후 Cache를 삭제하고 일정 시간 뒤 한 번 더 삭제해 경쟁 조건으로 채워진 이전 값을 제거하려는 기법이다. 두 번째 삭제 시간을 정하기 어렵고 Replica Lag이 긴 환경에서는 Replica에서 이전 값을 읽은 뒤 Cache를 채우는 문제가 남는다. Outbox 기반 이벤트 무효화가 더 신뢰성 있는 대안이다.
+
 - Hit Ratio 외에 Cache 성능 지표로 무엇을 봐야 하나요?
+  > Cache Miss 시 DB 응답 지연과 동시 조회 수(Stampede 신호), Cache 삭제·갱신 실패율, Eviction 발생 수와 제거된 Key 중요도, p99 Cache 응답 시간, TTL 만료 직전 트래픽 패턴을 함께 관찰한다. Cache 장애 시 DB Fallback 처리량과 에러율도 원본 보호 여부를 판단하는 핵심 지표다.
 
 ## 11. 30초 모범답변
 

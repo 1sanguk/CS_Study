@@ -360,12 +360,19 @@ Object Slicing이 원인입니다. BossEnemy를 Enemy 값 타입으로 저장하
 ## 20. 예상 꼬리질문
 
 - `std::vector<Packet>`에 Packet을 수천 개 Push할 때 재할당이 발생해 Tick 지연이 생겼습니다. `reserve`로 해결했지만 Push 도중 예외가 나면 기존 원소가 안전한지 어떻게 보장하나요?
+  > `reserve`로 재할당을 막았다면 `push_back` 중 예외가 나도 이미 들어간 원소에는 영향이 없습니다. `push_back`은 새 원소 복사·이동에 실패하면 Strong Exception Guarantee를 제공해 기존 원소가 그대로 유지됩니다. 단, Move Constructor가 `noexcept`가 아닌 채로 재할당이 일어나면 Copy로 대체되므로, Copy 도중 예외 시 `vector` 상태가 정의되지 않을 수 있습니다. Move Constructor에 `noexcept`를 선언해 이 경로를 차단합니다.
 - Worker Thread가 Queue에서 꺼낸 Packet을 처리하는 도중 원본 Thread가 Moved-from Packet의 Size를 읽으면 어떤 값이 나올 수 있나요? 이 버그를 사전에 막는 방법은 무엇인가요?
+  > Moved-from 상태는 Unspecified이므로 0이 될 수도 있고 구현에 따라 다른 값이 남을 수 있습니다. 두 Thread가 같은 객체에 동시 접근하면 Data Race로 Undefined Behavior입니다. 방지 방법은 Move 후 원본 변수 Scope를 즉시 종료하거나, Queue에 넣기 전에 원본을 사용하는 코드를 완전히 분리합니다. 소유권 이전 후 원본 변수에 접근하는 코드가 없도록 리뷰 규칙으로 강제합니다.
 - 반환 Local 변수에 `std::move`를 붙이면 NRVO가 억제됩니다. 실제로 NRVO 억제 여부를 어떻게 확인하고, NRVO가 불가능한 구조의 예는 무엇인가요?
+  > 확인 방법은 Compiler Explorer(godbolt.org)에서 `-O2 -fno-elide-constructors`로 컴파일해 Constructor 호출 횟수를 세거나, 생성자에 출력문을 넣어 Move/Copy 발생 여부를 확인합니다. NRVO가 불가능한 구조 예: 반환하는 변수가 조건에 따라 다른 변수 중 하나를 선택하는 경우(`if (cond) return a; return b;`), 반환 타입이 Base이고 실제 객체가 Derived인 경우, `throw`로 반환되는 경우입니다.
 - Copy-and-swap Assignment에서 값으로 인자를 받으면 Lvalue 전달 시 Copy 한 번, Move Assignment 시 Move 한 번이 발생합니다. 이 패턴이 비효율적인 경우는 어떤 상황인가요?
+  > 대입 대상이 이미 충분한 용량을 가진 경우에 비효율적입니다. 예를 들어 `string`이나 `vector`를 가진 클래스에서 기존 Buffer를 재사용할 수 있지만, Copy-and-swap은 항상 새 임시 객체를 만들고 Swap하므로 기존 자원이 버려집니다. 성능이 중요한 경우 Copy Assignment와 Move Assignment를 별도로 구현해 기존 Buffer를 재활용하는 것이 낫습니다.
 - 게임 서버 Session 생성자에서 `std::string name` Sink 파라미터를 `name_(std::move(name))`으로 처리합니다. 이 방식이 `const std::string&` 오버로드와 `std::string&&` 오버로드 각각에 비해 유리한 점과 불리한 점은 무엇인가요?
+  > Sink 패턴의 장점은 Overload가 하나뿐이어서 코드가 단순합니다. Lvalue 전달 시 Copy 1회 + Move 1회, Rvalue 전달 시 Move 2회입니다. `const std::string&` 오버로드만 있으면 Rvalue 전달에도 Copy가 발생합니다. 두 Overload를 모두 구현하면 Lvalue는 Copy 1회, Rvalue는 Move 1회로 가장 효율적입니다. 단, Member가 많아질수록 Overload 수가 지수적으로 늘어 Sink 패턴이 현실적입니다.
 - Entity Container 재할당 후 `Entity*` Pointer가 Dangling이 되는 버그를 라이브 서버에서 발견했습니다. `reserve`와 Index 기반 Handle 중 어떤 방식으로 수정하고, 그 기준은 무엇인가요?
+  > `reserve`는 단기 수정으로 쉽지만 최대 크기를 예측해야 하며 초과 시 다시 재할당이 일어납니다. 따라서 크기가 동적으로 변하는 컨테이너에는 근본적 해결이 아닙니다. Index 기반 Handle은 재할당에도 안정적이며 Generation Counter로 무효 Handle을 감지할 수 있습니다. 기준: 컨테이너 최대 크기가 확정되고 재할당이 절대 일어나지 않는다는 보장이 있으면 `reserve`, 크기가 동적으로 증가하거나 포인터를 장기 보관하는 경우 Index Handle을 선택합니다.
 - Perfect Forwarding을 써도 `const` Rvalue를 전달할 때 Move가 일어나지 않는 경우가 있습니다. 어떤 상황이고 왜 Move Constructor가 선택되지 않나요?
+  > `const T&&`는 Rvalue Reference이지만 `const`이므로 소유 자원을 훔치는 Move Constructor는 선택되지 않습니다. Move Constructor는 `T&&`(non-const)를 인자로 받아 원본을 수정해야 하는데, `const T&&`는 수정을 허용하지 않습니다. 따라서 `const std::string&&`를 전달하면 `const std::string&` Copy Constructor가 대신 선택됩니다. `std::forward`도 이 `const`를 유지해 전달하므로 결과적으로 Copy가 발생합니다.
 
 ## 21. 30초 모범답변
 

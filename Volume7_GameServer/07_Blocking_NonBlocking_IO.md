@@ -217,12 +217,19 @@ IOCP는 `CancelIoEx`로 진행 중인 Overlapped 작업을 취소하고 ERROR_OP
 ## 10. 예상 꼬리질문
 
 - epoll_wait가 반환한 100개 이벤트 중 읽기와 쓰기가 혼재할 때, 쓰기를 먼저 처리하면 Send Queue 크기에 어떤 영향을 주나요?
+  > 쓰기를 먼저 처리하면 Send Queue에 누적된 데이터를 소켓에 flush해 Queue 크기를 줄인 뒤 읽기를 처리하므로, 읽기로 추가될 데이터가 들어오기 전에 여유 공간을 확보합니다. 다만 고빈도 읽기 이벤트가 밀릴 수 있으므로, 실제로는 읽기·쓰기를 공평하게 순서대로 처리하거나 읽기를 먼저 처리해 파싱 지연을 줄이는 방식이 더 일반적입니다.
 - Event Loop를 4개 Thread로 병렬화했는데 같은 Session 이벤트가 두 Thread에서 동시에 처리되는 버그가 발생했습니다. Connection-to-Thread 고정 없이 어떻게 방지하나요?
+  > Session ID를 기준으로 Striped Lock(세그먼트 뮤텍스) 또는 Session별 Mutex를 두어 같은 Session 이벤트가 동시에 실행되지 않도록 보호합니다. 또는 이벤트 큐를 Session 단위로 직렬화하는 Strand 패턴(Boost.Asio의 strand 등)을 도입하면 Thread 고정 없이 Session 내 순서를 보장할 수 있습니다.
 - io_uring Submission Queue에 10만 건을 등록했는데 Kernel이 처리 완료 전에 추가 등록하면 SQ Full 오류가 발생합니다. Backpressure를 어떻게 설계하나요?
+  > SQ 잔여 슬롯 수를 `io_uring_sq_space_left()`로 확인하고, 여유가 없으면 신규 등록을 중단한 채 `io_uring_submit_and_wait()`로 Completion을 기다립니다. 애플리케이션 레벨에서 In-flight 연산 수 카운터를 관리해 SQ 크기의 80% 수준에서 발행을 제한하고, Completion 발생 시 카운터를 감소시켜 새 요청을 허용합니다.
 - Non-blocking send에서 EAGAIN이 반환될 때 EPOLLOUT을 등록하지 않으면 어떤 현상이 발생하고, 필요하지 않을 때 EPOLLOUT을 그대로 두면 어떤 문제가 생기나요?
+  > EPOLLOUT을 등록하지 않으면 소켓 Send Buffer가 비워져도 알림을 받지 못해 Send Queue의 나머지 데이터가 무기한 대기합니다. 반대로 항상 EPOLLOUT을 등록해두면 Send Buffer에 공간이 생길 때마다 이벤트가 발생해 Busy Loop에 가까운 불필요한 epoll_wait 반환이 쌓입니다. EAGAIN 시에만 등록하고 Send Queue가 비워지면 즉시 해제하는 패턴이 표준입니다.
 - Session별 Send Queue에서 1MB 대형 Packet이 Head에 쌓여 100B 소형 Packet이 수백 ms 지연되는 Head-of-Line Blocking이 발생했습니다. Chunking 없이 해결하는 방법은 무엇인가요?
+  > 우선순위 기반 다중 Queue(High/Normal)를 두어 소형 Packet을 High Queue에, 대형 Packet을 Normal Queue에 배치하고 High Queue를 먼저 드레인합니다. Chunking 없이 대형 Packet과 소형 Packet을 분리 전송 경로로 운용하면 소형 Packet 지연을 줄일 수 있습니다. 근본 해결을 위해서는 대형 Packet에 Chunking을 적용하는 것이 바람직합니다.
 - Event Loop CPU 100% 상황에서 perf record로 Hot Function을 찾았더니 ParseAndDispatch가 지배적이었습니다. Logic Queue 오프로드 외에 I/O Thread 내에서 먼저 시도할 수 있는 최적화는 무엇인가요?
+  > Packet Type 분기를 switch → 함수 포인터 테이블로 교체해 분기 예측 실패를 줄이고, 자주 사용하는 Packet 구조체를 캐시 라인에 맞게 정렬합니다. 또한 Header 검증만 I/O Thread에서 수행하고 Body 파싱은 최소화하거나, 불필요한 메모리 할당을 Object Pool로 대체해 malloc 비용을 제거합니다.
 - IOCP Completion Thread 수를 2→32로 늘렸더니 처리량이 오히려 감소했습니다. False Sharing과 Lock 경합 중 어느 쪽이 원인인지 진단하는 방법과 최적 Thread 수 결정 기준을 설명하세요.
+  > `perf stat -e cache-misses`로 Cache Miss 증가 여부를 확인하면 False Sharing 의심, `perf stat -e lock:contention_begin`이나 Lock 대기 시간 증가라면 Lock 경합입니다. 최적 Thread 수는 일반적으로 논리 CPU 코어 수와 같거나 I/O 대기 비율을 고려해 코어 수 × (1 + 대기비율)로 산정합니다. Completion 처리가 CPU-bound라면 코어 수에 맞추고, Blocking 작업이 많으면 조금 더 늘립니다.
 
 ## 11. 30초 모범답변
 

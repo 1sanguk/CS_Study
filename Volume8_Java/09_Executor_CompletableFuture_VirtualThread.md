@@ -55,7 +55,7 @@ Task → [bounded Queue] → ThreadPoolExecutor → run
 JDK 21에서 정식 도입된 Virtual Thread는 JVM이 관리하는 경량 Thread다. I/O 대기 중 JVM이 Platform Thread에서 **unmount**해 다른 Virtual Thread를 올린다. 따라서 Thread-per-request 코드가 수만 개 동시 실행 가능하다. 단, **CPU-bound 작업**은 빠르게 되지 않으며 **DB Connection Pool** 상한은 별도로 설정해야 한다.
 
 ### 5) Pinning 주의사항
-`synchronized` 블록 내부 또는 native method 실행 중에는 Virtual Thread가 Platform Thread에 **Pinned**(고정)돼 unmount되지 않는다. 핫 경로의 `synchronized`를 `ReentrantLock`으로 교체하면 Pinning을 줄일 수 있다. JDK 21+에서는 `-Djdk.tracePinnedThreads=full`로 Pinning 구간을 확인한다.
+JDK 21~23에서는 `synchronized` 블록 내부 또는 native method 실행 중에 Virtual Thread가 Platform Thread에 **Pinned**(고정)돼 unmount되지 않는다. **JDK 24(JEP 491)에서 `synchronized` 블록 Pinning이 해결**되어 synchronized 내부에서도 Virtual Thread가 unmount 가능해졌다. native method 실행 중 Pinning은 JDK 24 이후에도 여전히 남아 있다. JDK 21~23 환경에서는 핫 경로의 `synchronized`를 `ReentrantLock`으로 교체하면 Pinning을 줄일 수 있다. `-Djdk.tracePinnedThreads=full` 또는 JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 구간을 확인한다.
 
 ## 4. 쉬운 예시
 
@@ -212,9 +212,9 @@ void shutdown(ExecutorService pool) throws InterruptedException {
 - **"maximumPoolSize를 크게 설정하면 동시 처리가 늘어난다"**: 기본 `LinkedBlockingQueue` 사용 시 Queue가 항상 여유 있어 maximumPoolSize까지 Thread가 올라가지 않는다. Bounded Queue를 써야 maximumPoolSize가 작동한다.
 - **"thenApply는 항상 별도 Thread에서 실행된다"**: `thenApply`(Async 접미사 없음)는 이전 Stage가 완료된 Thread에서 직접 실행될 수 있다. I/O나 Blocking 작업을 `thenApply`에 넣으면 Common Pool이나 호출 Thread를 막는다.
 - **"CompletableFuture.cancel()이 진행 중인 HTTP 요청도 취소한다"**: `cancel()`은 Future 내부 상태만 변경한다. 이미 전송된 외부 요청·DB 쿼리는 취소되지 않으며 Downstream Callback이 취소 후 상태를 Commit하지 않도록 버전 확인이 필요하다.
-- **"Virtual Thread는 synchronized에서 문제없다"**: `synchronized` 블록 내 I/O 대기 중에는 Virtual Thread가 Platform Thread에 Pinned돼 unmount 안 된다. 핫 경로는 `ReentrantLock`으로 교체해야 Pinning을 피할 수 있다.
+- **"Virtual Thread는 synchronized에서 항상 문제없다(혹은 항상 Pinning이 된다)"**: JDK 21~23에서는 `synchronized` 블록 내 I/O 대기 중 Pinning이 발생한다. JDK 24(JEP 491)에서 synchronized Pinning이 해결되어 JDK 24 이상에서는 synchronized 내부에서도 unmount가 가능하다. native method 실행 중 Pinning은 여전히 남아 있다. JDK 21~23 환경에서는 핫 경로의 `ReentrantLock` 교체로 Pinning을 피할 수 있다.
 - **"Fire-and-forget CompletableFuture는 예외가 자동 로깅된다"**: 결과를 소비하지 않으면 예외가 조용히 사라진다. `whenComplete((r, ex) -> { if (ex != null) log.error(...); })`로 반드시 관찰해야 한다.
-- **"Virtual Thread를 쓰면 ThreadLocal 비용이 없다"**: Virtual Thread마다 ThreadLocal 복사본이 생성된다. 수만 개 Virtual Thread에 대용량 ThreadLocal이 있으면 메모리 사용이 급증한다. `ScopedValue`(JDK 21 Preview)로 대체를 검토한다.
+- **"Virtual Thread를 쓰면 ThreadLocal 비용이 없다"**: Virtual Thread마다 ThreadLocal 복사본이 생성된다. 수만 개 Virtual Thread에 대용량 ThreadLocal이 있으면 메모리 사용이 급증한다. `ScopedValue`(JDK 21에서 Preview로 도입된 JEP 446, JEP 506으로 finalize 제안 중)로 대체를 검토한다.
 
 ## 9. 면접 질문
 
@@ -225,7 +225,7 @@ void shutdown(ExecutorService pool) throws InterruptedException {
 원인: `thenApply(fn)`(Async 접미사 없음)은 이전 Stage를 처리한 Thread에서 fn을 직접 실행합니다. 이전 Stage가 Common Fork/Join Pool에서 완료됐다면 DB Blocking 조회가 그 Pool Thread를 점유합니다. Common Pool 크기(보통 CPU 코어 수)가 모두 Blocking 상태가 되면 새 Task가 대기합니다. 수정: DB 조회를 `thenComposeAsync(res -> loadPlayer(res), ioExecutor)`로 교체. ioExecutor는 `Executors.newVirtualThreadPerTaskExecutor()` 또는 전용 I/O Pool. CPU-bound 변환만 `thenApply`에 남깁니다.
 
 ### Q3. Virtual Thread로 전환 후 p95 Latency가 오히려 올라갔습니다. `-Djdk.tracePinnedThreads=full` 로그에서 `synchronized` 블록 내 Pinning이 초당 수백 건 발생합니다. 원인 진단과 수정 방법은 무엇입니까?
-원인: Virtual Thread는 `synchronized` 블록 내에서 I/O 대기 시 Platform Thread에 Pinned(고정)돼 unmount되지 않습니다. 수만 개 VT가 동시에 `synchronized` 블록에서 Blocking되면 Platform Thread(보통 코어 수 기준)가 모두 Pinned되어 다른 VT를 실행하지 못합니다. 확인: JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 지속 시간·스택 확인. 수정: 핫 경로의 `synchronized` → `ReentrantLock`으로 교체(`lock.lock(); try { ... } finally { lock.unlock(); }`). `lock()`은 VT가 await 중 unmount를 허용합니다.
+원인(JDK 21~23): Virtual Thread는 `synchronized` 블록 내에서 I/O 대기 시 Platform Thread에 Pinned(고정)돼 unmount되지 않습니다. 수만 개 VT가 동시에 `synchronized` 블록에서 Blocking되면 Platform Thread(보통 코어 수 기준)가 모두 Pinned되어 다른 VT를 실행하지 못합니다. 확인: JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 지속 시간·스택 확인. 수정(JDK 21~23): 핫 경로의 `synchronized` → `ReentrantLock`으로 교체(`lock.lock(); try { ... } finally { lock.unlock(); }`). `lock()`은 VT가 await 중 unmount를 허용합니다. JDK 24 이상: JEP 491로 synchronized 블록 Pinning이 해결되어 코드 변경 없이 자동으로 unmount 가능. native method 실행 중 Pinning은 JDK 24 이후에도 잔존합니다.
 
 ### Q4. 게임 매치 결과 로그 저장에 Fire-and-forget `CompletableFuture`를 사용하는데 운영 중 로그가 간헐적으로 누락됩니다. 예외가 어디에서 발생했는지 추적할 방법이 없습니다. 구조 문제와 수정 방법은 무엇입니까?
 구조 문제: `CompletableFuture.runAsync(() -> logService.save(result), pool)`의 반환값을 아무것도 보유하지 않으면 예외가 내부 CompletionException으로 포장돼 조용히 사라집니다. GC 이전에 아무도 `get()`·`join()` 또는 `whenComplete`를 호출하지 않으면 예외 관찰 기회가 없습니다. 수정: `CompletableFuture.runAsync(...).whenComplete((r, ex) -> { if (ex != null) log.error("Match log failed", ex); Metrics.counter("log.fail").increment(); })`. 또는 전역 UncaughtExceptionHandler에서 `CompletionException` 수집. 결과 필요 없어도 예외 관찰은 필수.
@@ -239,12 +239,19 @@ void shutdown(ExecutorService pool) throws InterruptedException {
 ## 10. 예상 꼬리질문
 
 - `CallerRunsPolicy`를 Rejection으로 설정했는데 호출자가 Tick Loop Main Thread일 때 어떤 위험이 생기고 `DiscardOldestPolicy`와 어떤 기준으로 선택합니까?
+  > Main Thread가 Task를 직접 실행하면 그 시간 동안 Tick Loop가 멈춰 Frame Drop이 발생한다. 최신 Task가 중요하고 오래된 Task를 버려도 되면 DiscardOldestPolicy를, 어떤 Task도 Main Thread에서 실행하면 안 되면 CallerRunsPolicy 대신 별도 Queue와 Drop 메트릭을 사용한다.
 - Common Fork/Join Pool이 Blocking 작업으로 고갈됐을 때 `ForkJoinPool.ManagedBlocker`를 사용하는 방법과 그 한계는 무엇입니까?
+  > `ManagedBlocker.block()`을 등록하면 ForkJoinPool이 Blocking Thread를 감지해 보상 Thread를 추가한다. 단, 보상 Thread가 늘어 CPU 경합이 심해질 수 있고 근본 원인인 Blocking I/O를 제거하지는 않는다.
 - `orTimeout(500, MILLISECONDS)` vs `get(500, MILLISECONDS)` 차이와 Timeout 후 downstream Stage 취소 여부는 어떻게 다릅니까?
+  > `orTimeout`은 Future 자체를 `TimeoutException`으로 완료시켜 downstream Stage에 예외가 전파되고 `exceptionally`로 처리할 수 있다. `get(timeout)`은 호출 Thread를 블로킹하다 예외를 던지지만 Future는 완료되지 않은 상태로 남아 downstream Stage에 영향을 주지 않는다.
 - Virtual Thread 수만 개 환경에서 `ThreadLocal<byte[]>` 1KB 버퍼를 각 VT마다 보유하면 메모리가 어떻게 증가하고 `ScopedValue`로 대체 시 코드 변경 범위는 얼마나 됩니까?
+  > 10만 VT × 1KB = 약 100MB가 Thread 스택과 별도로 힙에 추가된다. ScopedValue는 `ScopedValue.where(key, value).call(...)` 호출 구조로 바뀌어 ThreadLocal을 직접 참조하는 코드를 모두 수정해야 한다.
 - `CompletableFuture.allOf()` 중 한 Future가 예외를 내면 나머지 결과를 수집하기 위해 각각 `handle()`을 붙이는 패턴과 예외를 묶어 한 번에 처리하는 방법은 무엇입니까?
+  > 각 Future에 `.handle((r, ex) -> Optional.ofNullable(r))` 을 붙여 예외를 Optional.empty()로 변환한 뒤 allOf로 모두 완료를 기다린다. 예외를 묶으려면 각 Future의 예외를 List에 수집하고 allOf 이후 list가 비어있지 않으면 AggregateException을 던지는 패턴을 쓴다.
 - Graceful Shutdown 시 `shutdownNow()`가 반환하는 대기 중 `Runnable` 목록을 재처리하는 방법과 이미 실행 중인 Task에 `InterruptedException`을 전달해 중단하는 방법은 무엇입니까?
+  > `shutdownNow()`가 반환한 Runnable 목록을 재처리하려면 별도 Queue에 넣거나 Dead Letter Storage에 기록해 재시작 후 처리한다. 실행 중인 Task는 `Thread.interrupt()`가 전달되므로 Task 내부에서 `InterruptedException`을 잡아 정리 작업 후 return 해야 한다.
 - JFR `jdk.VirtualThreadPinned` 이벤트로 Pinning 지속 시간을 수집하는 방법과 Pinning이 100ms 이상 지속될 때 Alert 임계값 설정 기준은 무엇입니까?
+  > JFR 설정에서 `jdk.VirtualThreadPinned` 이벤트의 threshold를 20ms로 낮춰 기록하고, JMC 또는 Prometheus JFR Exporter로 지속 시간 분포를 수집한다. p99가 100ms를 넘으면 해당 synchronized 블록이 Tick Budget의 10%를 초과하는 것이므로 ReentrantLock 교체 우선 후보로 지정한다.
 
 ## 11. 30초 모범답변
 > Executor는 Task와 실행 정책을 분리해 Thread 수·Queue·Rejection을 중앙 관리합니다. CompletableFuture는 비동기 결과 조합·예외 전파를 체인으로 표현합니다. Virtual Thread는 JDK 21에서 도입돼 I/O 대기 중 Platform Thread를 반환하므로 수만 개 동시 연결을 적은 자원으로 처리할 수 있습니다. 단, CPU-bound와 외부 자원(DB Connection, Rate Limit) 상한은 별도로 관리해야 합니다.
@@ -264,7 +271,7 @@ void shutdown(ExecutorService pool) throws InterruptedException {
 - Fire-and-forget `CompletableFuture`는 `whenComplete`로 예외를 관찰하지 않으면 실패가 조용히 사라진다.
 - Virtual Thread는 I/O 대기 중 Platform Thread를 반환해 수만 개 동시 Task를 적은 자원으로 처리하지만, CPU-bound 속도나 외부 자원 용량을 늘리지는 않는다.
 - DB Connection·외부 API 같은 외부 자원은 Virtual Thread가 많아도 Semaphore·Connection Pool로 별도 상한을 둬야 한다.
-- `synchronized` 내 I/O 대기는 Virtual Thread를 Platform Thread에 Pinning시킨다. 핫 경로는 `ReentrantLock`으로 교체한다.
+- JDK 21~23에서 `synchronized` 내 I/O 대기는 Virtual Thread를 Pinning시킨다. JDK 24(JEP 491)에서 synchronized Pinning 해결 — native method Pinning은 여전히 잔존. JDK 21~23 환경에서는 핫 경로를 `ReentrantLock`으로 교체한다.
 
 ## 한 줄 정리
 > Executor는 Task와 실행 정책을 분리하고, CompletableFuture는 비동기 결과를 조합하며, Virtual Thread는 I/O 대기를 경량화하지만 외부 자원 상한은 별도로 보호해야 한다.

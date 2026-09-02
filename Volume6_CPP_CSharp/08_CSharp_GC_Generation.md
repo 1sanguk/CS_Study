@@ -73,7 +73,7 @@ GC의 일부 단계는 Application Thread를 멈추는 Stop-the-world Pause를 �
 
 ## 6. LOH와 POH
 
-큰 객체는 LOH(Large Object Heap)에 할당된다. 일반적으로 약 85,000 Byte 이상이 대표 기준이지만 객체 종류·Runtime에 따른 세부사항을 문서로 확인한다. 큰 배열을 반복 할당하면 Allocation Throughput, Gen 2 수집과 Fragmentation에 부담을 줄 수 있다.
+큰 객체는 LOH(Large Object Heap)에 할당된다. .NET 공식 문서 기준으로 85,000 Byte 이상인 객체가 LOH에 배치된다. .NET Core 3.0 이후 이 임계값은 Runtime 설정(`DOTNET_GCLOHThreshold`)으로 변경할 수 있다. 큰 배열을 반복 할당하면 Allocation Throughput, Gen 2 수집과 Fragmentation에 부담을 줄 수 있다.
 
 POH(Pinned Object Heap)는 장기 Pinning 객체를 별도 영역에 배치하도록 돕는다. 별도 Heap이 있다는 사실이 Pinning 비용을 없애는 것은 아니다.
 
@@ -310,12 +310,19 @@ finally { ArrayPool<byte>.Shared.Return(buffer); }
 ## 19. 예상 꼬리질문
 
 - Gen 0 Collection이 초당 200회를 넘는 서버에서 각 Pause가 0.3ms 이하일 때 즉시 조치가 필요합니까? Gen 0 빈도가 Gen 2 승격을 유발하는 조건과 Promoted Bytes·Gen 2 Count로 확인하는 방법을 설명하십시오.
+  > Gen 0 Pause가 0.3ms 이하이고 Gen 2 Count와 Promoted Bytes가 안정적이라면 즉시 조치가 필요하지 않습니다. 판단 기준은 p99 Tick 지연이 SLA를 만족하는지 여부입니다. Gen 0이 승격을 유발하는 조건은 Gen 0에서 살아남은 객체가 Gen 1으로 이동하고, Gen 1이 가득 차면 Gen 2 Collection이 트리거되는 것입니다. dotnet-counters의 `gc-committed-bytes`, `promoted-memory-from-gen0`, `gen-2-gc-count`를 Traffic 피크와 같은 타임라인에 놓고 Gen 0 빈도 급증 직후 Gen 2 Count가 오르는지 확인합니다.
 - Event Handler 미해제로 Subscriber가 Leak되는 패턴에서 Memory Dump의 어떤 Root Path로 보유 객체를 확인합니까? `WeakReference<T>`로 교체할 때 수집 시점 비결정성이 문제가 되는 시나리오와 처리 방법을 설명하십시오.
+  > dotnet-dump에서 `gcroot <Subscriber 주소>`를 실행하면 `Publisher._event` delegate 체인 → Subscriber 참조 경로가 나타납니다. 이 경로에서 Publisher가 Static이면 Static Root로 명확히 확인됩니다. `WeakReference<T>`로 교체하면 Publisher가 Callback 호출 시 `TryGetTarget`이 null을 반환할 수 있습니다. 문제가 되는 시나리오는 게임 이벤트 처리 중 대상 객체가 GC되어 Callback이 무시되는 것인데, 이 경우 이벤트 미처리가 조용히 누락되므로 Callback 내에서 `TryGetTarget` 실패 시 Publisher에서 자신을 Unsubscribe하는 정리 로직이 필요합니다.
 - LOH에 85KB 이상 Packet Buffer를 반복 할당하는 코드를 `ArrayPool<byte>`로 교체할 때 try/finally로 반환 누락을 방지하는 패턴과 민감 데이터 잔존 위험을 처리하는 방법을 설명하십시오.
+  > `byte[] buffer = ArrayPool<byte>.Shared.Rent(size);` 이후 항상 `try { ... } finally { ArrayPool<byte>.Shared.Return(buffer); }` 패턴으로 모든 코드 경로에서 반환을 보장합니다. `IMemoryOwner<byte>`를 `using`으로 래핑하면 Dispose 시 자동 반환되어 더 안전합니다. 민감 데이터(패스워드, 인증 토큰) 잔존 위험은 `ArrayPool<byte>.Shared.Return(buffer, clearArray: true)`로 반환 전 Zero-fill합니다. Pool 배열이 재사용될 때 이전 요청의 민감 데이터가 남아 있으면 다른 요청에서 읽힐 수 있으므로 보안 컨텍스트에서는 반드시 clearArray를 true로 설정합니다.
 - Server GC와 Workstation GC 중 32코어 게임 서버에서 어느 것을 선택하고, Container에 CPU Limit을 설정했을 때 GC Heap 수와 Memory 예산이 어떻게 달라지는지 확인하는 방법을 설명하십시오.
+  > 32코어 게임 서버에서는 Server GC를 선택합니다. Server GC는 논리 CPU 수만큼 GC Heap과 GC Thread를 생성해 병렬 Collection 처리량을 높입니다. Container에 CPU Limit을 설정하면 .NET Runtime은 `Environment.ProcessorCount`를 Limit 기반으로 읽어 GC Heap 수를 제한합니다. 예를 들어 `--cpus=8`로 설정하면 GC Heap 8개가 생성됩니다. 실제 Heap 수는 `GC.GetGCMemoryInfo().GenerationInfo`로 확인하거나 dotnet-counters의 `gen-0-heap-size`, `gen-1-heap-size`, `gen-2-heap-size`를 합산해 총 예산과 비교합니다.
 - Finalizer에서 다른 Managed 객체를 참조하면 어떤 문제가 생깁니까? `SafeHandle`이 Critical Finalization과 Ownership으로 이 문제를 해결하는 원리를 Finalizer 순서 보장 측면에서 설명하십시오.
+  > Finalizer 실행 순서는 보장되지 않으므로 다른 Managed 객체가 이미 수집됐을 수 있습니다. Finalizer에서 다른 객체를 참조하면 ObjectDisposedException이나 NullReferenceException이 발생하거나, 이미 해제된 자원에 접근할 수 있습니다. `SafeHandle`은 `CriticalFinalizerObject`를 상속해 일반 Finalizer보다 나중에 실행되도록 순서가 보장됩니다. 또한 SafeHandle은 Handle 소유권을 단독으로 가지므로 복사 시 소유권이 이전되어 이중 해제가 방지됩니다. Native Handle 해제 로직을 `ReleaseHandle()`에 위임하면 Runtime이 Critical Finalization 단계에서 반드시 호출합니다.
 - `GC.TryStartNoGCRegion`으로 Combat Critical Section 동안 GC를 차단하려는데 Memory Budget 부족으로 Region 진입에 실패했습니다. 실패 Fallback 처리와 Budget을 결정하는 기준을 설명하십시오.
+  > Region 진입 실패 시 `GC.TryStartNoGCRegion(budget)`의 반환값이 false가 되므로 이를 확인해 정상 경로(GC 허용 상태)로 Fallback합니다. Budget 결정 기준은 Critical Section 동안 발생하는 최대 Allocation 바이트를 Profiler로 측정한 값의 1.5배입니다. Region 중 Budget을 초과하면 자동으로 GC가 발생하므로 Budget을 너무 작게 설정하면 의미가 없습니다. Critical Section 자체의 Allocation을 먼저 줄여 Budget을 최소화하고, No-GC Region은 Allocation이 거의 없는 구간에서만 사용하는 것이 원칙입니다.
 - 장수 `Player` 객체가 매 Tick 생성되는 임시 `DamageEvent`를 Field에 저장하는 설계에서 `DamageEvent`가 Gen 2로 승격되는 메커니즘과 승격을 방지하는 설계 변경 방법을 설명하십시오.
+  > `Player`(Gen 2 장수 객체)가 `DamageEvent`(Gen 0 단수명 객체)를 Field에 저장하면 Gen 0 Collection 시 `DamageEvent`가 Gen 2 객체에 의해 참조되어 살아남아 Gen 1으로 승격됩니다. 이 과정이 반복되면 Gen 2까지 승격되어 Full GC가 빈번해집니다. 방지 방법은 `Player`에 `DamageEvent` 참조를 저장하지 않고 Tick 경계에서 즉시 처리 후 버리는 것입니다. 처리 결과인 숫자(데미지량, 체력 감소값)만 `Player`에 저장하면 `DamageEvent` 객체가 Gen 0에서 빠르게 수집됩니다. 또는 `DamageEvent`를 `struct`로 변경해 값 복사 의미로 처리하면 힙 할당 자체를 없앨 수 있습니다.
 
 ## 20. 30초 모범답변
 

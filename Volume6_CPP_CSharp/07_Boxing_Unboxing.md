@@ -331,12 +331,19 @@ Struct를 Interface 변수에 대입하면 Boxing이 발생해 Heap에 값의 �
 ## 18. 예상 꼬리질문
 
 - 실시간 서버에서 Entity State를 `IFormattable`·`IComparable` 두 Interface 변수에 교대로 대입하며 매 프레임 비교·포맷을 수행하는 코드가 있습니다. Allocation Profiler에서 이 경로가 Hot Path로 잡혔을 때, Generic Constraint로 Boxing을 제거하는 리팩토링 방향과 기존 API를 Breaking Change 없이 유지하는 방법을 설명하십시오.
+  > Interface 변수 대입 대신 `where T : IFormattable, IComparable<T>` Generic Constraint로 메서드를 변환하면 JIT가 구체 타입을 알아 Boxing 없이 직접 호출합니다. 기존 API를 유지하려면 기존 메서드를 Generic 오버로드로 추가하고 기존 `object` 기반 메서드는 내부에서 Generic 경로로 위임하거나 `[Obsolete]`로 단계적 마이그레이션합니다. 내부 구현은 Generic으로 전환하되 기존 Signature를 유지해 Breaking Change를 피합니다.
 - 실시간 서버에서 Skill Effect를 `object` 기반 Event Bus로 퍼뜨리다 GC Pause p99가 20ms를 초과했습니다. Typed Generic Event Dispatcher로 전환할 때 기존 Subscribe·Publish API의 Breaking Change를 최소화하는 방법은 무엇입니까?
+  > `Dispatcher.Subscribe<DamageEvent>(handler)`, `Dispatcher.Publish(new DamageEvent(...))` 형태의 Generic API를 신규 추가하고 기존 `object` 기반 API는 내부에서 Generic 경로로 위임합니다. 기존 Subscribe를 `[Obsolete]`로 표시하고 마이그레이션 가이드를 제공합니다. 서비스별 전환 순서는 Profiler에서 Allocation이 가장 많은 Event 타입부터 적용합니다. 전환 후 BenchmarkDotNet으로 Gen0 수치를 측정해 효과를 검증합니다.
 - `params object[]` Logging API를 Source-generated `LoggerMessage`로 마이그레이션할 때 Dynamic Format String을 쓰던 기존 호출 코드가 있습니다. 어떻게 처리합니까?
+  > `[LoggerMessage]`는 Compile Time에 고정된 Format String이 필요하므로 Dynamic Format String은 직접 지원하지 않습니다. 해결 방법: 동적 포맷이 필요한 경우는 Log Level이 활성화된 상태에서만 실행하도록 `if (_logger.IsEnabled(LogLevel.X))` 가드를 두고, 문자열을 먼저 구성한 뒤 `_logger.Log(LogLevel.X, message)`로 전달합니다. 자주 사용하는 패턴은 고정 Format으로 추출하고, 진짜 동적이 필요한 경우만 별도 경로로 처리합니다.
 - 신규 Combat 기능 배포 후 BenchmarkDotNet `[MemoryDiagnoser]` Gen0 수치가 배포 전 대비 2배로 늘었습니다. 변경된 코드에 `Dictionary<string, object>` 이벤트 패킹과 LINQ 체인이 동시에 추가되었을 때, Boxing Allocation과 다른 Heap Allocation을 빠르게 분리하는 진단 절차를 설명하십시오.
+  > PerfView 또는 dotMemory에서 Allocation Call Stack을 수집합니다. `Boxing_Int32`·`Boxing_Enum` 타입이 상위에 있으면 Boxing이 주범, `Dictionary<>` 생성이나 `List<>` 할당이 상위이면 컨테이너 생성이 주범입니다. 두 경로를 분리하려면 변경된 코드 중 하나(Dictionary 이벤트 패킹 또는 LINQ 체인)만 활성화한 A/B 벤치마크를 실행해 Gen0 수치를 비교합니다. 이후 Boxing 원인은 `readonly record struct`로, LINQ 원인은 `for` 루프나 `Span` 기반으로 각각 수정합니다.
 - Enum 값을 `IEqualityComparer<object>` 기반 Dictionary Key로 사용하면 왜 Boxing이 발생하고, `EqualityComparer<MyEnum>.Default`로 교체하면 어떻게 달라집니까? Key Lookup p99에 차이가 날 조건은 무엇입니까?
+  > `IEqualityComparer<object>` 경로는 Enum 값을 `object`로 전달하므로 매 Lookup마다 Boxing Allocation이 발생합니다. `EqualityComparer<MyEnum>.Default`는 JIT가 Enum에 특화된 Comparer를 선택해 Boxing 없이 Typed 비교를 수행합니다. Lookup p99 차이가 나는 조건은 Lookup 빈도가 높고(매 Tick, 매 Packet 처리), Enum Dictionary Key 조회가 Hot Path에 있을 때입니다. Lookup이 드문 Control Plane에서는 차이가 측정 한계 이하일 수 있습니다.
 - Hot Path에서 모든 Boxing을 제거했는데 오히려 Gen 0 Allocation이 늘었습니다. 어떤 상황에서 이런 역효과가 생기나요?
+  > Boxing 제거를 위해 Value Type을 Class로 바꾸거나, Generic 내부에서 새 List·배열을 생성하거나, Closure를 만드는 Lambda를 추가한 경우 오히려 Heap 객체가 늘어납니다. 또한 Boxing 하나를 피하려고 추가한 Wrapper 객체가 더 큰 Allocation을 만들 수 있습니다. 근본 원인: Boxing 제거 자체가 목표가 아니라 총 Allocation 감소가 목표입니다. 수정 전후 전체 Allocation Call Stack을 비교해 증가한 타입이 무엇인지 확인합니다.
 - 서버 업데이트 후 GC Gen 0 빈도가 갑자기 2배로 늘었고 Boxing 관련 Allocation이 의심됩니다. 재현 없이 프로덕션 상황에서 원인을 좁히는 진단 절차를 설명하십시오.
+  > (1) dotnet-counters로 `gen-0-gc-count`와 `alloc-rate`를 실시간 수집해 증가 시점과 요청 패턴을 연관시킵니다. (2) 해당 시간대 배포 로그와 코드 변경 이력을 비교해 새로 추가된 `object` 파라미터, Logging 경로, Event Dictionary 패턴을 확인합니다. (3) Staging 환경에서 동일 부하로 PerfView나 dotMemory를 연결해 Call Stack별 Allocation을 수집합니다. (4) `Boxing_Int32`·`Boxing_Enum` Entry가 상위에 있으면 해당 호출 경로를 Typed API로 교체합니다. 재현이 어렵다면 Sampling Profiler를 프로덕션에 단시간 적용하는 방법도 고려합니다.
 
 ## 19. 30초 모범답변
 

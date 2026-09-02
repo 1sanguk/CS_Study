@@ -219,12 +219,19 @@ Session Registry를 N개의 Shard로 분할하고 각 Shard를 단일 Owner Thre
 ## 10. 예상 꼬리질문
 
 - Grace Period를 30초로 설정했는데 Mobile 플레이어 재접속 성공률이 낮습니다. `session_not_found` vs `token_invalid` 카운터로 원인을 구분한 뒤 Grace Period를 어떻게 조정하나요?
+  > `session_not_found`가 많으면 Grace Period가 짧아 Session이 이미 만료된 것이고, `token_invalid`가 많으면 재접속 Token 자체가 문제입니다. 전자라면 Grace Period를 Mobile 평균 재접속 시간의 2배(예: 60초)로 늘리고, 후자라면 Token 발급 로직과 만료 시간을 점검합니다.
 - 중복 Login Kick 중 기존 Session이 Inventory를 DB에 쓰고 있었습니다. Kick 시점과 DB 쓰기 완료 시점의 Race를 Optimistic Lock Version으로 어떻게 처리하나요?
+  > Inventory 레코드에 `version` 필드를 두고, 기존 Session이 읽은 버전과 Update 시점의 버전이 일치할 때만 쓰기를 허용합니다. Kick 후 새 Session이 동일 레코드를 읽으면 버전이 달라 기존 Session의 지연 쓰기가 충돌을 일으키므로, 실패한 트랜잭션은 재시도하거나 오류로 처리합니다.
 - Send Queue 고수위(8MB)에서 Coalesce를 적용했는데 특정 이벤트(사망 판정)가 누락됐습니다. 우선순위별 Queue를 분리할 때 몇 개의 Queue가 적절한지 기준은 무엇인가요?
+  > 일반적으로 2~3개(High/Normal/Low)로 분리하면 충분합니다. High Queue에는 사망·결제 등 신뢰성이 필요한 이벤트를, Normal에는 위치·상태 갱신을, Low에는 채팅·알림처럼 Drop 허용 이벤트를 배치합니다. Queue 수가 많아질수록 운영 복잡도가 증가하므로 실제 이벤트 유형과 Drop 허용 여부 기준으로 최소화합니다.
 - 3만 CCU 서버에서 Session Registry를 16 Shard로 분할했는데 특정 Shard에 Hot Spot이 생겼습니다. 분산이 고르지 않은 원인을 어떻게 진단하나요?
+  > 각 Shard별 Session 수 분포를 측정해 특정 해시 범위에 ID가 몰리는지 확인합니다. userId가 순번 증가 방식이면 나머지(%) 해싱에서 편중이 발생할 수 있으므로, Consistent Hashing이나 128비트 균등 해시 함수로 교체합니다. 접근 빈도 자체가 문제라면 자주 조회되는 Session을 In-process 캐시로 보완합니다.
 - 배포 Drain 중 Grace Period를 30초→5초로 단축했을 때 재접속 중이던 플레이어가 실패합니다. 단축 시작 시 이미 Grace Period 중인 Session을 어떻게 보호하나요?
+  > 단축 정책 적용 전에 이미 Grace Period 상태인 Session에 플래그를 표시해 기존 30초 기한을 유지합니다. 이후 신규 진입 Session에만 5초 규칙을 적용하면 전환 중인 플레이어를 보호할 수 있습니다. 배포 완료 후 플래그 Session이 소멸하면 전체가 새 정책으로 통일됩니다.
 - Generation Counter가 uint32 최대값에 도달해 Wraparound됐습니다. 이전 Session 콜백이 새 Generation 0과 충돌하는 상황을 어떻게 방지하나요?
+  > Generation 비교 시 단순 `==` 대신 유효 범위 창(예: 현재 Generation ± N)으로 판단하거나, uint64로 확장해 실질적으로 Wraparound가 발생하지 않도록 합니다. 콜백 발송 시 Session Handle에 Generation을 묶어두고, 처리 전 현재 Session의 Generation과 일치하는지 확인해 불일치 시 폐기합니다.
 - Redis Denylist에 JTI(JWT ID)를 저장할 때 Token 만료 전 대규모 Ban(1만 계정)이 발생하면 Redis 메모리가 급증합니다. TTL 설계와 메모리 상한을 어떻게 설정하나요?
+  > 각 JTI의 TTL을 해당 Token 만료 시각과 동일하게 설정해 자동 만료를 활용합니다. Redis `maxmemory`와 `maxmemory-policy allkeys-lru`를 설정해 상한 초과 시 오래된 항목부터 제거합니다. 대규모 Ban 시에는 계정 단위 Ban 플래그를 별도 Hash에 저장하고 JTI 개별 등록 대신 계정 레벨 검증으로 전환해 메모리 급증을 완화합니다.
 
 ## 11. 30초 모범답변
 
