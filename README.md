@@ -1,7 +1,7 @@
 # CS 면접 교재 — 게임 서버 · 백엔드 개발자를 위한 심층 학습 가이드
 
 > **98개 주제 · 8개 분야 · 면접 실전 대비**
-> 웹에서 바로 읽기 → [https://1sanguk.github.io/CS/](https://1sanguk.github.io/CS/)
+> 웹에서 바로 읽기 → [https://1sanguk.github.io/CS_Study/](https://1sanguk.github.io/CS_Study/)
 
 ---
 
